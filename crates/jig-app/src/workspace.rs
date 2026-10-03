@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::{ActiveTheme as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::Provider;
@@ -287,8 +288,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let theme = cx.theme();
+        let title = self.document.title();
+        v_flex()
             .size_full()
+            .bg(theme.background)
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
@@ -301,12 +305,30 @@ impl Render for Workspace {
             .capture_action(cx.listener(Self::on_accept_indent))
             .capture_action(cx.listener(Self::on_undo))
             .child(
-                Editor::new(self.editor.state())
-                    .bordered(false)
-                    // Locked while a command's change awaits review. The
-                    // element re-applies this every frame.
-                    .readonly(self.previewing())
-                    .size_full(),
+                TitleBar::new().child(
+                    h_flex()
+                        .flex_1()
+                        .justify_center()
+                        // Balance the traffic lights so the title sits centred.
+                        .mr(px(70.))
+                        .gap_1p5()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(title)
+                        .when(self.dirty, |this| {
+                            this.child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
+                        }),
+                ),
+            )
+            .child(
+                div().flex_1().min_h_0().pl_2().pr_3().pb_2().child(
+                    Editor::new(self.editor.state())
+                        .bordered(false)
+                        // Locked while a command's change awaits review. The
+                        // element re-applies this every frame.
+                        .readonly(self.previewing())
+                        .size_full(),
+                ),
             )
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(

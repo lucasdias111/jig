@@ -6,6 +6,7 @@ mod workspace;
 
 use std::path::PathBuf;
 
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use workspace::{Quit, Workspace};
 
@@ -25,9 +26,12 @@ fn main() {
         })
         .detach();
 
+        // A transparent titlebar: the workspace draws its own, so only the
+        // traffic lights and the code remain.
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(960.), px(720.)), cx)),
-            ..Default::default()
+            window_min_size: Some(size(px(480.), px(320.))),
+            ..TitleBar::window_options()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| Workspace::new(path, window, cx))

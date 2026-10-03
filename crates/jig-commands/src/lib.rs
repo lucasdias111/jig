@@ -2,6 +2,7 @@
 //! reply bubble and diff preview.
 
 pub mod bubble;
+pub mod motion;
 pub mod palette;
 pub mod presets;
 

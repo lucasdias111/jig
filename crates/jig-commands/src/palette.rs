@@ -196,7 +196,7 @@ impl Render for CommandPalette {
             .collect();
         let theme = cx.theme();
 
-        v_flex()
+        let palette = v_flex()
             .key_context("JigPalette")
             .capture_action(cx.listener(Self::on_enter))
             .capture_action(cx.listener(Self::on_escape))
@@ -208,13 +208,14 @@ impl Render for CommandPalette {
             .bg(theme.popover)
             .border_1()
             .border_color(theme.border)
-            .rounded_lg()
+            .rounded(px(10.))
             .shadow_lg()
             .child(Input::new(&self.input).appearance(false).cleanable(false))
             .when(!rows.is_empty(), |this| {
                 this.child(div().h(px(1.)).mx_1().bg(theme.border))
                     .children(rows)
-            })
+            });
+        crate::motion::pop_in(palette, "jig-palette")
     }
 }
 

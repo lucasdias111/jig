@@ -53,7 +53,7 @@ impl RenderOnce for Bubble {
             .text_color(theme.popover_foreground)
             .border_1()
             .border_color(theme.border)
-            .rounded_lg()
+            .rounded(px(10.))
             .shadow_lg();
         let hint = |text: &'static str| {
             div()
@@ -62,7 +62,7 @@ impl RenderOnce for Bubble {
                 .child(text)
         };
 
-        match self {
+        let bubble = match self {
             Bubble::Running { label, started } => {
                 let accent = theme.primary;
                 let elapsed = started.elapsed().as_secs();
@@ -121,7 +121,8 @@ impl RenderOnce for Bubble {
                     })
                     .child(hint("tab or enter to accept · esc to reject"))
             }
-        }
+        };
+        crate::motion::pop_in(bubble, "jig-bubble")
     }
 }
 

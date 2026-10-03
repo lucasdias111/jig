@@ -57,7 +57,7 @@
         "selection.background": "#3879C533",
         "skeleton.background": "#EAEBED",
         "title_bar.background": "#F7F8FA",
-        "title_bar.border": "#DCDFE5",
+        "title_bar.border": "#F7F8FA",
         "window.border": "#DCDFE5",
         "base.blue": "#3879C5",
         "base.cyan": "#3EA1AD",
@@ -202,7 +202,9 @@
             "color": "#5F9E9D"
           }
         }
-      }
+      },
+      "radius": 8,
+      "radius.lg": 12
     },
     {
       "name": "OneNord",
@@ -258,7 +260,7 @@
         "selection.background": "#81A1C140",
         "skeleton.background": "#353B49",
         "title_bar.background": "#2E3440",
-        "title_bar.border": "#3B4252",
+        "title_bar.border": "#2E3440",
         "window.border": "#3B4252",
         "base.blue": "#81A1C1",
         "base.cyan": "#88C0D0",
@@ -403,7 +405,9 @@
             "color": "#8FBCBB"
           }
         }
-      }
+      },
+      "radius": 8,
+      "radius.lg": 12
     }
   ]
 }

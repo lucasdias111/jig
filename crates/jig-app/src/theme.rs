@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use gpui_kit::component::{Theme, ThemeSet};
-use gpui_kit::{App, Window};
+use gpui_kit::{App, SharedString, Window};
 
 const ONENORD: &str = include_str!("../../../assets/themes/onenord.json");
 
@@ -12,7 +12,11 @@ pub fn init(cx: &mut App) {
     let set: ThemeSet = serde_json::from_str(ONENORD).expect("bundled onenord.json is valid");
     let mut light = None;
     let mut dark = None;
-    for theme in set.themes {
+    let fonts = Fonts::for_platform(cx);
+    for mut theme in set.themes {
+        theme.font_family = fonts.ui.clone();
+        theme.mono_font_family = Some(fonts.mono.clone());
+        theme.mono_font_size = Some(13.5);
         let slot = if theme.mode.is_dark() {
             &mut dark
         } else {
@@ -24,6 +28,37 @@ pub fn init(cx: &mut App) {
         theme.light_theme = light.expect("onenord.json has a light theme");
         theme.dark_theme = dark.expect("onenord.json has a dark theme");
     });
+}
+
+struct Fonts {
+    /// `None` keeps the platform UI font (SF Pro on macOS).
+    ui: Option<SharedString>,
+    mono: SharedString,
+}
+
+impl Fonts {
+    fn for_platform(cx: &App) -> Self {
+        if cfg!(target_os = "macos") {
+            // The system's SF Mono. It isn't listed as a public family, but
+            // Core Text resolves this name.
+            return Self {
+                ui: None,
+                mono: ".AppleSystemUIFontMonospaced".into(),
+            };
+        }
+        let installed = cx.text_system().all_font_names();
+        let first = |candidates: &[&str]| {
+            candidates
+                .iter()
+                .find(|name| installed.iter().any(|font| font == *name))
+                .map(|name| SharedString::from(name.to_string()))
+        };
+        Self {
+            ui: first(&["Inter"]),
+            mono: first(&["JetBrains Mono", "DejaVu Sans Mono"])
+                .unwrap_or_else(|| "monospace".into()),
+        }
+    }
 }
 
 /// Apply the variant matching the window's current appearance.
@@ -51,6 +86,15 @@ mod tests {
             Theme::change(ThemeMode::Light, None, cx);
             assert_eq!(Theme::global(cx).theme_name(), "OneNord Light");
             assert_eq!(Theme::global(cx).background, rgb(0xF7F8FA).into());
+
+            // The mode switch keeps Jig's fonts.
+            if cfg!(target_os = "macos") {
+                assert_eq!(
+                    Theme::global(cx).mono_font_family,
+                    ".AppleSystemUIFontMonospaced"
+                );
+            }
+            assert_eq!(Theme::global(cx).mono_font_size, gpui_kit::px(13.5));
         });
     }
 
