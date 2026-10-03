@@ -47,9 +47,10 @@ pub(super) struct Preview {
     pub(super) range: Range<usize>,
 }
 
-pub(super) fn load_provider() -> Result<Arc<dyn Provider>, String> {
+/// The provider picked in Settings, or the config file's default.
+pub(super) fn load_provider(choice: Option<&str>) -> Result<Arc<dyn Provider>, String> {
     jig_ai::Config::load(jig_ai::Config::user_path().as_deref())
-        .and_then(|config| config.default_provider().build())
+        .and_then(|config| config.chosen_provider(choice).build())
         .map_err(|error| format!("{error:#}"))
 }
 
@@ -403,7 +404,14 @@ impl Workspace {
     /// Esc rejects a pending change, cancels a running command or dismisses
     /// its bubble. With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal_open() {
+        if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
+            // Focus went back to the code (e.g. a click outside the form or
+            // command input), so the floating window can't hear Escape.
+            self.palette = None;
+            self.new_command = None;
+            cx.stop_propagation();
+            cx.notify();
+        } else if self.modal_open() {
             cx.propagate();
         } else if self.reject_preview(window, cx) || self.run.take().is_some() {
             self.editor().clear_highlights(cx);

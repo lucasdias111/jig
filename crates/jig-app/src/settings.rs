@@ -1,0 +1,261 @@
+//! `~/.config/jig/settings.toml`: the choices made in the Settings window.
+//! Held in a global while Jig runs; every change is written back at once.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context as _, Result};
+use gpui_kit::{App, Global};
+use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_FONT_SIZE: f32 = 13.5;
+pub const MIN_FONT_SIZE: f32 = 9.;
+pub const MAX_FONT_SIZE: f32 = 28.;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub appearance: Appearance,
+    pub editor: EditorSettings,
+    pub commands: CommandSettings,
+    pub ai: AiSettings,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    /// Light or dark, following the system.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    pub const ALL: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "system",
+            ThemeChoice::Light => "light",
+            ThemeChoice::Dark => "dark",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "System",
+            ThemeChoice::Light => "Light",
+            ThemeChoice::Dark => "Dark",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|choice| choice.key() == key)
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub theme: ThemeChoice,
+    /// Size of the code font, in points.
+    pub font_size: f32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::System,
+            font_size: DEFAULT_FONT_SIZE,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorSettings {
+    pub line_numbers: bool,
+    pub soft_wrap: bool,
+    pub indent_guides: bool,
+    pub show_whitespace: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            line_numbers: true,
+            soft_wrap: true,
+            indent_guides: true,
+            show_whitespace: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommandSettings {
+    /// Commands left out of the command input, by name.
+    pub hidden: Vec<String>,
+}
+
+impl CommandSettings {
+    pub fn is_hidden(&self, name: &str) -> bool {
+        self.hidden
+            .iter()
+            .any(|hidden| hidden.eq_ignore_ascii_case(name))
+    }
+
+    pub fn set_hidden(&mut self, name: &str, hidden: bool) {
+        self.hidden
+            .retain(|other| !other.eq_ignore_ascii_case(name));
+        if hidden {
+            self.hidden.push(name.to_string());
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiSettings {
+    /// The provider commands use. `None` keeps `default` from config.toml.
+    pub provider: Option<String>,
+}
+
+impl Settings {
+    /// `~/.config/jig/settings.toml`, honouring `XDG_CONFIG_HOME`.
+    pub fn user_path() -> Option<PathBuf> {
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+        Some(config.join("jig").join("settings.toml"))
+    }
+
+    /// The saved settings, or the defaults when there is no file yet.
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let source =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut settings: Settings =
+            toml::from_str(&source).with_context(|| format!("parsing {}", path.display()))?;
+        settings.appearance.font_size = settings
+            .appearance
+            .font_size
+            .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        Ok(settings)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let source = toml::to_string_pretty(self)?;
+        std::fs::write(path, source).with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+/// The live settings and where they're saved.
+pub struct AppSettings {
+    settings: Settings,
+    /// `None` keeps changes in memory only, as in tests.
+    path: Option<PathBuf>,
+}
+
+impl Global for AppSettings {}
+
+/// Load the user's settings into the app. Returns why they couldn't be read,
+/// in which case the defaults are used and nothing is saved over the file.
+pub fn init(cx: &mut App) -> Option<String> {
+    let path = Settings::user_path();
+    let (settings, path, error) = match path.as_deref().map(Settings::load) {
+        Some(Ok(settings)) => (settings, path, None),
+        Some(Err(error)) => (Settings::default(), None, Some(format!("{error:#}"))),
+        None => (Settings::default(), None, None),
+    };
+    cx.set_global(AppSettings { settings, path });
+    error
+}
+
+/// The current settings; the defaults until `init` has run.
+pub fn get(cx: &App) -> Settings {
+    cx.try_global::<AppSettings>()
+        .map(|app| app.settings.clone())
+        .unwrap_or_default()
+}
+
+/// Change the settings, save them, and notify everything observing them.
+pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {
+    if !cx.has_global::<AppSettings>() {
+        cx.set_global(AppSettings {
+            settings: Settings::default(),
+            path: None,
+        });
+    }
+    let app = cx.global_mut::<AppSettings>();
+    let before = app.settings.clone();
+    change(&mut app.settings);
+    if app.settings == before {
+        return;
+    }
+    if let Some(path) = &app.path
+        && let Err(error) = app.settings.save(path)
+    {
+        eprintln!("jig: settings weren't saved: {error:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_gives_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings::load(&dir.path().join("settings.toml")).unwrap();
+        assert_eq!(settings, Settings::default());
+        assert_eq!(settings.appearance.font_size, DEFAULT_FONT_SIZE);
+        assert!(settings.editor.line_numbers);
+    }
+
+    #[test]
+    fn round_trips_and_fills_in_missing_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jig").join("settings.toml");
+        let mut settings = Settings::default();
+        settings.appearance.theme = ThemeChoice::Dark;
+        settings.editor.soft_wrap = false;
+        settings.commands.set_hidden("Explain", true);
+        settings.ai.provider = Some("claude".into());
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), settings);
+
+        std::fs::write(&path, "[appearance]\ntheme = \"light\"\nfont_size = 99\n").unwrap();
+        let partial = Settings::load(&path).unwrap();
+        assert_eq!(partial.appearance.theme, ThemeChoice::Light);
+        assert_eq!(partial.appearance.font_size, MAX_FONT_SIZE, "clamped");
+        assert_eq!(partial.editor, EditorSettings::default());
+    }
+
+    #[test]
+    fn hidden_commands_match_any_case() {
+        let mut commands = CommandSettings::default();
+        commands.set_hidden("Add docs", true);
+        assert!(commands.is_hidden("add DOCS"));
+        commands.set_hidden("ADD DOCS", true);
+        assert_eq!(commands.hidden.len(), 1);
+        commands.set_hidden("add docs", false);
+        assert!(!commands.is_hidden("Add docs"));
+    }
+
+    #[test]
+    fn bad_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "[appearance]\ntheme = \"purple\"\n").unwrap();
+        assert!(Settings::load(&path).is_err());
+    }
+}

@@ -2,6 +2,7 @@
 //! sidebar.
 
 mod commands;
+mod preferences;
 mod sidebar;
 mod tabs;
 mod user_commands;
@@ -20,6 +21,7 @@ use jig_editor::EditorHandle;
 
 use crate::document::Document;
 use crate::file_tree::FileTree;
+use crate::settings::{self, Settings};
 use commands::CommandRun;
 use tabs::Tab;
 
@@ -35,6 +37,7 @@ actions!(
         AddCommand,
         EditCommands,
         EditProjectRules,
+        EditModelConfig,
         ToggleSidebar,
         FocusFileTree,
         NewFile,
@@ -78,6 +81,10 @@ pub struct Workspace {
     commands_path: Option<PathBuf>,
     /// The configured model, or why it couldn't be set up.
     provider: Result<Arc<dyn Provider>, String>,
+    /// The AI providers file, `~/.config/jig/config.toml`.
+    config_path: Option<PathBuf>,
+    /// The settings as last applied, to tell what a change touched.
+    settings: Settings,
     run: Option<CommandRun>,
     next_run_id: u64,
 }
@@ -104,11 +111,13 @@ impl Workspace {
             },
             None => (Document::default(), None),
         };
+        let settings = settings::get(cx);
         let (presets, presets_error) = match presets::load(presets::user_commands_path().as_deref())
         {
             Ok(presets) => (presets, None),
             Err(error) => (presets::defaults(), Some(error)),
         };
+        let presets = preferences::visible_presets(presets, &settings);
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
@@ -121,7 +130,9 @@ impl Workspace {
             palette: None,
             new_command: None,
             commands_path: presets::user_commands_path(),
-            provider: commands::load_provider(),
+            provider: commands::load_provider(settings.ai.provider.as_deref()),
+            config_path: jig_ai::Config::user_path(),
+            settings,
             run: None,
             next_run_id: 0,
         };
@@ -136,6 +147,8 @@ impl Workspace {
         this.update_title(window);
         crate::theme::sync(window, cx);
         cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx))
+            .detach();
+        cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();
         // Pick up files added or removed outside Jig.
         cx.observe_window_activation(window, |this, window, cx| {
@@ -317,6 +330,9 @@ impl Workspace {
         if self.is_commands_file() {
             self.reload_presets(window, cx);
         }
+        if self.is_config_file() {
+            self.reload_provider();
+        }
         // Save As may have added a file.
         self.refresh_tree(cx);
         cx.notify();
@@ -384,6 +400,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
             .on_action(cx.listener(Self::edit_project_rules))
+            .on_action(cx.listener(Self::edit_model_config))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::focus_file_tree))
             .on_action(cx.listener(Self::new_file))
@@ -1130,6 +1147,49 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn clicks_on_the_form_stay_in_the_form(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, _) = open_with_commands(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-k", cx);
+        });
+        // On the form's title, away from its inputs, over the code. The
+        // form is 460 wide, centred, just under the 46px title bar.
+        step(cx, window, |window, cx| {
+            let title = gpui_kit::point(px(400.), px(74.));
+            window.drag(title, title, cx);
+        });
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(
+                !this.editor().state().focus_handle(cx).is_focused(window),
+                "the editor behind didn't take the click"
+            );
+            window.press("escape", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).new_command.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_the_form_after_clicking_the_code(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, _) = open_with_commands(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-k", cx);
+        });
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            let editor = ws.read(cx).editor().state().clone();
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).new_command.is_none()));
+    }
+
+    #[gpui_kit::test]
     fn saving_the_commands_file_reloads_presets(cx: &mut TestAppContext) {
         let (_dir, window, workspace, commands) = open_with_commands(cx);
         cx.update(|cx| {
@@ -1738,6 +1798,35 @@ mod tests {
             cx.update(|cx| workspace.read(cx).tab_labels()),
             ["mod.rs — app", "mod.rs — core", "main.rs"]
         );
+    }
+
+    #[gpui_kit::test]
+    fn settings_changes_reach_open_tabs_and_commands(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        assert!(preset_names(cx, &workspace).contains(&"Add docs".to_string()));
+
+        cx.update(|cx| {
+            crate::settings::update(cx, |s| {
+                s.editor.soft_wrap = false;
+                s.commands.set_hidden("add docs", true);
+            })
+        });
+        cx.run_until_parked();
+        assert!(
+            !preset_names(cx, &workspace).contains(&"Add docs".to_string()),
+            "hidden commands leave ⌘K"
+        );
+        // Tabs opened later start with the new settings too.
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(!this.settings.editor.soft_wrap);
+            assert_eq!(this.tabs.len(), 2);
+        });
+
+        cx.update(|cx| crate::settings::update(cx, |s| s.commands.hidden.clear()));
+        cx.run_until_parked();
+        assert!(preset_names(cx, &workspace).contains(&"Add docs".to_string()));
     }
 
     #[gpui_kit::test]

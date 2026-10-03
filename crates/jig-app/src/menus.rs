@@ -3,6 +3,7 @@
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
+use crate::settings_window::OpenSettings;
 use crate::workspace::{
     AddCommand, CloseTab, CloseWindow, EditCommands, EditProjectRules, FocusFileTree, NewFile,
     NextTab, Open, OpenCommand, PreviousTab, Quit, Save, SaveAs, ToggleSidebar,
@@ -40,6 +41,8 @@ pub fn init(cx: &mut App) {
             "Jig",
             vec![
                 MenuItem::action("About Jig", About),
+                MenuItem::separator(),
+                MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),

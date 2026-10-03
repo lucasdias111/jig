@@ -69,9 +69,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Tab {
+        let editor = &self.settings.editor;
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(document.language())
+                .line_number(editor.line_numbers)
+                .soft_wrap(editor.soft_wrap)
+                .indent_guides(editor.indent_guides)
+                .show_whitespaces(editor.show_whitespace)
                 .default_value(document.saved_text.clone())
         });
         let events = cx.subscribe_in(

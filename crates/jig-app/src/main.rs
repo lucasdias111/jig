@@ -4,6 +4,8 @@ mod document;
 mod file_tree;
 mod menus;
 mod project;
+mod settings;
+mod settings_window;
 mod theme;
 mod workspace;
 
@@ -21,13 +23,21 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        let settings_error = settings::init(cx);
         theme::init(cx);
+        theme::apply(None, cx);
         cx.bind_keys(workspace::key_bindings());
         menus::init(cx);
+        settings_window::init(cx);
         // Reached only when no window handles Quit (e.g. none is open).
         cx.on_action(|_: &Quit, cx| cx.quit());
+        // Settings alone can't open a file, so it doesn't keep Jig running.
         cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+            let windows = cx.windows();
+            if windows
+                .iter()
+                .all(|window| settings_window::is_settings_window(*window, cx))
+            {
                 cx.quit();
             }
         })
@@ -52,7 +62,7 @@ fn main() {
             },
             ..TitleBar::window_options()
         };
-        gpui_kit::open_window(options, cx, |window, cx| {
+        let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| {
                 let mut workspace = Workspace::new(path, window, cx);
                 for path in &more {
@@ -63,5 +73,20 @@ fn main() {
         })
         .expect("failed to open window");
         cx.activate(true);
+        if let Some(error) = settings_error {
+            window
+                .update(cx, |_, window, cx| {
+                    let detail = format!("Using the defaults until it's fixed. {error}");
+                    // Nothing to do with the answer.
+                    drop(window.prompt(
+                        PromptLevel::Warning,
+                        "Your settings couldn't be read",
+                        Some(&detail),
+                        &["OK"],
+                        cx,
+                    ));
+                })
+                .ok();
+        }
     });
 }

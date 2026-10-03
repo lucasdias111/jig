@@ -132,7 +132,9 @@ impl Workspace {
     /// Re-read the presets, e.g. after the commands file was saved.
     pub(super) fn reload_presets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match presets::load(self.commands_path.as_deref()) {
-            Ok(presets) => self.presets = Rc::new(presets),
+            Ok(presets) => {
+                self.presets = Rc::new(super::preferences::visible_presets(presets, &self.settings))
+            }
             Err(error) => self.show_error(
                 &format!("Your commands weren't reloaded. {error:#}"),
                 window,

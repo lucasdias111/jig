@@ -42,6 +42,15 @@ base_url = "http://localhost:11434/v1"
 model = "qwen2.5-coder:7b"
 "#;
 
+const CONFIG_HEADER: &str = "\
+# Jig's AI providers. `default` is the one commands use unless you pick
+# another in Settings. API keys come from the environment variable named in
+# api_key_env, never from this file.
+#
+# kind: \"anthropic\" or \"openai\" (any OpenAI-compatible server).
+
+";
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     /// Name of the provider commands use.
@@ -130,10 +139,42 @@ impl Config {
     }
 
     pub fn default_provider(&self) -> &ProviderConfig {
-        self.providers
-            .iter()
-            .find(|p| p.name == self.default)
-            .expect("checked in parse")
+        self.provider(&self.default).expect("checked in parse")
+    }
+
+    pub fn provider(&self, name: &str) -> Option<&ProviderConfig> {
+        self.providers.iter().find(|p| p.name == name)
+    }
+
+    /// The provider named `choice` (the user's pick in Settings), or the
+    /// file's default when there is no pick or it no longer exists.
+    pub fn chosen_provider(&self, choice: Option<&str>) -> &ProviderConfig {
+        choice
+            .and_then(|name| self.provider(name))
+            .unwrap_or_else(|| self.default_provider())
+    }
+
+    /// Write the built-in config to `path` if there is nothing there yet,
+    /// so it can be edited.
+    pub fn ensure_user_file(path: &Path) -> Result<()> {
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let source = format!("{CONFIG_HEADER}{}", DEFAULT_CONFIG.trim_start());
+        std::fs::write(path, source).with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+impl ProviderConfig {
+    /// Whether the API key this provider needs is set. Local servers need
+    /// none.
+    pub fn has_key(&self) -> bool {
+        self.api_key_env
+            .as_deref()
+            .is_none_or(|var| std::env::var(var).is_ok_and(|key| !key.trim().is_empty()))
     }
 }
 
@@ -241,6 +282,33 @@ mod tests {
             );
         }
         assert_eq!(session_id(), session_id());
+    }
+
+    #[test]
+    fn chosen_provider_falls_back_to_the_default() {
+        let config = Config::built_in();
+        assert_eq!(config.chosen_provider(Some("claude")).name, "claude");
+        assert_eq!(config.chosen_provider(Some("gone")).name, "opencode-qwen");
+        assert_eq!(config.chosen_provider(None).name, "opencode-qwen");
+    }
+
+    #[test]
+    fn user_file_starts_as_the_built_in_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jig").join("config.toml");
+        Config::ensure_user_file(&path).unwrap();
+        let config = Config::load(Some(&path)).unwrap();
+        assert_eq!(config.providers.len(), Config::built_in().providers.len());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# Jig's AI")
+        );
+
+        // An existing file is left alone.
+        std::fs::write(&path, "mine").unwrap();
+        Config::ensure_user_file(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
     }
 
     #[test]

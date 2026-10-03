@@ -8,7 +8,7 @@ Jig is a code editor built to give developers control back. AI does the work thr
 
 *Updated Oct 3, 2026.*
 
-**Milestones M0–M5 are done.** The full concept works end to end: open a file, select code, press Cmd+K, pick or type a command, review the change inline, accept or reject it. Since then Jig has also gained OneNord themes, a macOS menu bar, commands you can add from inside Jig, notes on commands, `JIG.md` project rules, Qwen3.8 Flash as the default model, project exploration for commands, a file tree for browsing the open folder, and tabs.
+**Milestones M0–M5 are done.** The full concept works end to end: open a file, select code, press Cmd+K, pick or type a command, review the change inline, accept or reject it. Since then Jig has also gained OneNord themes, a macOS menu bar, commands you can add from inside Jig, notes on commands, `JIG.md` project rules, Qwen3.8 Flash as the default model, project exploration for commands, a file tree for browsing the open folder, tabs, and a Settings window.
 
 | Area | State |
 |---|---|
@@ -26,6 +26,7 @@ Jig is a code editor built to give developers control back. AI does the work thr
 | Project exploration | ✅ Commands with `explore = true`, or any command with ⌘E, may read the project (read-only, at most 8 tool calls). Verified live with Qwen and GLM, about 19 s per exploring command. |
 | Folder and file tree | ✅ Open… takes a file or a folder. The sidebar lists the whole project lazily, folders first, gitignored entries dimmed. ⌘B toggles it, ⇧⌘E moves focus in and out, arrows and Enter navigate, and its edge drags to resize. |
 | Tabs | ✅ Each tab has its own buffer, unsaved state and undo history. ⌘N, ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌃Tab. The strip shows only with two or more tabs. |
+| Settings | ✅ ⌘, opens a Settings window. Appearance (theme, code font size, line numbers, wrap, indent guides, whitespace), Commands (turn commands on or off, add or edit them) and Model (pick the provider, see whether its key is set). Saved to `~/.config/jig/settings.toml`. |
 | Cmd+P | 📋 Planned next. |
 
 The code is a Rust workspace with four crates, about 100 tests (including headless UI tests) and a commit per milestone.
