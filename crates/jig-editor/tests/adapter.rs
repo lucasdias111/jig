@@ -18,7 +18,9 @@ struct Fixture {
 
 impl Render for Fixture {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(Editor::new(self.editor.state()).size_full())
+        div()
+            .size_full()
+            .child(Editor::new(self.editor.state()).size_full())
     }
 }
 
@@ -33,8 +35,11 @@ fn open(cx: &mut TestAppContext) -> (gpui_kit::AnyWindowHandle, KitEditor) {
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            let state: Entity<EditorState> =
-                cx.new(|cx| EditorState::new(window, cx).language("rust").default_value(SOURCE));
+            let state: Entity<EditorState> = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language("rust")
+                    .default_value(SOURCE)
+            });
             let editor = KitEditor::new(state, cx);
             cx.new(|_| Fixture { editor })
         })
@@ -53,19 +58,32 @@ fn anchor_point_follows_selection(cx: &mut TestAppContext) {
         let line_1 = SOURCE.find("let").unwrap();
         let line_2 = SOURCE.find("println").unwrap();
 
-        editor.state().update(cx, |s, cx| s.set_selected_range(line_1..line_1, cx));
+        editor
+            .state()
+            .update(cx, |s, cx| s.set_selected_range(line_1..line_1, cx));
         window.render_frame(cx);
-        let a = editor.anchor_point(cx).expect("anchor for cursor on line 1");
+        let a = editor
+            .anchor_point(cx)
+            .expect("anchor for cursor on line 1");
 
-        editor.state().update(cx, |s, cx| s.set_selected_range(line_2..line_2, cx));
+        editor
+            .state()
+            .update(cx, |s, cx| s.set_selected_range(line_2..line_2, cx));
         window.render_frame(cx);
-        let b = editor.anchor_point(cx).expect("anchor for cursor on line 2");
+        let b = editor
+            .anchor_point(cx)
+            .expect("anchor for cursor on line 2");
 
-        assert!(b.y > a.y, "anchor moves down with the cursor: {a:?} -> {b:?}");
+        assert!(
+            b.y > a.y,
+            "anchor moves down with the cursor: {a:?} -> {b:?}"
+        );
         assert_eq!(a.x, b.x, "same column, same x");
 
         // A multi-line selection anchors below its last line.
-        editor.state().update(cx, |s, cx| s.set_selected_range(line_1..line_2 + 3, cx));
+        editor
+            .state()
+            .update(cx, |s, cx| s.set_selected_range(line_1..line_2 + 3, cx));
         window.render_frame(cx);
         let c = editor.anchor_point(cx).expect("anchor for selection");
         assert_eq!(c.y, b.y);
@@ -88,7 +106,11 @@ fn apply_edit_is_one_undo_step(cx: &mut TestAppContext) {
         assert!(editor.text(cx).contains("let x = 42;"));
 
         window.press("secondary-z", cx);
-        assert_eq!(editor.text(cx), SOURCE, "a single undo restores the original");
+        assert_eq!(
+            editor.text(cx),
+            SOURCE,
+            "a single undo restores the original"
+        );
     })
     .unwrap();
 }

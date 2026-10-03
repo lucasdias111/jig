@@ -6,7 +6,9 @@
 
 use std::ops::Range;
 
-use gpui_kit::component::input::{EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle};
+use gpui_kit::component::input::{
+    EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
+};
 use gpui_kit::{App, Bounds, Entity, Hsla, Pixels, Point, Window, point};
 
 pub trait EditorHandle {
@@ -21,7 +23,13 @@ pub trait EditorHandle {
     fn anchor_point(&self, cx: &App) -> Option<Point<Pixels>>;
     /// Replace `range` with `text` as a single undo step. Returns the range the
     /// new text occupies.
-    fn apply_edit(&self, range: Range<usize>, text: &str, window: &mut Window, cx: &mut App) -> Range<usize>;
+    fn apply_edit(
+        &self,
+        range: Range<usize>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Range<usize>;
     fn set_readonly(&self, readonly: bool, cx: &mut App);
     fn highlight(&self, ranges: Vec<(Range<usize>, Hsla)>, cx: &mut App);
     fn clear_highlights(&self, cx: &mut App);
@@ -37,7 +45,9 @@ pub struct KitEditor {
 
 impl KitEditor {
     pub fn new(state: Entity<EditorState>, cx: &mut App) -> Self {
-        let highlights = state.update(cx, |state, cx| state.create_range_decorations_collection(Vec::new(), cx));
+        let highlights = state.update(cx, |state, cx| {
+            state.create_range_decorations_collection(Vec::new(), cx)
+        });
         Self { state, highlights }
     }
 
@@ -71,7 +81,13 @@ impl EditorHandle for KitEditor {
         Some(point(start.left(), end.bottom()))
     }
 
-    fn apply_edit(&self, range: Range<usize>, text: &str, window: &mut Window, cx: &mut App) -> Range<usize> {
+    fn apply_edit(
+        &self,
+        range: Range<usize>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Range<usize> {
         let text = text.to_string();
         self.state.update(cx, |state, cx| {
             state.set_selected_range(range.clone(), cx);
@@ -82,7 +98,8 @@ impl EditorHandle for KitEditor {
     }
 
     fn set_readonly(&self, readonly: bool, cx: &mut App) {
-        self.state.update(cx, |state, cx| state.set_readonly(readonly, cx));
+        self.state
+            .update(cx, |state, cx| state.set_readonly(readonly, cx));
     }
 
     fn highlight(&self, ranges: Vec<(Range<usize>, Hsla)>, cx: &mut App) {
