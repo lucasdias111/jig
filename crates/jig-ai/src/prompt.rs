@@ -37,6 +37,7 @@ pub struct PromptRequest {
 }
 
 impl PromptRequest {
+    /// The text the command replaces; empty when inserting at `target`.
     pub fn target_text(&self) -> &str {
         &self.text[self.target.clone()]
     }

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::{AnthropicProvider, OpenAiCompatProvider, Provider};
 
 const DEFAULT_CONFIG: &str = r#"
-default = "opencode-glm"
+default = "opencode-qwen"
 
 [[provider]]
 name = "opencode-glm"
@@ -200,9 +200,11 @@ mod tests {
     fn built_in_defaults_to_opencode() {
         let config = Config::built_in();
         let provider = config.default_provider();
-        assert_eq!(provider.kind, ProviderKind::Openai);
+        assert_eq!(provider.name, "opencode-qwen");
+        assert_eq!(provider.model, "qwen3.8-flash");
+        assert_eq!(provider.kind, ProviderKind::Anthropic);
+        assert_eq!(provider.auth, AuthStyle::ApiKey);
         assert_eq!(provider.api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
-        assert!(provider.json_mode);
         assert_eq!(provider.max_tokens, 4096);
     }
 
