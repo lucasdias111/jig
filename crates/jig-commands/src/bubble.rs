@@ -5,19 +5,32 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-/// Lines of proposed code shown before the rest is elided.
-const PREVIEW_LINES: usize = 8;
+/// Lines of removed code shown before the rest is elided.
+const REMOVED_LINES: usize = 6;
 
 #[derive(Clone, Debug, PartialEq, IntoElement)]
 pub enum Bubble {
-    Running { label: String },
-    Reply { message: String, proposed: String },
+    Running {
+        label: String,
+    },
+    /// A change is in the buffer awaiting accept or reject. `removed` is the
+    /// code it replaced.
+    Preview {
+        message: String,
+        removed: String,
+    },
+    /// A reply that changes nothing, e.g. an explanation.
+    Message(String),
     Error(String),
 }
 
 impl Bubble {
     pub fn is_running(&self) -> bool {
         matches!(self, Bubble::Running { .. })
+    }
+
+    pub fn is_preview(&self) -> bool {
+        matches!(self, Bubble::Preview { .. })
     }
 }
 
@@ -37,48 +50,52 @@ impl RenderOnce for Bubble {
             .border_color(theme.border)
             .rounded_lg()
             .shadow_lg();
+        let hint = |text: &'static str| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        };
 
         match self {
             Bubble::Running { label } => container.child(
                 h_flex()
                     .gap_2()
                     .child(Spinner::new().small().color(theme.muted_foreground))
-                    .child(div().text_color(theme.muted_foreground).child(label)),
+                    .child(div().text_color(theme.muted_foreground).child(label))
+                    .child(hint("esc to cancel")),
             ),
             Bubble::Error(message) => {
                 container.child(div().text_color(theme.danger).child(message))
             }
-            Bubble::Reply { message, proposed } => {
-                let lines: Vec<&str> = proposed.lines().collect();
+            Bubble::Message(message) => container.child(message).child(hint("esc to close")),
+            Bubble::Preview { message, removed } => {
+                let lines: Vec<&str> = removed.lines().collect();
                 let shown = lines
                     .iter()
-                    .take(PREVIEW_LINES)
+                    .take(REMOVED_LINES)
                     .copied()
                     .collect::<Vec<_>>()
                     .join("\n");
-                let hidden = lines.len().saturating_sub(PREVIEW_LINES);
+                let hidden = lines.len().saturating_sub(REMOVED_LINES);
                 container
                     .when(!message.is_empty(), |this| this.child(message))
-                    .when(!proposed.is_empty(), |this| {
+                    .when(!removed.trim().is_empty(), |this| {
                         this.child(
-                            div()
+                            v_flex()
                                 .p_2()
                                 .rounded_md()
-                                .bg(theme.muted)
+                                .bg(theme.danger.opacity(0.08))
                                 .font_family(theme.mono_font_family.clone())
                                 .text_xs()
-                                .whitespace_normal()
-                                .child(shown),
-                        )
-                    })
-                    .when(hidden > 0, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child(format!("… {hidden} more lines")),
+                                .child(div().line_through().child(shown))
+                                .when(hidden > 0, |this| {
+                                    this.child(format!("… {hidden} more lines removed"))
+                                }),
                         )
                     })
+                    .child(hint("tab or enter to accept · esc to reject"))
             }
         }
     }

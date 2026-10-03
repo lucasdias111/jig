@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::input::Escape;
+use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, Undo};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
 use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
@@ -17,6 +17,11 @@ const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
 /// Longest error text shown in the bubble.
 const MAX_ERROR_CHARS: usize = 180;
 
+/// Background of code a command just wrote, while it awaits review.
+fn added_color() -> Hsla {
+    hsla(0.38, 0.6, 0.5, 0.16)
+}
+
 /// One command from the moment it's chosen until its bubble goes away.
 pub(super) struct CommandRun {
     id: u64,
@@ -25,10 +30,15 @@ pub(super) struct CommandRun {
     /// The buffer when the command started. A reply for a buffer that has
     /// since changed is discarded.
     snapshot: String,
-    #[allow(dead_code)] // Applied by the diff preview in M4.
     pub(super) target: Range<usize>,
-    pub(super) reply: Option<Reply>,
+    /// Set while the change sits in the buffer awaiting accept or reject.
+    pub(super) preview: Option<Preview>,
     _task: Option<Task<()>>,
+}
+
+pub(super) struct Preview {
+    /// Where the new code is in the buffer.
+    pub(super) range: Range<usize>,
 }
 
 pub(super) fn load_provider() -> Result<Arc<dyn Provider>, String> {
@@ -56,7 +66,9 @@ impl Workspace {
         if self.palette.is_some() {
             return;
         }
-        // A new command replaces whatever the last one left on screen.
+        // A new command replaces whatever the last one left on screen; a
+        // pending change counts as accepted.
+        self.accept_preview(cx);
         self.run = None;
         let has_selection = !self.editor.selection(cx).is_empty();
         let anchor = self.floating_anchor(cx);
@@ -114,7 +126,7 @@ impl Workspace {
                     anchor,
                     snapshot: text,
                     target,
-                    reply: None,
+                    preview: None,
                     _task: None,
                 });
                 self.fail(id, error, window, cx);
@@ -145,7 +157,7 @@ impl Workspace {
             anchor,
             snapshot: text,
             target,
-            reply: None,
+            preview: None,
             _task: Some(task),
         });
         cx.notify();
@@ -171,15 +183,105 @@ impl Workspace {
             return;
         }
         match result {
-            Ok(reply) => {
-                run.bubble = Bubble::Reply {
-                    message: reply.message.clone(),
-                    proposed: reply.replace.clone(),
-                };
-                run.reply = Some(reply);
-                cx.notify();
-            }
+            Ok(reply) => self.show_reply(reply, window, cx),
             Err(error) => self.fail(id, format!("{error:#}"), window, cx),
+        }
+    }
+
+    /// Put the reply's code into the buffer for review: highlighted,
+    /// read-only, and one undo step away from the original.
+    fn show_reply(&mut self, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(run) = self.run.as_mut() else { return };
+        let original = run.snapshot[run.target.clone()].to_string();
+        if reply.replace == original {
+            run.bubble = Bubble::Message(if reply.message.is_empty() {
+                "No changes.".into()
+            } else {
+                reply.message
+            });
+            cx.notify();
+            return;
+        }
+        // Mark the preview first so the edit's change event doesn't dismiss it.
+        run.preview = Some(Preview {
+            range: run.target.clone(),
+        });
+        run.bubble = Bubble::Preview {
+            message: reply.message,
+            removed: original,
+        };
+        let target = run.target.clone();
+        let range = self.editor.apply_edit(target, &reply.replace, window, cx);
+        self.editor.set_readonly(true, cx);
+        self.editor
+            .highlight(vec![(range.clone(), added_color())], cx);
+        if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
+            preview.range = range;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn previewing(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| run.preview.is_some())
+    }
+
+    /// Keep the change. It is already in the buffer as one undo step.
+    pub(super) fn accept_preview(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.previewing() {
+            return false;
+        }
+        self.run = None;
+        self.editor.clear_highlights(cx);
+        self.editor.set_readonly(false, cx);
+        cx.notify();
+        true
+    }
+
+    /// Drop the change by undoing it, which leaves no trace in the history
+    /// beyond a redo step.
+    fn reject_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.previewing() {
+            return false;
+        }
+        self.run = None;
+        self.editor.clear_highlights(cx);
+        self.editor.set_readonly(false, cx);
+        self.editor.undo(window, cx);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn on_accept_enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
+        self.accept_or_propagate(cx);
+    }
+
+    pub(super) fn on_accept_tab(
+        &mut self,
+        _: &IndentInline,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_or_propagate(cx);
+    }
+
+    pub(super) fn on_accept_indent(&mut self, _: &Indent, _: &mut Window, cx: &mut Context<Self>) {
+        self.accept_or_propagate(cx);
+    }
+
+    fn accept_or_propagate(&mut self, cx: &mut Context<Self>) {
+        if self.palette.is_none() && self.accept_preview(cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
+        }
+    }
+
+    /// Cmd+Z during review rejects the change.
+    pub(super) fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_preview(window, cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
         }
     }
 
@@ -202,10 +304,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc cancels a running command or dismisses its bubble. With the
-    /// palette open, the palette handles Esc itself.
-    pub(super) fn on_escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_none() && self.run.take().is_some() {
+    /// Esc rejects a pending change, cancels a running command or dismisses
+    /// its bubble. With the palette open, the palette handles Esc itself.
+    pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            cx.propagate();
+        } else if self.reject_preview(window, cx) || self.run.take().is_some() {
             cx.stop_propagation();
             cx.notify();
         } else {
@@ -218,7 +322,7 @@ impl Workspace {
         if self
             .run
             .as_ref()
-            .is_some_and(|run| !run.bubble.is_running())
+            .is_some_and(|run| !run.bubble.is_running() && run.preview.is_none())
         {
             self.run = None;
             cx.notify();

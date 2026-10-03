@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use gpui_kit::component::input::{
-    EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
+    EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Undo,
 };
 use gpui_kit::{App, Bounds, Entity, Hsla, Pixels, Point, Window, point};
 
@@ -34,6 +34,8 @@ pub trait EditorHandle {
     fn highlight(&self, ranges: Vec<(Range<usize>, Hsla)>, cx: &mut App);
     fn clear_highlights(&self, cx: &mut App);
     fn focus(&self, window: &mut Window, cx: &mut App);
+    /// Undo the last edit, as Cmd+Z would. Does nothing while read-only.
+    fn undo(&self, window: &mut Window, cx: &mut App);
 }
 
 /// [`EditorHandle`] backed by GPUI Kit's `EditorState`.
@@ -120,6 +122,11 @@ impl EditorHandle for KitEditor {
 
     fn focus(&self, window: &mut Window, cx: &mut App) {
         self.state.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    fn undo(&self, window: &mut Window, cx: &mut App) {
+        self.focus(window, cx);
+        window.dispatch_action(Box::new(Undo), cx);
     }
 }
 

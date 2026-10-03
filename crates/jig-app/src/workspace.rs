@@ -293,7 +293,18 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::open_command))
             .capture_action(cx.listener(Self::on_escape))
-            .child(Editor::new(self.editor.state()).bordered(false).size_full())
+            .capture_action(cx.listener(Self::on_accept_enter))
+            .capture_action(cx.listener(Self::on_accept_tab))
+            .capture_action(cx.listener(Self::on_accept_indent))
+            .capture_action(cx.listener(Self::on_undo))
+            .child(
+                Editor::new(self.editor.state())
+                    .bordered(false)
+                    // Locked while a command's change awaits review. The
+                    // element re-applies this every frame.
+                    .readonly(self.previewing())
+                    .size_full(),
+            )
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
                     anchored()
@@ -464,19 +475,31 @@ mod tests {
         step(cx, window, |_, cx| assert!(!workspace.read(cx).dirty));
     }
 
-    #[gpui_kit::test]
-    fn command_shows_reply_without_editing(cx: &mut TestAppContext) {
+    const DOCS_REPLY: &str =
+        r#"{"replace": "/// Does a.\nfn a() {}", "message": "Added a doc comment."}"#;
+    const ORIGINAL: &str = "fn a() {}\n";
+    const DOCUMENTED: &str = "/// Does a.\nfn a() {}\n";
+
+    /// Open `lib.rs`, run "Add docs" on `fn a() {}` and wait for the preview.
+    fn preview_docs(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, AnyWindowHandle, Entity<Workspace>) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lib.rs");
-        std::fs::write(&path, "fn a() {}\n").unwrap();
+        std::fs::write(&path, ORIGINAL).unwrap();
         let (window, workspace) = open(cx, &path);
-        use_provider(
-            cx,
-            &workspace,
-            Ok(r#"{"replace": "/// Does a.\nfn a() {}", "message": "Added a doc comment."}"#),
-        );
-
+        use_provider(cx, &workspace, Ok(DOCS_REPLY));
         run_preset(cx, window, &workspace, 0..9, "docs");
+        (dir, window, workspace)
+    }
+
+    fn text(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> String {
+        cx.update(|cx| workspace.read(cx).editor.text(cx))
+    }
+
+    #[gpui_kit::test]
+    fn reply_is_previewed_in_place(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
         step(cx, window, |window, cx| {
             let this = workspace.read(cx);
             assert!(
@@ -490,22 +513,153 @@ mod tests {
             let run = this.run.as_ref().expect("a command ran");
             assert_eq!(run.target, 0..9);
             assert_eq!(
+                run.preview.as_ref().unwrap().range,
+                0..21,
+                "the new code's range"
+            );
+            assert_eq!(
                 run.bubble,
-                Bubble::Reply {
+                Bubble::Preview {
                     message: "Added a doc comment.".into(),
-                    proposed: "/// Does a.\nfn a() {}".into()
+                    removed: "fn a() {}".into()
                 }
             );
             assert_eq!(
                 this.editor.text(cx),
-                "fn a() {}\n",
-                "M3 does not edit the buffer"
+                DOCUMENTED,
+                "the change is in the buffer"
+            );
+            assert!(
+                !this.editor.state().read(cx).is_editable(),
+                "and locked while under review"
             );
         });
+    }
 
-        // Esc dismisses the reply.
+    #[gpui_kit::test]
+    fn enter_accepts_and_one_undo_reverts(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(bubble(cx, &workspace), None);
+        assert_eq!(
+            text(cx, &workspace),
+            DOCUMENTED,
+            "Enter keeps the change and inserts nothing"
+        );
+        assert!(cx.update(|cx| workspace.read(cx).editor.state().read(cx).is_editable()));
+
+        step(cx, window, |window, cx| window.press("secondary-z", cx));
+        assert_eq!(
+            text(cx, &workspace),
+            ORIGINAL,
+            "one undo reverts the whole command"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn typing_is_blocked_during_review(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("zzz", cx);
+        });
+        assert_eq!(text(cx, &workspace), DOCUMENTED);
+        assert!(bubble(cx, &workspace).is_some_and(|b| b.is_preview()));
+    }
+
+    #[gpui_kit::test]
+    fn tab_accepts(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| window.press("tab", cx));
+        assert_eq!(bubble(cx, &workspace), None);
+        assert_eq!(
+            text(cx, &workspace),
+            DOCUMENTED,
+            "Tab keeps the change and inserts nothing"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn escape_rejects(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
         step(cx, window, |window, cx| window.press("escape", cx));
         assert_eq!(bubble(cx, &workspace), None);
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+        assert!(
+            !cx.update(|cx| workspace.read(cx).dirty),
+            "back to the saved text"
+        );
+
+        // The editor is usable again.
+        step(cx, window, |window, cx| window.input("x", cx));
+        assert!(text(cx, &workspace).contains('x'));
+    }
+
+    #[gpui_kit::test]
+    fn undo_during_review_rejects(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| window.press("secondary-z", cx));
+        assert_eq!(bubble(cx, &workspace), None);
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+    }
+
+    #[gpui_kit::test]
+    fn reject_keeps_earlier_edits(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(
+            cx,
+            &workspace,
+            Ok(r#"{"replace": "fn b() {}", "message": "Renamed."}"#),
+        );
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-down", cx);
+            window.input("// kept\n", cx);
+        });
+        run_preset(cx, window, &workspace, 0..9, "simplify");
+        assert_eq!(text(cx, &workspace), "fn b() {}\n// kept\n");
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert_eq!(
+            text(cx, &workspace),
+            "fn a() {}\n// kept\n",
+            "only the command is undone"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn unchanged_reply_only_shows_the_message(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(
+            cx,
+            &workspace,
+            Ok(r#"{"replace": "fn a() {}", "message": "Defines an empty function a."}"#),
+        );
+        run_preset(cx, window, &workspace, 0..9, "explain");
+        assert_eq!(
+            bubble(cx, &workspace),
+            Some(Bubble::Message("Defines an empty function a.".into()))
+        );
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+        assert!(cx.update(|cx| workspace.read(cx).editor.state().read(cx).is_editable()));
+    }
+
+    #[gpui_kit::test]
+    fn new_command_accepts_pending_change(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| window.press("secondary-k", cx));
+        let this_text = text(cx, &workspace);
+        assert_eq!(this_text, DOCUMENTED);
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.palette.is_some());
+            assert!(this.editor.state().read(cx).is_editable());
+        });
     }
 
     #[gpui_kit::test]
