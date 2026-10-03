@@ -12,7 +12,7 @@ You receive a file in which the region to change is marked:
 - <<<SELECTION>>> ... <<<END>>> surrounds code to replace, or
 - <<<CURSOR>>> marks where new code is inserted.
 
-Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Reply with exactly one JSON object and nothing else:
+Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. Reply with exactly one JSON object and nothing else:
 {"replace": "<new text for the region>", "message": "<one short sentence>"}
 
 Rules for "replace":
@@ -29,6 +29,8 @@ pub struct PromptRequest {
     pub instruction: String,
     /// The user's note for this run, refining the instruction.
     pub comment: Option<String>,
+    /// The project's conventions, from its `JIG.md`.
+    pub project_rules: Option<String>,
     pub language: String,
     pub file_name: Option<String>,
     pub text: String,
@@ -37,7 +39,6 @@ pub struct PromptRequest {
 }
 
 impl PromptRequest {
-    /// The text the command replaces; empty when inserting at `target`.
     pub fn target_text(&self) -> &str {
         &self.text[self.target.clone()]
     }
@@ -63,8 +64,13 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         .as_deref()
         .map(|comment| format!("Note: {comment}\n"))
         .unwrap_or_default();
+    let rules = request
+        .project_rules
+        .as_deref()
+        .map(|rules| format!("<project_rules>\n{}\n</project_rules>\n\n", rules.trim()))
+        .unwrap_or_default();
     let user = format!(
-        "Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>",
+        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>",
         request.language, request.instruction
     );
     (SYSTEM.to_string(), user)
@@ -82,6 +88,7 @@ mod tests {
             text: "fn a() {}\nfn b() {}\n".into(),
             target,
             comment: None,
+            project_rules: None,
         }
     }
 
@@ -101,6 +108,18 @@ mod tests {
         assert!(user.contains("Instruction: Add docs\nNote: Entity: User\n"));
         let (_, user) = build(&request(10..19));
         assert!(!user.contains("Note:"));
+    }
+
+    #[test]
+    fn includes_project_rules_first() {
+        let mut with_rules = request(10..19);
+        with_rules.project_rules = Some("Use thiserror for errors.\n".into());
+        let (system, user) = build(&with_rules);
+        assert!(system.contains("Project rules"));
+        assert!(user.starts_with(
+            "<project_rules>\nUse thiserror for errors.\n</project_rules>\n\nLanguage: rust"
+        ));
+        assert!(!build(&request(10..19)).1.contains("project_rules"));
     }
 
     #[test]

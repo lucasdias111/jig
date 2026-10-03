@@ -7,7 +7,8 @@ use gpui_kit::*;
 use jig_commands::{NewCommandEvent, NewCommandForm, Scope, presets};
 use jig_editor::EditorHandle;
 
-use super::{AddCommand, EditCommands, Workspace};
+use super::{AddCommand, EditCommands, EditProjectRules, Workspace};
+use crate::project;
 
 pub(super) struct OpenForm {
     pub(super) view: Entity<NewCommandForm>,
@@ -95,6 +96,37 @@ impl Workspace {
         };
         if let Err(error) = presets::ensure_user_file(&path) {
             return self.show_error(&format!("{error:#}"), window, cx);
+        }
+        self.when_discard_ok(window, cx, move |this, window, cx| {
+            this.load(&path, window, cx)
+        });
+    }
+
+    /// Open the `JIG.md` that applies to the current file, creating one at
+    /// the project root if there is none.
+    pub(super) fn edit_project_rules(
+        &mut self,
+        _: &EditProjectRules,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(file) = self.document.path.clone() else {
+            return self.show_error(
+                "Save this file first, so Jig knows which project it belongs to.",
+                window,
+                cx,
+            );
+        };
+        let path = project::rules_path(&file)
+            .unwrap_or_else(|| project::root_for(&file).join(project::RULES_FILE));
+        if !path.exists()
+            && let Err(error) = std::fs::write(&path, project::RULES_TEMPLATE)
+        {
+            return self.show_error(
+                &format!("Couldn't create {}: {error}", path.display()),
+                window,
+                cx,
+            );
         }
         self.when_discard_ok(window, cx, move |this, window, cx| {
             this.load(&path, window, cx)

@@ -28,7 +28,8 @@ actions!(
         CloseWindow,
         OpenCommand,
         AddCommand,
-        EditCommands
+        EditCommands,
+        EditProjectRules
     ]
 );
 
@@ -327,6 +328,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_command))
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
+            .on_action(cx.listener(Self::edit_project_rules))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -1111,5 +1113,33 @@ mod tests {
             "{}",
             sent[0]
         );
+    }
+
+    #[gpui_kit::test]
+    fn project_rules_go_with_every_command(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("JIG.md"), "Use thiserror for errors.\n").unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        let provider = Arc::new(RecordingProvider(Default::default()));
+        let provider_for_ws: Arc<dyn Provider> = provider.clone();
+        cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(provider_for_ws)));
+
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        let first = provider.0.lock().unwrap()[0].clone();
+        assert!(
+            first.starts_with("<project_rules>\nUse thiserror for errors.\n</project_rules>"),
+            "{first}"
+        );
+
+        // Edits to JIG.md apply to the next command without a restart.
+        step(cx, window, |window, cx| window.press("escape", cx));
+        std::fs::write(dir.path().join("JIG.md"), "Prefer anyhow.\n").unwrap();
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        let second = provider.0.lock().unwrap()[1].clone();
+        assert!(second.contains("Prefer anyhow."), "{second}");
     }
 }

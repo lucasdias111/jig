@@ -136,6 +136,7 @@ impl Workspace {
                     bubble: Bubble::Running {
                         label: String::new(),
                         started: std::time::Instant::now(),
+                        with_rules: false,
                     },
                     anchor,
                     snapshot: text,
@@ -155,7 +156,13 @@ impl Workspace {
             text: text.clone(),
             target: target.clone(),
             comment: invocation.comment.clone(),
+            project_rules: self
+                .document
+                .path
+                .as_deref()
+                .and_then(crate::project::rules_for),
         };
+        let with_rules = request.project_rules.is_some();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -174,6 +181,7 @@ impl Workspace {
             bubble: Bubble::Running {
                 label,
                 started: std::time::Instant::now(),
+                with_rules,
             },
             anchor,
             snapshot: text,

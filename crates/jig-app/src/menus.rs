@@ -4,7 +4,7 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::workspace::{
-    AddCommand, CloseWindow, EditCommands, Open, OpenCommand, Quit, Save, SaveAs,
+    AddCommand, CloseWindow, EditCommands, EditProjectRules, Open, OpenCommand, Quit, Save, SaveAs,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -74,6 +74,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Run Command…", OpenCommand),
                 MenuItem::action("Add Command…", AddCommand),
                 MenuItem::action("Edit Commands File", EditCommands),
+                MenuItem::action("Edit Project Rules (JIG.md)", EditProjectRules),
             ],
         ),
     ]);

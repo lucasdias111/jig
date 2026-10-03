@@ -17,6 +17,8 @@ pub enum Bubble {
     Running {
         label: String,
         started: Instant,
+        /// Project rules (`JIG.md`) went with the request.
+        with_rules: bool,
     },
     /// A change is in the buffer awaiting accept or reject. `removed` is the
     /// code it replaced.
@@ -63,7 +65,11 @@ impl RenderOnce for Bubble {
         };
 
         let bubble = match self {
-            Bubble::Running { label, started } => {
+            Bubble::Running {
+                label,
+                started,
+                with_rules,
+            } => {
                 let accent = theme.primary;
                 let elapsed = started.elapsed().as_secs();
                 container
@@ -87,7 +93,11 @@ impl RenderOnce for Bubble {
                             ),
                     )
                     .child(progress_bar(accent, theme.muted))
-                    .child(hint("esc to cancel"))
+                    .child(hint(if with_rules {
+                        "with JIG.md · esc to cancel"
+                    } else {
+                        "esc to cancel"
+                    }))
             }
             Bubble::Error(message) => {
                 container.child(div().text_color(theme.danger).child(message))

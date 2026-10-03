@@ -2,6 +2,7 @@
 
 mod document;
 mod menus;
+mod project;
 mod theme;
 mod workspace;
 

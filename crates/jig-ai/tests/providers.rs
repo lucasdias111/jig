@@ -78,6 +78,7 @@ fn request() -> PromptRequest {
         text: "fn a() {}\n".into(),
         target: 0..9,
         comment: None,
+        project_rules: None,
     }
 }
 

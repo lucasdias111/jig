@@ -29,6 +29,7 @@ fn main() -> anyhow::Result<()> {
         text: text.into(),
         target: 0..text.len() - 1,
         comment: None,
+        project_rules: None,
     };
     let started = std::time::Instant::now();
     let reply = jig_ai::run(provider.as_ref(), &request)?;
