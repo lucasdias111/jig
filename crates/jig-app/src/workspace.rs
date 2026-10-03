@@ -1,22 +1,27 @@
-//! The one window: a single document in a single editor.
+//! The one window: open files in tabs, with the project's files in a
+//! sidebar.
 
 mod commands;
+mod sidebar;
+mod tabs;
 mod user_commands;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::input::Editor;
 use gpui_kit::component::{ActiveTheme as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::Provider;
 use jig_commands::{CommandPalette, Preset, presets};
-use jig_editor::{EditorHandle, KitEditor};
+use jig_editor::EditorHandle;
 
 use crate::document::Document;
+use crate::file_tree::FileTree;
 use commands::CommandRun;
+use tabs::Tab;
 
 actions!(
     jig,
@@ -29,14 +34,38 @@ actions!(
         OpenCommand,
         AddCommand,
         EditCommands,
-        EditProjectRules
+        EditProjectRules,
+        ToggleSidebar,
+        FocusFileTree,
+        NewFile,
+        CloseTab,
+        NextTab,
+        PreviousTab
     ]
 );
 
+/// Switch to the tab at this index (Cmd+1…9).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = jig, no_json)]
+pub struct ActivateTab(pub usize);
+
+const CONTEXT: &str = "Workspace";
+
+/// Sidebar widths the user can drag between.
+const MIN_SIDEBAR_WIDTH: f32 = 160.;
+const MAX_SIDEBAR_WIDTH: f32 = 480.;
+
 pub struct Workspace {
-    document: Document,
-    editor: KitEditor,
-    dirty: bool,
+    /// Never empty: closing the last tab leaves an Untitled one.
+    tabs: Vec<Tab>,
+    active: usize,
+    tab_scroll: ScrollHandle,
+    /// The project's files. `None` until a file or folder is open.
+    tree: Option<ProjectTree>,
+    sidebar_open: bool,
+    sidebar_width: Pixels,
+    /// Set while the sidebar's edge is being dragged.
+    resizing_sidebar: bool,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
     new_command: Option<user_commands::OpenForm>,
@@ -46,7 +75,11 @@ pub struct Workspace {
     provider: Result<Arc<dyn Provider>, String>,
     run: Option<CommandRun>,
     next_run_id: u64,
-    _editor_events: Subscription,
+}
+
+struct ProjectTree {
+    view: Entity<FileTree>,
+    _events: Subscription,
 }
 
 struct OpenPalette {
@@ -58,21 +91,27 @@ struct OpenPalette {
 
 impl Workspace {
     pub fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (document, error) = match path.as_deref().map(Document::open) {
-            Some(Ok(document)) => (document, None),
-            Some(Err(error)) => (Document::default(), Some(error)),
+        let folder = path.as_deref().filter(|path| path.is_dir());
+        let (document, error) = match path.as_deref().filter(|_| folder.is_none()) {
+            Some(path) => match Document::open(path) {
+                Ok(document) => (document, None),
+                Err(error) => (Document::default(), Some(error)),
+            },
             None => (Document::default(), None),
         };
-        let (editor, subscription) = Self::build_editor(&document, window, cx);
         let (presets, presets_error) = match presets::load(presets::user_commands_path().as_deref())
         {
             Ok(presets) => (presets, None),
             Err(error) => (presets::defaults(), Some(error)),
         };
         let mut this = Self {
-            document,
-            editor,
-            dirty: false,
+            tabs: Vec::new(),
+            active: 0,
+            tab_scroll: ScrollHandle::new(),
+            tree: None,
+            sidebar_open: false,
+            sidebar_width: px(240.),
+            resizing_sidebar: false,
             presets: Rc::new(presets),
             palette: None,
             new_command: None,
@@ -80,12 +119,26 @@ impl Workspace {
             provider: commands::load_provider(),
             run: None,
             next_run_id: 0,
-            _editor_events: subscription,
         };
+        let tab = this.new_tab(document, window, cx);
+        tab.editor.focus(window, cx);
+        this.tabs.push(tab);
+        if let Some(folder) = folder {
+            this.open_folder(folder, window, cx);
+        } else if let Some(file) = this.document().path.clone() {
+            this.show_in_tree(&file, window, cx);
+        }
         this.update_title(window);
         crate::theme::sync(window, cx);
         cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx))
             .detach();
+        // Pick up files added or removed outside Jig.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_tree(cx);
+            }
+        })
+        .detach();
         if let Some(error) = presets_error {
             this.show_error(
                 &format!("Using the built-in commands. {error:#}"),
@@ -111,58 +164,12 @@ impl Workspace {
         this
     }
 
-    fn build_editor(
-        document: &Document,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> (KitEditor, Subscription) {
-        let state = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(document.language())
-                .default_value(document.saved_text.clone())
-        });
-        let subscription =
-            cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.refresh_dirty(window, cx);
-                    this.on_buffer_changed(cx);
-                }
-                cx.notify();
-            });
-        let editor = KitEditor::new(state, cx);
-        editor.focus(window, cx);
-        (editor, subscription)
-    }
-
-    fn load(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        match Document::open(path) {
-            Ok(document) => {
-                let (editor, subscription) = Self::build_editor(&document, window, cx);
-                self.document = document;
-                self.editor = editor;
-                self._editor_events = subscription;
-                self.dirty = false;
-                self.update_title(window);
-                cx.notify();
-            }
-            Err(error) => self.show_error(&format!("{error:#}"), window, cx),
-        }
-    }
-
-    fn refresh_dirty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dirty = self.document.is_dirty(&self.editor.text(cx));
-        if dirty != self.dirty {
-            self.dirty = dirty;
-            self.update_title(window);
-        }
-    }
-
     fn update_title(&self, window: &mut Window) {
-        let title = self.document.title();
-        let marker = if self.dirty { " •" } else { "" };
+        let title = self.document().title();
+        let marker = if self.tab().dirty { " •" } else { "" };
         window.set_window_title(&format!("{title}{marker}"));
-        window.set_window_edited(self.dirty);
-        window.set_document_path(self.document.path.as_deref());
+        window.set_window_edited(self.any_dirty());
+        window.set_document_path(self.document().path.as_deref());
     }
 
     fn show_error(&self, message: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -171,18 +178,28 @@ impl Workspace {
     }
 
     /// Run `then` now if there are no unsaved changes, otherwise only after
-    /// the user agrees to discard them.
+    /// the user agrees to discard them. Checks the tab `only`, or every tab.
     fn when_discard_ok(
         &mut self,
+        only: Option<EntityId>,
         window: &mut Window,
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
-        if !self.dirty {
-            then(self, window, cx);
-            return;
-        }
-        let detail = format!("{} has unsaved changes.", self.document.title());
+        let dirty: Vec<String> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.dirty && only.is_none_or(|id| tab.id() == id))
+            .map(|tab| tab.document.title())
+            .collect();
+        let detail = match dirty.as_slice() {
+            [] => {
+                then(self, window, cx);
+                return;
+            }
+            [title] => format!("{title} has unsaved changes."),
+            titles => format!("{} files have unsaved changes.", titles.len()),
+        };
         let answer = window.prompt(
             PromptLevel::Warning,
             "Discard unsaved changes?",
@@ -200,20 +217,27 @@ impl Workspace {
     }
 
     fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.dirty {
+        if !self.any_dirty() {
             return true;
         }
-        self.when_discard_ok(window, cx, |this, window, _| {
-            this.dirty = false;
+        self.close_after_discard(window, cx);
+        false
+    }
+
+    fn close_after_discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.when_discard_ok(None, window, cx, |this, window, _| {
+            // So closing doesn't ask again.
+            for tab in &mut this.tabs {
+                tab.dirty = false;
+            }
             window.remove_window();
         });
-        false
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
-            directories: false,
+            directories: true,
             multiple: false,
             prompt: None,
         });
@@ -224,18 +248,24 @@ impl Workspace {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            this.update_in(cx, |this, window, cx| this.load(&path, window, cx))
-                .ok();
+            this.update_in(cx, |this, window, cx| {
+                if path.is_dir() {
+                    this.open_folder(&path, window, cx);
+                } else {
+                    this.open_file(&path, window, cx);
+                }
+            })
+            .ok();
         })
         .detach();
     }
 
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
-        self.when_discard_ok(window, cx, |this, window, cx| this.prompt_open(window, cx));
+        self.prompt_open(window, cx);
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        match self.document.path.clone() {
+        match self.document().path.clone() {
             Some(path) => self.save_to(&path, window, cx),
             None => self.prompt_save_as(window, cx),
         }
@@ -247,14 +277,14 @@ impl Workspace {
 
     fn prompt_save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dir = self
-            .document
+            .document()
             .path
             .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let name = self.document.title();
+        let name = self.document().title();
         let path = cx.prompt_for_new_path(&dir, Some(&name));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = path.await else {
@@ -267,33 +297,32 @@ impl Workspace {
     }
 
     fn save_to(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.editor.text(cx);
-        let language_changed = crate::document::language_for(path) != self.document.language();
-        if let Err(error) = self.document.save(path, &text) {
+        let text = self.editor().text(cx);
+        let language_changed = crate::document::language_for(path) != self.document().language();
+        if let Err(error) = self.tab_mut().document.save(path, &text) {
             self.show_error(&format!("Could not save: {error:#}"), window, cx);
             return;
         }
         if language_changed {
             // Rebuild so highlighting matches the new extension.
-            self.load(path, window, cx);
+            self.reload_tab(path, window, cx);
         }
-        self.dirty = false;
+        self.tab_mut().dirty = false;
         self.update_title(window);
         if self.is_commands_file() {
             self.reload_presets(window, cx);
         }
+        // Save As may have added a file.
+        self.refresh_tree(cx);
         cx.notify();
     }
 
     fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
-        self.when_discard_ok(window, cx, |this, window, _| {
-            this.dirty = false;
-            window.remove_window();
-        });
+        self.close_after_discard(window, cx);
     }
 
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
-        self.when_discard_ok(window, cx, |_, _, cx| cx.quit());
+        self.when_discard_ok(None, window, cx, |_, _, cx| cx.quit());
     }
 }
 
@@ -303,11 +332,25 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-o", Open, None),
         KeyBinding::new("secondary-s", Save, None),
         KeyBinding::new("secondary-shift-s", SaveAs, None),
-        KeyBinding::new("secondary-w", CloseWindow, None),
+        KeyBinding::new("secondary-n", NewFile, None),
+        KeyBinding::new("secondary-w", CloseTab, None),
+        KeyBinding::new("secondary-shift-w", CloseWindow, None),
+        KeyBinding::new("secondary-shift-]", NextTab, None),
+        KeyBinding::new("secondary-shift-[", PreviousTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
         KeyBinding::new("secondary-k", OpenCommand, None),
         KeyBinding::new("secondary-shift-k", AddCommand, None),
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
+        KeyBinding::new("secondary-shift-e", FocusFileTree, None),
     ]
     .into_iter()
+    // Scoped to the workspace so that forms using Cmd+digits keep them.
+    .chain(
+        (1..=9)
+            .map(|n| KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))),
+    )
+    .chain(crate::file_tree::key_bindings())
     .chain(jig_commands::new_command::key_bindings())
     .chain(jig_commands::palette::key_bindings())
     .collect()
@@ -317,8 +360,12 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
         let theme = cx.theme();
-        let title = self.document.title();
-        v_flex()
+        let title = self.document().title();
+        let sidebar = self.render_sidebar(cx);
+        let tab_bar = self.render_tab_bar(cx);
+        let root = v_flex();
+        self.sidebar_drag_handlers(root, cx)
+            .key_context(CONTEXT)
             .size_full()
             .bg(theme.background)
             .on_action(cx.listener(Self::quit))
@@ -330,6 +377,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
             .on_action(cx.listener(Self::edit_project_rules))
+            .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::focus_file_tree))
+            .on_action(cx.listener(Self::new_file))
+            .on_action(cx.listener(Self::close_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::previous_tab))
+            .on_action(cx.listener(Self::activate_tab))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -346,20 +400,29 @@ impl Render for Workspace {
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(title)
-                        .when(self.dirty, |this| {
+                        .when(self.tab().dirty, |this| {
                             this.child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
                         }),
                 ),
             )
             .child(
-                div().flex_1().min_h_0().pl_2().pr_3().pb_2().child(
-                    Editor::new(self.editor.state())
-                        .bordered(false)
-                        // Locked while a command's change awaits review. The
-                        // element re-applies this every frame.
-                        .readonly(self.previewing())
-                        .size_full(),
-                ),
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_stretch()
+                    .children(sidebar)
+                    .child(
+                        v_flex().flex_1().min_w_0().children(tab_bar).child(
+                            div().flex_1().min_h_0().pl_2().pr_3().pb_2().child(
+                                Editor::new(self.editor().state())
+                                    .bordered(false)
+                                    // Locked while a command's change awaits review.
+                                    // The element re-applies this every frame.
+                                    .readonly(self.previewing())
+                                    .size_full(),
+                            ),
+                        ),
+                    ),
             )
             .when_some(self.new_command.as_ref(), |this, form| {
                 // Centred near the top, like a sheet.
@@ -442,7 +505,7 @@ mod tests {
         step(cx, window, move |window, cx| {
             window.render_frame(cx);
             workspace.update(cx, |this, cx| {
-                this.editor
+                this.editor()
                     .state()
                     .update(cx, |s, cx| s.set_selected_range(range, cx))
             });
@@ -508,17 +571,23 @@ mod tests {
 
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            assert_eq!(workspace.read(cx).editor.language(cx), "rust");
-            assert!(!workspace.read(cx).dirty);
+            assert_eq!(workspace.read(cx).editor().language(cx), "rust");
+            assert!(!workspace.read(cx).tab().dirty);
             window.press("secondary-down", cx);
             window.input("// x\n", cx);
         });
         step(cx, window, |window, cx| {
-            assert!(workspace.read(cx).dirty, "typing marks the buffer dirty");
+            assert!(
+                workspace.read(cx).tab().dirty,
+                "typing marks the buffer dirty"
+            );
             window.press("secondary-s", cx);
         });
         step(cx, window, |_, cx| {
-            assert!(!workspace.read(cx).dirty, "saving clears the dirty flag")
+            assert!(
+                !workspace.read(cx).tab().dirty,
+                "saving clears the dirty flag"
+            )
         });
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\n// x\n");
     }
@@ -535,10 +604,10 @@ mod tests {
             window.input("x", cx);
         });
         step(cx, window, |window, cx| {
-            assert!(workspace.read(cx).dirty);
+            assert!(workspace.read(cx).tab().dirty);
             window.press("secondary-z", cx);
         });
-        step(cx, window, |_, cx| assert!(!workspace.read(cx).dirty));
+        step(cx, window, |_, cx| assert!(!workspace.read(cx).tab().dirty));
     }
 
     const DOCS_REPLY: &str =
@@ -560,7 +629,7 @@ mod tests {
     }
 
     fn text(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> String {
-        cx.update(|cx| workspace.read(cx).editor.text(cx))
+        cx.update(|cx| workspace.read(cx).editor().text(cx))
     }
 
     #[gpui_kit::test]
@@ -573,7 +642,7 @@ mod tests {
                 "running a command closes the palette"
             );
             assert!(
-                this.editor.state().focus_handle(cx).is_focused(window),
+                this.editor().state().focus_handle(cx).is_focused(window),
                 "focus returns to the editor"
             );
             let run = this.run.as_ref().expect("a command ran");
@@ -591,12 +660,12 @@ mod tests {
                 }
             );
             assert_eq!(
-                this.editor.text(cx),
+                this.editor().text(cx),
                 DOCUMENTED,
                 "the change is in the buffer"
             );
             assert!(
-                !this.editor.state().read(cx).is_editable(),
+                !this.editor().state().read(cx).is_editable(),
                 "and locked while under review"
             );
         });
@@ -612,7 +681,7 @@ mod tests {
             DOCUMENTED,
             "Enter keeps the change and inserts nothing"
         );
-        assert!(cx.update(|cx| workspace.read(cx).editor.state().read(cx).is_editable()));
+        assert!(cx.update(|cx| workspace.read(cx).editor().state().read(cx).is_editable()));
 
         step(cx, window, |window, cx| window.press("secondary-z", cx));
         assert_eq!(
@@ -652,7 +721,7 @@ mod tests {
         assert_eq!(bubble(cx, &workspace), None);
         assert_eq!(text(cx, &workspace), ORIGINAL);
         assert!(
-            !cx.update(|cx| workspace.read(cx).dirty),
+            !cx.update(|cx| workspace.read(cx).tab().dirty),
             "back to the saved text"
         );
 
@@ -712,7 +781,7 @@ mod tests {
             Some(Bubble::Message("Defines an empty function a.".into()))
         );
         assert_eq!(text(cx, &workspace), ORIGINAL);
-        assert!(cx.update(|cx| workspace.read(cx).editor.state().read(cx).is_editable()));
+        assert!(cx.update(|cx| workspace.read(cx).editor().state().read(cx).is_editable()));
     }
 
     #[gpui_kit::test]
@@ -724,7 +793,7 @@ mod tests {
         cx.update(|cx| {
             let this = workspace.read(cx);
             assert!(this.palette.is_some());
-            assert!(this.editor.state().read(cx).is_editable());
+            assert!(this.editor().state().read(cx).is_editable());
         });
     }
 
@@ -739,7 +808,7 @@ mod tests {
         step(cx, window, |window, cx| {
             window.render_frame(cx);
             workspace.update(cx, |this, cx| {
-                this.editor
+                this.editor()
                     .state()
                     .update(cx, |s, cx| s.set_selected_range(0..9, cx))
             });
@@ -755,7 +824,7 @@ mod tests {
         cx.update(|cx| {
             let this = workspace.read(cx);
             assert!(this.run.as_ref().unwrap().bubble.is_running());
-            assert_eq!(this.editor.highlighted_ranges(cx), vec![0..9]);
+            assert_eq!(this.editor().highlighted_ranges(cx), vec![0..9]);
         });
         cx.update_window(window, |_, window, cx| window.press("escape", cx))
             .unwrap();
@@ -763,9 +832,9 @@ mod tests {
         cx.update(|cx| {
             let this = workspace.read(cx);
             assert!(this.run.is_none());
-            assert!(this.editor.highlighted_ranges(cx).is_empty());
+            assert!(this.editor().highlighted_ranges(cx).is_empty());
             assert_eq!(
-                this.editor.text(cx),
+                this.editor().text(cx),
                 ORIGINAL,
                 "a cancelled request changes nothing"
             );
@@ -802,7 +871,7 @@ mod tests {
         run_preset(cx, window, &workspace, 0..9, "docs");
         assert!(matches!(bubble(cx, &workspace), Some(Bubble::Error(_))));
         assert_eq!(
-            cx.update(|cx| workspace.read(cx).editor.text(cx)),
+            cx.update(|cx| workspace.read(cx).editor().text(cx)),
             "fn a() {}\n"
         );
     }
@@ -818,7 +887,7 @@ mod tests {
         step(cx, window, |window, cx| {
             window.render_frame(cx);
             workspace.update(cx, |this, cx| {
-                this.editor
+                this.editor()
                     .state()
                     .update(cx, |s, cx| s.set_selected_range(0..9, cx))
             });
@@ -836,7 +905,7 @@ mod tests {
         step(cx, window, move |window, cx| {
             assert!(ws.read(cx).run.as_ref().unwrap().bubble.is_running());
             ws.update(cx, |this, cx| {
-                this.editor.apply_edit(10..10, "// typed\n", window, cx);
+                this.editor().apply_edit(10..10, "// typed\n", window, cx);
             });
         });
         match bubble(cx, &workspace) {
@@ -883,7 +952,7 @@ mod tests {
             let this = workspace.read(cx);
             assert!(this.palette.is_none());
             assert!(this.run.is_none());
-            assert!(this.editor.state().focus_handle(cx).is_focused(window));
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
         });
     }
 
@@ -949,12 +1018,12 @@ mod tests {
         step(cx, window, |window, cx| {
             let this = workspace.read(cx);
             assert!(this.new_command.is_none());
-            assert!(this.editor.state().focus_handle(cx).is_focused(window));
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
             assert!(
                 matches!(this.run.as_ref().map(|r| &r.bubble), Some(Bubble::Message(m)) if m.contains("Create controller"))
             );
             assert_eq!(
-                this.editor.text(cx),
+                this.editor().text(cx),
                 ORIGINAL,
                 "the file being edited is untouched"
             );
@@ -1052,8 +1121,8 @@ mod tests {
         let ws = workspace.clone();
         step(cx, window, move |window, cx| {
             ws.update(cx, |this, cx| {
-                let end = this.editor.text(cx).len();
-                this.editor.apply_edit(
+                let end = this.editor().text(cx).len();
+                this.editor().apply_edit(
                     end..end,
                     "\n[[command]]\nname = \"From file\"\nprompt = \"p\"\n",
                     window,
@@ -1146,6 +1215,137 @@ mod tests {
         assert!(second.contains("Prefer anyhow."), "{second}");
     }
 
+    fn tree_rows(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            let tree = workspace.read(cx).tree.as_ref().unwrap().view.read(cx);
+            tree.model()
+                .rows()
+                .iter()
+                .map(|row| format!("{}{}", "  ".repeat(row.depth), row.name))
+                .collect()
+        })
+    }
+
+    fn tree_focused(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        ws: &Entity<Workspace>,
+    ) -> bool {
+        let ws = ws.clone();
+        cx.update_window(window, move |_, window, cx| {
+            ws.read(cx)
+                .tree
+                .as_ref()
+                .unwrap()
+                .view
+                .read(cx)
+                .is_focused(window)
+        })
+        .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn opening_a_folder_browses_and_opens_files(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/ui")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();
+        std::fs::write(dir.path().join("README.md"), "# hi\n").unwrap();
+        let (window, workspace) = open(cx, dir.path());
+
+        assert!(cx.update(|cx| workspace.read(cx).sidebar_open));
+        assert!(tree_focused(cx, window, &workspace), "starts in the tree");
+        assert_eq!(tree_rows(cx, &workspace), ["src", "README.md"]);
+
+        // Expand src, go to lib.rs, open it.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        assert_eq!(
+            tree_rows(cx, &workspace),
+            ["src", "  ui", "  lib.rs", "README.md"]
+        );
+        step(cx, window, |window, cx| {
+            window.press("down", cx);
+            window.press("right", cx);
+            window.press("down", cx);
+            window.press("enter", cx);
+        });
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/lib.rs")
+            );
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
+        });
+        assert_eq!(
+            tree_rows(cx, &workspace),
+            ["src", "  ui", "  lib.rs", "README.md"],
+            "an empty folder expands to nothing"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        assert!(
+            !cx.update(|cx| workspace.read(cx).sidebar_open),
+            "a single file opens without the sidebar"
+        );
+        assert_eq!(
+            tree_rows(cx, &workspace),
+            ["src", "  lib.rs", "Cargo.toml"],
+            "the project is the git root, with the file revealed"
+        );
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-b", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).sidebar_open));
+        assert!(
+            !tree_focused(cx, window, &workspace),
+            "Cmd+B keeps focus in the editor"
+        );
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-e", cx);
+        });
+        assert!(tree_focused(cx, window, &workspace));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        });
+        assert!(
+            !tree_focused(cx, window, &workspace),
+            "Escape returns to the editor"
+        );
+
+        // A file added on disk shows up when the tree refreshes.
+        std::fs::write(dir.path().join("src/new.rs"), "").unwrap();
+        cx.update(|cx| workspace.update(cx, |this, cx| this.refresh_tree(cx)));
+        assert!(tree_rows(cx, &workspace).contains(&"  new.rs".to_string()));
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-b", cx);
+        });
+        assert!(!cx.update(|cx| workspace.read(cx).sidebar_open));
+    }
+
     /// Reads `src/models.rs` through the tools and writes code that uses it.
     struct ExploringProvider(std::sync::Mutex<Vec<String>>);
 
@@ -1194,7 +1394,7 @@ mod tests {
         step(cx, window, |window, cx| {
             window.render_frame(cx);
             workspace.update(cx, |this, cx| {
-                this.editor
+                this.editor()
                     .state()
                     .update(cx, |s, cx| s.set_selected_range(0..9, cx))
             });
@@ -1213,5 +1413,232 @@ mod tests {
             user.contains("File: src/lib.rs"),
             "the path is project-relative: {user}"
         );
+    }
+
+    fn tab_titles(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            this.tabs.iter().map(|tab| tab.document.title()).collect()
+        })
+    }
+
+    fn active_title(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> String {
+        cx.update(|cx| workspace.read(cx).document().title())
+    }
+
+    fn open_file(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        workspace: &Entity<Workspace>,
+        path: &Path,
+    ) {
+        let ws = workspace.clone();
+        let path = path.to_path_buf();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.open_file(&path, window, cx))
+        });
+    }
+
+    /// `a.rs` open with `b.rs` and `c.rs` next to it on disk.
+    fn three_files(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, AnyWindowHandle, Entity<Workspace>) {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            std::fs::write(dir.path().join(name), format!("// {name}\n")).unwrap();
+        }
+        let (window, workspace) = open(cx, &dir.path().join("a.rs"));
+        (dir, window, workspace)
+    }
+
+    #[gpui_kit::test]
+    fn each_tab_keeps_its_own_buffer_and_undo(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("x", cx);
+        });
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "b.rs"]);
+        assert_eq!(active_title(cx, &workspace), "b.rs");
+        assert!(!cx.update(|cx| workspace.read(cx).tab().dirty));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert!(
+                workspace
+                    .read(cx)
+                    .editor()
+                    .state()
+                    .focus_handle(cx)
+                    .is_focused(window),
+                "the new tab has the keyboard"
+            );
+            window.input("y", cx);
+        });
+        assert_eq!(text(cx, &workspace), "y// b.rs\n");
+
+        // Back to a.rs: its edit is still there and still unsaved.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-1", cx);
+        });
+        assert_eq!(text(cx, &workspace), "x// a.rs\n");
+        assert!(cx.update(|cx| workspace.read(cx).tab().dirty));
+
+        // Undo in a.rs leaves b.rs alone.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-z", cx);
+        });
+        assert_eq!(text(cx, &workspace), "// a.rs\n");
+        assert!(!cx.update(|cx| workspace.read(cx).tab().dirty));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-]", cx);
+        });
+        assert_eq!(text(cx, &workspace), "y// b.rs\n");
+    }
+
+    #[gpui_kit::test]
+    fn opening_an_open_file_switches_to_its_tab(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("c.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("a.rs"));
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "b.rs", "c.rs"]);
+        assert_eq!(active_title(cx, &workspace), "a.rs");
+
+        // New tabs open next to the current one.
+        std::fs::write(dir.path().join("d.rs"), "").unwrap();
+        open_file(cx, window, &workspace, &dir.path().join("d.rs"));
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "d.rs", "b.rs", "c.rs"]);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-9", cx);
+        });
+        assert_eq!(
+            active_title(cx, &workspace),
+            "c.rs",
+            "Cmd+9 is the last tab"
+        );
+        step(cx, window, |window, cx| window.press("ctrl-tab", cx));
+        assert_eq!(active_title(cx, &workspace), "a.rs", "wraps around");
+    }
+
+    #[gpui_kit::test]
+    fn closing_tabs(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("c.rs"));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-2", cx);
+        });
+
+        // A clean tab closes at once; its right neighbour takes over.
+        step(cx, window, |window, cx| window.press("secondary-w", cx));
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "c.rs"]);
+        assert_eq!(active_title(cx, &workspace), "c.rs");
+
+        // An unsaved one asks first.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("z", cx);
+        });
+        step(cx, window, |window, cx| window.press("secondary-w", cx));
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "c.rs"]);
+        step(cx, window, |window, cx| window.press("secondary-w", cx));
+        cx.simulate_prompt_answer("Discard");
+        cx.run_until_parked();
+        assert_eq!(
+            tab_titles(cx, &workspace),
+            ["a.rs"],
+            "the last tab closed goes left"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("c.rs")).unwrap(),
+            "// c.rs\n"
+        );
+
+        // Closing the last file leaves an empty Untitled tab.
+        step(cx, window, |window, cx| window.press("secondary-w", cx));
+        assert_eq!(tab_titles(cx, &workspace), ["Untitled"]);
+        assert_eq!(text(cx, &workspace), "");
+    }
+
+    #[gpui_kit::test]
+    fn a_blank_tab_is_reused(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-n", cx);
+        });
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "Untitled"]);
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        assert_eq!(
+            tab_titles(cx, &workspace),
+            ["a.rs", "b.rs"],
+            "the untouched Untitled tab became b.rs"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn switching_tabs_keeps_a_change_under_review(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = preview_docs(cx);
+        std::fs::write(dir.path().join("b.rs"), "").unwrap();
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        assert!(bubble(cx, &workspace).is_none());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-1", cx);
+        });
+        assert_eq!(text(cx, &workspace), DOCUMENTED);
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.editor().state().read(cx).is_editable());
+            assert!(this.editor().highlighted_ranges(cx).is_empty());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn same_named_files_show_their_folder(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["app", "core"] {
+            std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+            std::fs::write(dir.path().join(folder).join("mod.rs"), "").unwrap();
+        }
+        std::fs::write(dir.path().join("main.rs"), "").unwrap();
+        let (window, workspace) = open(cx, &dir.path().join("app/mod.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("core/mod.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("main.rs"));
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).tab_labels()),
+            ["mod.rs — app", "mod.rs — core", "main.rs"]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn closing_the_window_asks_about_every_unsaved_tab(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("x", cx);
+        });
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-w", cx);
+        });
+        assert!(
+            cx.has_pending_prompt(),
+            "a.rs is unsaved, though not in view"
+        );
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "b.rs"]);
     }
 }

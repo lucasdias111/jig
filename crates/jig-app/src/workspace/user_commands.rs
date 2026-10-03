@@ -78,7 +78,7 @@ impl Workspace {
 
     fn close_add_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.new_command.take().is_some() {
-            self.editor.focus(window, cx);
+            self.editor().focus(window, cx);
             cx.notify();
         }
     }
@@ -97,9 +97,7 @@ impl Workspace {
         if let Err(error) = presets::ensure_user_file(&path) {
             return self.show_error(&format!("{error:#}"), window, cx);
         }
-        self.when_discard_ok(window, cx, move |this, window, cx| {
-            this.load(&path, window, cx)
-        });
+        self.open_file(&path, window, cx);
     }
 
     /// Open the `JIG.md` that applies to the current file, creating one at
@@ -110,7 +108,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(file) = self.document.path.clone() else {
+        let Some(file) = self.document().path.clone() else {
             return self.show_error(
                 "Save this file first, so Jig knows which project it belongs to.",
                 window,
@@ -128,9 +126,7 @@ impl Workspace {
                 cx,
             );
         }
-        self.when_discard_ok(window, cx, move |this, window, cx| {
-            this.load(&path, window, cx)
-        });
+        self.open_file(&path, window, cx);
     }
 
     /// Re-read the presets, e.g. after the commands file was saved.
@@ -146,7 +142,7 @@ impl Workspace {
     }
 
     pub(super) fn is_commands_file(&self) -> bool {
-        let Some(path) = &self.document.path else {
+        let Some(path) = &self.document().path else {
             return false;
         };
         self.commands_path.as_ref().is_some_and(|user| {

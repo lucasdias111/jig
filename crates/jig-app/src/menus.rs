@@ -1,10 +1,11 @@
-//! The macOS menu bar: Jig, File and Edit.
+//! The macOS menu bar: Jig, File, Edit and View.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::workspace::{
-    AddCommand, CloseWindow, EditCommands, EditProjectRules, Open, OpenCommand, Quit, Save, SaveAs,
+    AddCommand, CloseTab, CloseWindow, EditCommands, EditProjectRules, FocusFileTree, NewFile,
+    NextTab, Open, OpenCommand, PreviousTab, Quit, Save, SaveAs, ToggleSidebar,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -52,11 +53,13 @@ pub fn init(cx: &mut App) {
         menu(
             "File",
             vec![
+                MenuItem::action("New File", NewFile),
                 MenuItem::action("Open…", Open),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Save As…", SaveAs),
                 MenuItem::separator(),
+                MenuItem::action("Close Tab", CloseTab),
                 MenuItem::action("Close Window", CloseWindow),
             ],
         ),
@@ -75,6 +78,16 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Add Command…", AddCommand),
                 MenuItem::action("Edit Commands File", EditCommands),
                 MenuItem::action("Edit Project Rules (JIG.md)", EditProjectRules),
+            ],
+        ),
+        menu(
+            "View",
+            vec![
+                MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action("Show Files", FocusFileTree),
+                MenuItem::separator(),
+                MenuItem::action("Show Next Tab", NextTab),
+                MenuItem::action("Show Previous Tab", PreviousTab),
             ],
         ),
     ]);

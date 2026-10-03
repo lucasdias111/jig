@@ -3555,6 +3555,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "ignore",
  "jig-ai",
  "jig-commands",
  "jig-editor",

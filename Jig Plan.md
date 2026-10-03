@@ -8,7 +8,7 @@ Jig is a code editor built to give developers control back. AI does the work thr
 
 *Updated Oct 3, 2026.*
 
-**Milestones M0–M5 are done.** The full concept works end to end: open a file, select code, press Cmd+K, pick or type a command, review the change inline, accept or reject it. Since then Jig has also gained OneNord themes, a macOS menu bar, commands you can add from inside Jig, notes on commands, `JIG.md` project rules and Qwen3.8 Flash as the default model.
+**Milestones M0–M5 are done.** The full concept works end to end: open a file, select code, press Cmd+K, pick or type a command, review the change inline, accept or reject it. Since then Jig has also gained OneNord themes, a macOS menu bar, commands you can add from inside Jig, notes on commands, `JIG.md` project rules, Qwen3.8 Flash as the default model, project exploration for commands, a file tree for browsing the open folder, and tabs.
 
 | Area | State |
 |---|---|
@@ -19,14 +19,16 @@ Jig is a code editor built to give developers control back. AI does the work thr
 | M4 Apply and review | ✅ Done. Provisional apply, Tab/Enter to accept, Esc or Cmd+Z to reject, one undo step. |
 | M5 Polish | ✅ Done. Fade-and-slide instead of scale, which GPUI can't do. |
 | Themes | ✅ OneNord light and dark, following the system. |
-| macOS menu bar | ✅ Jig, File and Edit menus; `script/bundle-macos.sh` builds `Jig.app`. |
+| macOS menu bar | ✅ Jig, File, Edit and View menus; `script/bundle-macos.sh` builds `Jig.app`. |
 | Custom commands | ✅ Add Command form (⇧⌘K), Cmd+Enter to save typed text as a command, Edit Commands File. |
 | Command notes | ✅ `comment` setting per command; Tab adds a one-off note to any command. |
 | Project rules | ✅ The nearest `JIG.md` is sent with every command. |
 | Project exploration | ✅ Commands with `explore = true`, or any command with ⌘E, may read the project (read-only, at most 8 tool calls). Verified live with Qwen and GLM, about 19 s per exploring command. |
-| Folder, tabs, Cmd+P, file tree | 📋 Planned next, in that order. |
+| Folder and file tree | ✅ Open… takes a file or a folder. The sidebar lists the whole project lazily, folders first, gitignored entries dimmed. ⌘B toggles it, ⇧⌘E moves focus in and out, arrows and Enter navigate, and its edge drags to resize. |
+| Tabs | ✅ Each tab has its own buffer, unsaved state and undo history. ⌘N, ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌃Tab. The strip shows only with two or more tabs. |
+| Cmd+P | 📋 Planned next. |
 
-The code is a Rust workspace with four crates, about 80 tests (including headless UI tests) and a commit per milestone.
+The code is a Rust workspace with four crates, about 100 tests (including headless UI tests) and a commit per milestone.
 
 ## Background
 
@@ -105,7 +107,7 @@ The official gpui crate on crates.io lags far behind upstream, and GPUI distribu
 
 ### Crate layout
 
-- `jig-app`: window, workspace, keybindings, theming
+- `jig-app`: window, workspace, file tree sidebar, keybindings, theming
 - `jig-editor`: the editor adapter (wraps GPUI Kit's component behind the interface above)
 - `jig-commands`: preset loading, filtering, the floating input and reply UI, diff preview
 - `jig-ai`: the `Provider` trait, prompt building, response parsing, read-only project tools (no GPUI, so it is tested on its own)
@@ -181,14 +183,13 @@ By the end of Milestone 4, the full concept works end to end.
 - `JIG.md` project rules sent with every command
 - Qwen3.8 Flash as the default model
 - Project exploration: commands with `explore = true` (or any command with ⌘E in Cmd+K) may call read-only tools (`list_dir`, `read_file`, `search`) inside the project before answering. Ignored and secret-looking files are never visible, there are at most 8 calls, and each step shows live in the waiting bubble.
+- Folder and file tree: Open… (and `jig <path>`) accepts a folder as well as a file. A sidebar shows the project, which is the opened folder or the open file's `.git` root. Folders load only when expanded, sort before files, and anything matched by `.gitignore` is dimmed; `.git` and `.DS_Store` are hidden. The open file is revealed and highlighted. ⌘B shows or hides the sidebar (it starts open for a folder, hidden for a single file), ⇧⌘E moves focus between tree and editor, arrows/Enter/Esc navigate, and the edge drags to resize (160–480 px). The tree re-reads the disk when the window regains focus and after saving; there's no live file watching yet. GPUI Kit's own tree needs every folder loaded up front, so Jig has its own (`jig-app`'s `file_tree`).
+- Tabs: every file opens in its own tab, next to the current one, with its own buffer, unsaved marker and undo history; opening a file that's already open switches to it, and an untouched Untitled tab is reused. The strip sits above the editor and appears only with two or more tabs (as in Safari); same-named files show their folder. ⌘N new file, ⌘W close tab (asks if unsaved; the last tab closed leaves an empty Untitled one), ⇧⌘W close window (asks about every unsaved tab), ⌘1–8 and ⌘9 for the last tab, ⇧⌘] / ⇧⌘[ and ⌃Tab / ⌃⇧Tab to cycle, middle-click to close. `jig a.rs b.rs` opens each file in a tab. Switching tabs keeps a change under review and cancels a command still waiting for the model.
 
 ### Next
 
-1. **Open a folder** as a workspace.
-2. **Tabs**, each with its own buffer, unsaved state and undo history.
-3. **Cmd+P quick open**, reusing the command input's fuzzy filter.
-4. **File tree** sidebar on Cmd+B, hidden by default.
-5. Maybe: a "Show last request" menu item, sending related files automatically, and moving API keys to the Keychain so `Jig.app` works when opened from Finder.
+1. **Cmd+P quick open**, reusing the command input's fuzzy filter.
+2. Maybe: a "Show last request" menu item, sending related files automatically, and moving API keys to the Keychain so `Jig.app` works when opened from Finder.
 
 ## Command format and AI contract
 
@@ -250,9 +251,9 @@ The model must answer with structured output only:
 
 ### Out of scope for v1
 
-LSP, file tree, tabs, project search, git, terminal, plugins, settings UI, multi-file edits, and Jig's own buffer and editor element.
+LSP, project search, git, terminal, plugins, settings UI, multi-file edits, and Jig's own buffer and editor element.
 
-*Status: the file tree and tabs have moved into the Next list above. Project search exists only as a read-only tool for the model, not in the UI.*
+*Status: the file tree and tabs are done. Project search exists only as a read-only tool for the model, not in the UI.*
 
 ### Risks
 

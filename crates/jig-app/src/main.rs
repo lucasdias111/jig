@@ -1,6 +1,7 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
 mod document;
+mod file_tree;
 mod menus;
 mod project;
 mod theme;
@@ -13,7 +14,10 @@ use gpui_kit::*;
 use workspace::{Quit, Workspace};
 
 fn main() {
-    let path = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut paths = std::env::args_os().skip(1).map(PathBuf::from);
+    let path = paths.next();
+    // Any further files open in tabs of their own.
+    let more: Vec<PathBuf> = paths.collect();
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
@@ -37,7 +41,13 @@ fn main() {
             ..TitleBar::window_options()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| Workspace::new(path, window, cx))
+            cx.new(|cx| {
+                let mut workspace = Workspace::new(path, window, cx);
+                for path in &more {
+                    workspace.open_file(path, window, cx);
+                }
+                workspace
+            })
         })
         .expect("failed to open window");
         cx.activate(true);

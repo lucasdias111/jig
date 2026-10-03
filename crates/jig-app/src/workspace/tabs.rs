@@ -1,0 +1,379 @@
+//! Tabs: one open file each, with its own buffer, unsaved state and undo
+//! history, and the strip that shows them.
+
+use std::path::Path;
+
+use gpui_kit::component::input::{EditorState, InputEvent};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use jig_editor::{EditorHandle, KitEditor};
+
+use super::{ActivateTab, CloseTab, NewFile, NextTab, PreviousTab, Workspace};
+use crate::document::Document;
+
+const CLOSE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
+
+/// Widest a tab grows before its name is cut short.
+const MAX_TAB_WIDTH: f32 = 200.;
+
+pub(super) struct Tab {
+    pub(super) document: Document,
+    pub(super) editor: KitEditor,
+    pub(super) dirty: bool,
+    _events: Subscription,
+}
+
+impl Tab {
+    /// Identifies the tab across reordering, e.g. while a prompt is open.
+    pub(super) fn id(&self) -> EntityId {
+        self.editor.state().entity_id()
+    }
+
+    /// An Untitled tab nobody has typed into, which opening a file reuses.
+    fn is_blank(&self, cx: &App) -> bool {
+        self.document.path.is_none() && !self.dirty && self.editor.text(cx).is_empty()
+    }
+}
+
+pub(super) fn canonical(path: &Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+impl Workspace {
+    pub(super) fn tab(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+
+    pub(super) fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    pub(super) fn editor(&self) -> &KitEditor {
+        &self.tab().editor
+    }
+
+    pub(super) fn document(&self) -> &Document {
+        &self.tab().document
+    }
+
+    pub(super) fn any_dirty(&self) -> bool {
+        self.tabs.iter().any(|tab| tab.dirty)
+    }
+
+    pub(super) fn new_tab(
+        &mut self,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        let state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language(document.language())
+                .default_value(document.saved_text.clone())
+        });
+        let events = cx.subscribe_in(
+            &state,
+            window,
+            |this, state, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change)
+                    && let Some(ix) = this.tabs.iter().position(|tab| tab.editor.state() == state)
+                {
+                    this.refresh_dirty(ix, window, cx);
+                    if ix == this.active {
+                        this.on_buffer_changed(cx);
+                    }
+                }
+                cx.notify();
+            },
+        );
+        Tab {
+            document,
+            editor: KitEditor::new(state, cx),
+            dirty: false,
+            _events: events,
+        }
+    }
+
+    fn refresh_dirty(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[ix];
+        let dirty = tab.document.is_dirty(&tab.editor.text(cx));
+        if dirty != tab.dirty {
+            tab.dirty = dirty;
+            self.update_title(window);
+        }
+    }
+
+    fn tab_for(&self, path: &Path) -> Option<usize> {
+        let path = canonical(path);
+        self.tabs.iter().position(|tab| {
+            tab.document
+                .path
+                .as_deref()
+                .is_some_and(|open| canonical(open) == path)
+        })
+    }
+
+    /// Show `path`: switch to its tab if it is open, otherwise open it in a
+    /// new tab next to the current one.
+    pub fn open_file(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.tab_for(path) {
+            self.activate(ix, window, cx);
+            return;
+        }
+        let document = match Document::open(path) {
+            Ok(document) => document,
+            Err(error) => return self.show_error(&format!("{error:#}"), window, cx),
+        };
+        let tab = self.new_tab(document, window, cx);
+        self.leave_tab(cx);
+        if self.tab().is_blank(cx) {
+            self.tabs[self.active] = tab;
+        } else {
+            self.active += 1;
+            self.tabs.insert(self.active, tab);
+        }
+        self.enter_tab(window, cx);
+    }
+
+    /// Re-open the current tab's file from disk, e.g. so highlighting follows
+    /// a new extension after Save As.
+    pub(super) fn reload_tab(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        match Document::open(path) {
+            Ok(document) => {
+                let tab = self.new_tab(document, window, cx);
+                self.leave_tab(cx);
+                self.tabs[self.active] = tab;
+                self.enter_tab(window, cx);
+            }
+            Err(error) => self.show_error(&format!("{error:#}"), window, cx),
+        }
+    }
+
+    pub(super) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() {
+            return;
+        }
+        if ix != self.active {
+            self.leave_tab(cx);
+            self.active = ix;
+        }
+        self.enter_tab(window, cx);
+    }
+
+    /// Settle anything floating over the current tab before it goes out of
+    /// view: a change under review is kept, a running command is cancelled.
+    fn leave_tab(&mut self, cx: &mut Context<Self>) {
+        self.palette = None;
+        self.accept_preview(cx);
+        if self.run.take().is_some() {
+            self.editor().clear_highlights(cx);
+        }
+    }
+
+    fn enter_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor().focus(window, cx);
+        self.tab_scroll.scroll_to_item(self.active);
+        self.update_title(window);
+        if let Some(path) = self.document().path.clone() {
+            self.show_in_tree(&path, window, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.new_tab(Document::default(), window, cx);
+        self.leave_tab(cx);
+        self.active += 1;
+        self.tabs.insert(self.active, tab);
+        self.enter_tab(window, cx);
+    }
+
+    pub(super) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_tab_at(self.active, window, cx);
+    }
+
+    /// Close the tab at `ix`, asking first if it has unsaved changes. Closing
+    /// the last, empty tab closes the window.
+    fn close_tab_at(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(ix) else { return };
+        if self.tabs.len() == 1 && tab.is_blank(cx) {
+            window.remove_window();
+            return;
+        }
+        let id = tab.id();
+        self.when_discard_ok(Some(id), window, cx, move |this, window, cx| {
+            this.remove_tab(id, window, cx)
+        });
+    }
+
+    fn remove_tab(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.tabs.iter().position(|tab| tab.id() == id) else {
+            return;
+        };
+        if ix == self.active {
+            self.leave_tab(cx);
+        }
+        self.tabs.remove(ix);
+        if self.tabs.is_empty() {
+            let tab = self.new_tab(Document::default(), window, cx);
+            self.tabs.push(tab);
+        }
+        // The tab to the right takes the closed one's place, or the one to
+        // the left when it was last.
+        if ix < self.active || self.active >= self.tabs.len() {
+            self.active -= 1;
+        }
+        self.enter_tab(window, cx);
+    }
+
+    pub(super) fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate((self.active + 1) % self.tabs.len(), window, cx);
+    }
+
+    pub(super) fn previous_tab(
+        &mut self,
+        _: &PreviousTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let len = self.tabs.len();
+        self.activate((self.active + len - 1) % len, window, cx);
+    }
+
+    /// Cmd+1…8 pick that tab; Cmd+9 always picks the last, as in browsers.
+    pub(super) fn activate_tab(
+        &mut self,
+        action: &ActivateTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ix = if action.0 == 8 {
+            self.tabs.len() - 1
+        } else {
+            action.0
+        };
+        self.activate(ix, window, cx);
+    }
+
+    /// Each tab's label: the file name, plus its folder when another tab
+    /// has the same name.
+    pub(super) fn tab_labels(&self) -> Vec<String> {
+        let titles: Vec<String> = self.tabs.iter().map(|tab| tab.document.title()).collect();
+        self.tabs
+            .iter()
+            .zip(&titles)
+            .map(|(tab, title)| {
+                let shared = titles.iter().filter(|other| *other == title).count() > 1;
+                let parent = tab
+                    .document
+                    .path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name);
+                match parent {
+                    Some(parent) if shared => format!("{title} — {}", parent.to_string_lossy()),
+                    _ => title.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// The strip of tabs above the editor. Hidden while there's only one,
+    /// so a single file stays just code.
+    pub(super) fn render_tab_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.tabs.len() < 2 {
+            return None;
+        }
+        let theme = cx.theme();
+        let tabs = self
+            .tabs
+            .iter()
+            .zip(self.tab_labels())
+            .enumerate()
+            .map(|(ix, (tab, label))| {
+                let active = ix == self.active;
+                let group = SharedString::from(format!("tab-{ix}"));
+                // The close button shows on the current and hovered tab; an
+                // unsaved tab shows a dot there until hovered.
+                let close = div()
+                    .id(("close-tab", ix))
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(4.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(|s| s.bg(theme.secondary_hover))
+                    .child(
+                        Icon::default()
+                            .data(CLOSE)
+                            .size(px(10.))
+                            .text_color(theme.muted_foreground),
+                    )
+                    .when(tab.dirty || !active, |this| {
+                        this.invisible().group_hover(group.clone(), |s| s.visible())
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.close_tab_at(ix, window, cx);
+                    }));
+                let marker = tab.dirty.then(|| {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .group_hover(group.clone(), |s| s.invisible())
+                        .child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
+                });
+                h_flex()
+                    .id(("tab", ix))
+                    .group(group.clone())
+                    .flex_none()
+                    .max_w(px(MAX_TAB_WIDTH))
+                    .h(px(26.))
+                    .pl_2p5()
+                    .pr_1()
+                    .gap_1()
+                    .rounded(px(6.))
+                    .text_xs()
+                    .when(active, |this| {
+                        this.bg(theme.secondary).text_color(theme.foreground)
+                    })
+                    .when(!active, |this| {
+                        this.text_color(theme.muted_foreground)
+                            .hover(|s| s.bg(theme.list_hover))
+                    })
+                    .child(div().min_w_0().truncate().child(label))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .size(px(16.))
+                            .children(marker)
+                            .child(close),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| this.close_tab_at(ix, window, cx)),
+                    )
+            });
+        Some(
+            h_flex()
+                .id("tab-bar")
+                .flex_none()
+                .w_full()
+                .gap_1()
+                .pl_2()
+                .pr_3()
+                .pb_1p5()
+                .overflow_x_scroll()
+                .track_scroll(&self.tab_scroll)
+                .children(tabs)
+                .into_any_element(),
+        )
+    }
+}

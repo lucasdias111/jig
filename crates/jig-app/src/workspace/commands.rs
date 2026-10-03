@@ -56,7 +56,7 @@ pub(super) fn load_provider() -> Result<Arc<dyn Provider>, String> {
 impl Workspace {
     /// Where floating UI opens: just below the cursor or selection.
     fn floating_anchor(&self, cx: &App) -> Point<Pixels> {
-        self.editor
+        self.editor()
             .anchor_point(cx)
             .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
             // The cursor is scrolled out of view: open near the top instead.
@@ -76,8 +76,8 @@ impl Workspace {
         // pending change counts as accepted.
         self.accept_preview(cx);
         self.run = None;
-        self.editor.clear_highlights(cx);
-        let has_selection = !self.editor.selection(cx).is_empty();
+        self.editor().clear_highlights(cx);
+        let has_selection = !self.editor().selection(cx).is_empty();
         let anchor = self.floating_anchor(cx);
         let presets = self.presets.clone();
         let view = cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
@@ -107,7 +107,7 @@ impl Workspace {
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.take().is_some() {
-            self.editor.focus(window, cx);
+            self.editor().focus(window, cx);
             cx.notify();
         }
     }
@@ -118,11 +118,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.editor.text(cx);
+        let text = self.editor().text(cx);
         let target =
             invocation
                 .scope
-                .target(&text, self.editor.selection(cx), self.editor.cursor(cx));
+                .target(&text, self.editor().selection(cx), self.editor().cursor(cx));
         let anchor = self.floating_anchor(cx);
         self.next_run_id += 1;
         let id = self.next_run_id;
@@ -152,8 +152,8 @@ impl Workspace {
 
         let request = PromptRequest {
             instruction: invocation.instruction.clone(),
-            language: self.editor.language(cx),
-            file_name: self.document.path.as_deref().map(|path| {
+            language: self.editor().language(cx),
+            file_name: self.document().path.as_deref().map(|path| {
                 // Relative to the project, so an exploring model knows
                 // where the file sits.
                 let root = crate::project::root_for(path);
@@ -166,7 +166,7 @@ impl Workspace {
             target: target.clone(),
             comment: invocation.comment.clone(),
             project_rules: self
-                .document
+                .document()
                 .path
                 .as_deref()
                 .and_then(crate::project::rules_for),
@@ -174,7 +174,7 @@ impl Workspace {
         let with_rules = request.project_rules.is_some();
         // Exploring needs a saved file, to know which project to look in.
         let tools = self
-            .document
+            .document()
             .path
             .as_deref()
             .filter(|_| invocation.explore)
@@ -201,7 +201,7 @@ impl Workspace {
 
         let label = invocation.name.unwrap_or_else(|| "Working".into());
         // Tint the code being worked on until the reply arrives.
-        self.editor
+        self.editor()
             .highlight(vec![(target.clone(), working_color(cx))], cx);
         self.run = Some(CommandRun {
             id,
@@ -227,10 +227,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(run) = self.run.as_mut().filter(|run| run.id == id) else {
+        let Some(run) = self.run.as_ref().filter(|run| run.id == id) else {
             return; // Cancelled or replaced while waiting.
         };
-        if self.editor.text(cx) != run.snapshot {
+        if self.editor().text(cx) != run.snapshot {
             self.fail(
                 id,
                 "The file changed while waiting, so nothing was applied.".into(),
@@ -251,7 +251,7 @@ impl Workspace {
         let Some(run) = self.run.as_mut() else { return };
         let original = run.snapshot[run.target.clone()].to_string();
         if reply.replace == original {
-            self.editor.clear_highlights(cx);
+            self.editor().clear_highlights(cx);
             let Some(run) = self.run.as_mut() else { return };
             run.bubble = Bubble::Message(if reply.message.is_empty() {
                 "No changes.".into()
@@ -270,9 +270,9 @@ impl Workspace {
             removed: original,
         };
         let target = run.target.clone();
-        let range = self.editor.apply_edit(target, &reply.replace, window, cx);
-        self.editor.set_readonly(true, cx);
-        self.editor
+        let range = self.editor().apply_edit(target, &reply.replace, window, cx);
+        self.editor().set_readonly(true, cx);
+        self.editor()
             .highlight(vec![(range.clone(), added_color(cx))], cx);
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
             preview.range = range;
@@ -295,8 +295,8 @@ impl Workspace {
             return false;
         }
         self.run = None;
-        self.editor.clear_highlights(cx);
-        self.editor.set_readonly(false, cx);
+        self.editor().clear_highlights(cx);
+        self.editor().set_readonly(false, cx);
         cx.notify();
         true
     }
@@ -308,9 +308,9 @@ impl Workspace {
             return false;
         }
         self.run = None;
-        self.editor.clear_highlights(cx);
-        self.editor.set_readonly(false, cx);
-        self.editor.undo(window, cx);
+        self.editor().clear_highlights(cx);
+        self.editor().set_readonly(false, cx);
+        self.editor().undo(window, cx);
         cx.notify();
         true
     }
@@ -381,11 +381,12 @@ impl Workspace {
 
     /// Show `error` in the run's bubble and dismiss it after a few seconds.
     fn fail(&mut self, id: u64, error: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(run) = self.run.as_mut().filter(|run| run.id == id) else {
+        if !self.run.as_ref().is_some_and(|run| run.id == id) {
             return;
-        };
+        }
+        self.editor().clear_highlights(cx);
+        let Some(run) = self.run.as_mut() else { return };
         run.bubble = Bubble::Error(shorten(&error));
-        self.editor.clear_highlights(cx);
         run._task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(ERROR_TIMEOUT).await;
             this.update(cx, |this, cx| {
@@ -405,7 +406,7 @@ impl Workspace {
         if self.modal_open() {
             cx.propagate();
         } else if self.reject_preview(window, cx) || self.run.take().is_some() {
-            self.editor.clear_highlights(cx);
+            self.editor().clear_highlights(cx);
             cx.stop_propagation();
             cx.notify();
         } else {
