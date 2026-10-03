@@ -44,12 +44,48 @@ impl Scope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+/// Whether a command asks for a note before it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommentMode {
+    /// Runs straight away. Tab in the command input still adds a note.
+    #[default]
+    None,
+    /// Asks for a note; Enter with nothing typed runs without one.
+    Optional,
+    /// Won't run without a note.
+    Required,
+}
+
+impl CommentMode {
+    pub const ALL: [CommentMode; 3] = [
+        CommentMode::None,
+        CommentMode::Optional,
+        CommentMode::Required,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CommentMode::None => "none",
+            CommentMode::Optional => "optional",
+            CommentMode::Required => "required",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct Preset {
     pub name: String,
     #[serde(default)]
     pub scope: Scope,
     pub prompt: String,
+    /// Ask for a note to go with the prompt, e.g. the entity a "Create
+    /// controller" command should build.
+    #[serde(default)]
+    pub comment: CommentMode,
+    /// Placeholder for the note, e.g. "Entity name".
+    #[serde(default)]
+    pub comment_hint: Option<String>,
 }
 
 /// What the user chose to run from the command input.
@@ -59,6 +95,8 @@ pub struct Invocation {
     pub name: Option<String>,
     pub instruction: String,
     pub scope: Scope,
+    /// The user's note for this run, sent alongside the instruction.
+    pub comment: Option<String>,
 }
 
 impl Invocation {
@@ -67,7 +105,15 @@ impl Invocation {
             name: Some(preset.name.clone()),
             instruction: preset.prompt.clone(),
             scope: preset.scope,
+            comment: None,
         }
+    }
+
+    /// Attach the user's note. Blank notes are dropped.
+    pub fn with_comment(mut self, comment: &str) -> Self {
+        let comment = comment.trim();
+        self.comment = (!comment.is_empty()).then(|| comment.to_string());
+        self
     }
 
     /// A typed instruction. It works on the selection when there is one and
@@ -79,6 +125,7 @@ impl Invocation {
             Scope::Cursor
         };
         Self {
+            comment: None,
             name: None,
             instruction: text.trim().to_string(),
             scope,
@@ -138,6 +185,15 @@ pub const USER_FILE_HEADER: &str = "\
 #
 # scope: \"selection\" (falls back to the current line), \"cursor\" (insert at
 # the cursor) or \"file\" (the whole file).
+# comment: \"none\" (default), \"optional\" or \"required\": ask for a note
+# that is sent along with the prompt. comment_hint: placeholder for it.
+#
+# [[command]]
+# name = \"Create controller\"
+# scope = \"cursor\"
+# prompt = \"Insert a REST controller at the cursor.\"
+# comment = \"required\"
+# comment_hint = \"Entity name\"
 ";
 
 /// Create the user's commands file with an explanatory header if it
@@ -185,6 +241,17 @@ pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
         quote(preset.scope.label()),
         quote(preset.prompt.trim())
     ));
+    if preset.comment != CommentMode::None {
+        entry.push_str(&format!("comment = {}\n", quote(preset.comment.label())));
+    }
+    if let Some(hint) = preset
+        .comment_hint
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+    {
+        entry.push_str(&format!("comment_hint = {}\n", quote(hint)));
+    }
 
     use std::io::Write as _;
     std::fs::OpenOptions::new()
@@ -366,6 +433,7 @@ mod tests {
             name: name.into(),
             scope: Scope::Cursor,
             prompt: prompt.into(),
+            ..Default::default()
         };
 
         add_user_preset(
@@ -407,6 +475,7 @@ mod tests {
             name: name.into(),
             scope: Scope::Selection,
             prompt: prompt.into(),
+            ..Default::default()
         };
 
         assert!(add_user_preset(&path, &preset(" ", "p")).is_err());
@@ -423,6 +492,51 @@ mod tests {
         let source = std::fs::read_to_string(&path).unwrap();
         assert!(source.starts_with("# mine\n"));
         assert_eq!(parse(&source).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn comment_settings_parse_and_round_trip() {
+        let presets = parse(
+            "[[command]]\nname = \"Controller\"\nprompt = \"p\"\ncomment = \"required\"\ncomment_hint = \"Entity name\"\n",
+        )
+        .unwrap();
+        assert_eq!(presets[0].comment, CommentMode::Required);
+        assert_eq!(presets[0].comment_hint.as_deref(), Some("Entity name"));
+        assert_eq!(
+            parse("[[command]]\nname = \"X\"\nprompt = \"p\"\n").unwrap()[0].comment,
+            CommentMode::None
+        );
+        assert!(parse("[[command]]\nname = \"X\"\nprompt = \"p\"\ncomment = \"maybe\"\n").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commands.toml");
+        let preset = Preset {
+            name: "Controller".into(),
+            prompt: "p".into(),
+            comment: CommentMode::Optional,
+            comment_hint: Some("Entity".into()),
+            ..Default::default()
+        };
+        add_user_preset(&path, &preset).unwrap();
+        let saved = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved[0], preset);
+    }
+
+    #[test]
+    fn with_comment_drops_blank_notes() {
+        let preset = Preset {
+            name: "A".into(),
+            prompt: "p".into(),
+            ..Default::default()
+        };
+        assert_eq!(Invocation::preset(&preset).with_comment("  ").comment, None);
+        assert_eq!(
+            Invocation::preset(&preset)
+                .with_comment(" User ")
+                .comment
+                .as_deref(),
+            Some("User")
+        );
     }
 
     #[test]

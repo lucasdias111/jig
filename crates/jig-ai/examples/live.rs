@@ -28,6 +28,7 @@ fn main() -> anyhow::Result<()> {
         file_name: Some("math.rs".into()),
         text: text.into(),
         target: 0..text.len() - 1,
+        comment: None,
     };
     let started = std::time::Instant::now();
     let reply = jig_ai::run(provider.as_ref(), &request)?;

@@ -1,7 +1,8 @@
 //! The floating form for adding a preset command.
 //!
-//! Tab moves between Name and Prompt, Cmd+1/2/3 (or a click) picks the
-//! scope, Cmd+Enter saves and Esc cancels.
+//! Tab moves between the fields, Cmd+1/2/3 picks the scope and Cmd+4/5/6
+//! whether the command asks for a note (a click works too), Cmd+Enter saves
+//! and Esc cancels.
 
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, Input, InputState, OutdentInline, Textarea, TextareaState,
@@ -10,9 +11,19 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::presets::{Preset, Scope};
+use crate::presets::{CommentMode, Preset, Scope};
 
-actions!(jig_new_command, [ScopeSelection, ScopeCursor, ScopeFile]);
+actions!(
+    jig_new_command,
+    [
+        ScopeSelection,
+        ScopeCursor,
+        ScopeFile,
+        NoteNone,
+        NoteOptional,
+        NoteRequired
+    ]
+);
 
 const CONTEXT: &str = "JigNewCommand";
 
@@ -21,6 +32,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-1", ScopeSelection, Some(CONTEXT)),
         KeyBinding::new("secondary-2", ScopeCursor, Some(CONTEXT)),
         KeyBinding::new("secondary-3", ScopeFile, Some(CONTEXT)),
+        KeyBinding::new("secondary-4", NoteNone, Some(CONTEXT)),
+        KeyBinding::new("secondary-5", NoteOptional, Some(CONTEXT)),
+        KeyBinding::new("secondary-6", NoteRequired, Some(CONTEXT)),
     ]
 }
 
@@ -32,11 +46,20 @@ pub enum NewCommandEvent {
 pub struct NewCommandForm {
     name: Entity<InputState>,
     prompt: Entity<TextareaState>,
+    hint: Entity<InputState>,
     scope: Scope,
+    comment: CommentMode,
     error: Option<SharedString>,
 }
 
 impl EventEmitter<NewCommandEvent> for NewCommandForm {}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Field {
+    Name,
+    Prompt,
+    Hint,
+}
 
 impl NewCommandForm {
     /// `prompt` pre-fills the prompt, e.g. from a typed custom command.
@@ -55,11 +78,16 @@ impl NewCommandForm {
                 None => state,
             }
         });
+        let hint = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Placeholder for the note, e.g. Entity name")
+        });
         name.update(cx, |name, cx| name.focus(window, cx));
         Self {
             name,
             prompt,
+            hint,
             scope,
+            comment: CommentMode::None,
             error: None,
         }
     }
@@ -73,16 +101,56 @@ impl NewCommandForm {
     fn save(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).value().trim().to_string();
         let prompt = self.prompt.read(cx).value().trim().to_string();
+        let hint = self.hint.read(cx).value().trim().to_string();
         if name.is_empty() {
             self.set_error("Give the command a name.", cx);
         } else if prompt.is_empty() {
             self.set_error("Describe what the command should do.", cx);
         } else {
+            let asks = self.comment != CommentMode::None;
             cx.emit(NewCommandEvent::Save(Preset {
                 name,
                 scope: self.scope,
                 prompt,
+                comment: self.comment,
+                comment_hint: (asks && !hint.is_empty()).then_some(hint),
             }));
+        }
+    }
+
+    fn fields(&self) -> Vec<Field> {
+        let mut fields = vec![Field::Name, Field::Prompt];
+        if self.comment != CommentMode::None {
+            fields.push(Field::Hint);
+        }
+        fields
+    }
+
+    fn focused(&self, window: &Window, cx: &App) -> Option<Field> {
+        if self.name.focus_handle(cx).is_focused(window) {
+            Some(Field::Name)
+        } else if self.prompt.focus_handle(cx).is_focused(window) {
+            Some(Field::Prompt)
+        } else if self.hint.focus_handle(cx).is_focused(window) {
+            Some(Field::Hint)
+        } else {
+            None
+        }
+    }
+
+    /// Move focus `step` fields along, wrapping around.
+    fn cycle(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        let fields = self.fields();
+        let current = self
+            .focused(window, cx)
+            .and_then(|field| fields.iter().position(|f| *f == field))
+            .unwrap_or(0) as isize;
+        let next = fields[(current + step).rem_euclid(fields.len() as isize) as usize];
+        match next {
+            Field::Name => self.name.update(cx, |input, cx| input.focus(window, cx)),
+            Field::Prompt => self.prompt.update(cx, |input, cx| input.focus(window, cx)),
+            Field::Hint => self.hint.update(cx, |input, cx| input.focus(window, cx)),
         }
     }
 
@@ -90,9 +158,9 @@ impl NewCommandForm {
         if action.secondary {
             cx.stop_propagation();
             self.save(cx);
-        } else if self.name.focus_handle(cx).is_focused(window) {
+        } else if self.focused(window, cx) == Some(Field::Name) {
             // Enter in the one-line name field moves on to the prompt.
-            self.focus_other(window, cx);
+            self.cycle(1, window, cx);
         }
     }
 
@@ -101,32 +169,93 @@ impl NewCommandForm {
         cx.emit(NewCommandEvent::Cancel);
     }
 
-    fn focus_other(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-        if self.name.focus_handle(cx).is_focused(window) {
-            self.prompt
-                .update(cx, |prompt, cx| prompt.focus(window, cx));
-        } else {
-            self.name.update(cx, |name, cx| name.focus(window, cx));
-        }
-    }
-
     fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_other(window, cx);
+        self.cycle(1, window, cx);
     }
 
     fn on_shift_tab(&mut self, _: &OutdentInline, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_other(window, cx);
+        self.cycle(-1, window, cx);
     }
 
     fn set_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
         self.scope = scope;
         cx.notify();
     }
+
+    fn set_comment(&mut self, comment: CommentMode, cx: &mut Context<Self>) {
+        self.comment = comment;
+        cx.notify();
+    }
+}
+
+/// A selectable option with its shortcut, e.g. "cursor ⌘2".
+fn chip(
+    id: (&'static str, usize),
+    label: &'static str,
+    shortcut: String,
+    active: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    h_flex()
+        .id(id)
+        .px_2()
+        .py_0p5()
+        .gap_1()
+        .rounded_md()
+        .text_sm()
+        .border_1()
+        .border_color(if active { theme.primary } else { theme.border })
+        .when(active, |chip| chip.bg(theme.primary.opacity(0.15)))
+        .when(!active, |chip| chip.hover(|chip| chip.bg(theme.list_hover)))
+        .child(label)
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(shortcut),
+        )
 }
 
 impl Render for NewCommandForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scopes: Vec<_> = Scope::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, &scope)| {
+                let label = format!("⌘{}", index + 1);
+                chip(
+                    ("jig-scope", index),
+                    scope.label(),
+                    label,
+                    scope == self.scope,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| this.set_scope(scope, cx)),
+                )
+            })
+            .collect();
+        let notes: Vec<_> = CommentMode::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, &mode)| {
+                let label = format!("⌘{}", index + 4);
+                chip(
+                    ("jig-note", index),
+                    mode.label(),
+                    label,
+                    mode == self.comment,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| this.set_comment(mode, cx)),
+                )
+            })
+            .collect();
+        let focused = self.focused(window, cx);
         let theme = cx.theme();
         let label = |text: &'static str| {
             div()
@@ -134,32 +263,6 @@ impl Render for NewCommandForm {
                 .text_color(theme.muted_foreground)
                 .child(text)
         };
-        let scopes = Scope::ALL.iter().enumerate().map(|(index, &scope)| {
-            let active = scope == self.scope;
-            h_flex()
-                .id(("jig-scope", index))
-                .px_2()
-                .py_0p5()
-                .gap_1()
-                .rounded_md()
-                .text_sm()
-                .border_1()
-                .border_color(if active { theme.primary } else { theme.border })
-                .when(active, |chip| chip.bg(theme.primary.opacity(0.15)))
-                .when(!active, |chip| chip.hover(|chip| chip.bg(theme.list_hover)))
-                .child(scope.label())
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("⌘{}", index + 1)),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| this.set_scope(scope, cx)),
-                )
-        });
-        let name_focused = self.name.focus_handle(cx).is_focused(window);
 
         let form = v_flex()
             .key_context(CONTEXT)
@@ -174,6 +277,15 @@ impl Render for NewCommandForm {
                 cx.listener(|this, _: &ScopeCursor, _, cx| this.set_scope(Scope::Cursor, cx)),
             )
             .on_action(cx.listener(|this, _: &ScopeFile, _, cx| this.set_scope(Scope::File, cx)))
+            .on_action(
+                cx.listener(|this, _: &NoteNone, _, cx| this.set_comment(CommentMode::None, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NoteOptional, _, cx| {
+                this.set_comment(CommentMode::Optional, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NoteRequired, _, cx| {
+                this.set_comment(CommentMode::Required, cx)
+            }))
             .w(px(460.))
             .p_3()
             .gap_2()
@@ -195,19 +307,21 @@ impl Render for NewCommandForm {
             .child(h_flex().gap_1p5().children(scopes))
             .child(label("Prompt"))
             .child(Textarea::new(&self.prompt).h(px(120.)))
+            .child(label("Asks for a note"))
+            .child(h_flex().gap_1p5().children(notes))
+            .when(self.comment != CommentMode::None, |this| {
+                this.child(Input::new(&self.hint))
+            })
             .when_some(self.error.clone(), |this, error| {
                 this.child(div().text_xs().text_color(theme.danger).child(error))
             })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(if name_focused {
-                        "tab to the prompt · ⌘↩ save · esc cancel"
-                    } else {
-                        "⌘↩ save · esc cancel"
-                    }),
-            );
+            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                if focused == Some(Field::Name) {
+                    "tab to the prompt · ⌘↩ save · esc cancel"
+                } else {
+                    "⌘↩ save · esc cancel"
+                },
+            ));
         crate::motion::pop_in(form, "jig-new-command")
     }
 }

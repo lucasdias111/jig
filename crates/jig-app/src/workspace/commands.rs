@@ -154,6 +154,7 @@ impl Workspace {
             file_name: self.document.path.as_ref().map(|_| self.document.title()),
             text: text.clone(),
             target: target.clone(),
+            comment: invocation.comment.clone(),
         };
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx

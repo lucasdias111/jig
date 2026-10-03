@@ -10,4 +10,4 @@ pub mod presets;
 pub use bubble::Bubble;
 pub use new_command::{NewCommandEvent, NewCommandForm};
 pub use palette::{CommandPalette, PaletteEvent};
-pub use presets::{Invocation, Preset, Scope};
+pub use presets::{CommentMode, Invocation, Preset, Scope};

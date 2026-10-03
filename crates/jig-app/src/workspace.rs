@@ -1059,4 +1059,57 @@ mod tests {
         });
         assert!(preset_names(cx, &workspace).contains(&"From file".to_string()));
     }
+
+    /// Records the user message of each request.
+    struct RecordingProvider(std::sync::Mutex<Vec<String>>);
+
+    impl Provider for RecordingProvider {
+        fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
+            self.0.lock().unwrap().push(user.to_string());
+            Ok(r#"{"replace": "struct User;", "message": "Added."}"#.into())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn note_reaches_the_model(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        std::fs::create_dir_all(commands.parent().unwrap()).unwrap();
+        std::fs::write(
+            &commands,
+            "[[command]]\nname = \"Create model\"\nscope = \"cursor\"\nprompt = \"Insert a model.\"\ncomment = \"required\"\n",
+        )
+        .unwrap();
+        let provider = Arc::new(RecordingProvider(Default::default()));
+        let provider_for_ws: Arc<dyn Provider> = provider.clone();
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.provider = Ok(provider_for_ws);
+                this.reload_presets(window, cx);
+            })
+        })
+        .unwrap();
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-k", cx);
+        });
+        // Typed and confirmed in one frame, like a fast paste.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("model", cx);
+            window.press("enter", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.input("User with an email", cx);
+            window.press("enter", cx);
+        });
+
+        let sent = provider.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0].contains("Instruction: Insert a model.\nNote: User with an email\n"),
+            "{}",
+            sent[0]
+        );
+    }
 }

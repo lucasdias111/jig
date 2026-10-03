@@ -77,6 +77,7 @@ fn request() -> PromptRequest {
         file_name: Some("lib.rs".into()),
         text: "fn a() {}\n".into(),
         target: 0..9,
+        comment: None,
     }
 }
 

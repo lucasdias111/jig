@@ -12,7 +12,7 @@ You receive a file in which the region to change is marked:
 - <<<SELECTION>>> ... <<<END>>> surrounds code to replace, or
 - <<<CURSOR>>> marks where new code is inserted.
 
-Apply the instruction to that region only. Reply with exactly one JSON object and nothing else:
+Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Reply with exactly one JSON object and nothing else:
 {"replace": "<new text for the region>", "message": "<one short sentence>"}
 
 Rules for "replace":
@@ -27,6 +27,8 @@ Rules for "message": at most 20 words, plain text, no greetings, no follow-up qu
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptRequest {
     pub instruction: String,
+    /// The user's note for this run, refining the instruction.
+    pub comment: Option<String>,
     pub language: String,
     pub file_name: Option<String>,
     pub text: String,
@@ -55,8 +57,13 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         )
     };
     let file = request.file_name.as_deref().unwrap_or("untitled");
+    let note = request
+        .comment
+        .as_deref()
+        .map(|comment| format!("Note: {comment}\n"))
+        .unwrap_or_default();
     let user = format!(
-        "Language: {}\nFile: {file}\nInstruction: {}\n\n<file>\n{marked}\n</file>",
+        "Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>",
         request.language, request.instruction
     );
     (SYSTEM.to_string(), user)
@@ -73,6 +80,7 @@ mod tests {
             file_name: Some("lib.rs".into()),
             text: "fn a() {}\nfn b() {}\n".into(),
             target,
+            comment: None,
         }
     }
 
@@ -82,6 +90,16 @@ mod tests {
         assert!(system.contains("\"replace\""));
         assert!(user.contains("Instruction: Add docs"));
         assert!(user.contains("fn a() {}\n<<<SELECTION>>>fn b() {}<<<END>>>\n"));
+    }
+
+    #[test]
+    fn includes_the_note() {
+        let mut with_note = request(10..19);
+        with_note.comment = Some("Entity: User".into());
+        let (_, user) = build(&with_note);
+        assert!(user.contains("Instruction: Add docs\nNote: Entity: User\n"));
+        let (_, user) = build(&request(10..19));
+        assert!(!user.contains("Note:"));
     }
 
     #[test]
