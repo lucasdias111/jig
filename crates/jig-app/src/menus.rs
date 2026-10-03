@@ -3,7 +3,9 @@
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
-use crate::workspace::{CloseWindow, Open, OpenCommand, Quit, Save, SaveAs};
+use crate::workspace::{
+    AddCommand, CloseWindow, EditCommands, Open, OpenCommand, Quit, Save, SaveAs,
+};
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
 
@@ -70,6 +72,8 @@ pub fn init(cx: &mut App) {
                 MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
                 MenuItem::action("Run Command…", OpenCommand),
+                MenuItem::action("Add Command…", AddCommand),
+                MenuItem::action("Edit Commands File", EditCommands),
             ],
         ),
     ]);

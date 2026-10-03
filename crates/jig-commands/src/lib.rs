@@ -3,9 +3,11 @@
 
 pub mod bubble;
 pub mod motion;
+pub mod new_command;
 pub mod palette;
 pub mod presets;
 
 pub use bubble::Bubble;
+pub use new_command::{NewCommandEvent, NewCommandForm};
 pub use palette::{CommandPalette, PaletteEvent};
 pub use presets::{Invocation, Preset, Scope};

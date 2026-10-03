@@ -17,6 +17,8 @@ const MAX_ROWS: usize = 8;
 
 pub enum PaletteEvent {
     Run(Invocation),
+    /// Cmd+Enter on typed text: turn it into a preset.
+    SaveAsCommand(String),
     Dismissed,
 }
 
@@ -111,8 +113,15 @@ impl CommandPalette {
         }
     }
 
-    fn on_enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_enter(&mut self, action: &Enter, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        if action.secondary {
+            let query = self.query(cx);
+            if !query.trim().is_empty() {
+                cx.emit(PaletteEvent::SaveAsCommand(query.trim().to_string()));
+            }
+            return;
+        }
         self.run(self.selected, cx);
     }
 
@@ -159,19 +168,12 @@ impl CommandPalette {
             .when(selected, |row| row.bg(theme.list_active))
             .when(!selected, |row| row.hover(|row| row.bg(theme.list_hover)))
             .child(div().truncate().child(label))
-            .when_some(scope, |row, scope| {
-                let scope = match scope {
-                    Scope::Selection => "selection",
-                    Scope::Cursor => "cursor",
-                    Scope::File => "file",
-                };
-                row.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(scope),
-                )
-            })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(scope.map_or("⌘↩ save as command", Scope::label)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -266,7 +268,7 @@ mod tests {
                         cx.subscribe(&palette, |host: &mut Host, _, event: &PaletteEvent, _| {
                             host.events.push(match event {
                                 PaletteEvent::Run(invocation) => Some(invocation.clone()),
-                                PaletteEvent::Dismissed => None,
+                                PaletteEvent::Dismissed | PaletteEvent::SaveAsCommand(_) => None,
                             })
                         });
                     Host {

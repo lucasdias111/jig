@@ -1,6 +1,7 @@
 //! The one window: a single document in a single editor.
 
 mod commands;
+mod user_commands;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,7 +18,19 @@ use jig_editor::{EditorHandle, KitEditor};
 use crate::document::Document;
 use commands::CommandRun;
 
-actions!(jig, [Quit, Open, Save, SaveAs, CloseWindow, OpenCommand]);
+actions!(
+    jig,
+    [
+        Quit,
+        Open,
+        Save,
+        SaveAs,
+        CloseWindow,
+        OpenCommand,
+        AddCommand,
+        EditCommands
+    ]
+);
 
 pub struct Workspace {
     document: Document,
@@ -25,6 +38,9 @@ pub struct Workspace {
     dirty: bool,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
+    new_command: Option<user_commands::OpenForm>,
+    /// The user's commands file, `~/.config/jig/commands.toml`.
+    commands_path: Option<PathBuf>,
     /// The configured model, or why it couldn't be set up.
     provider: Result<Arc<dyn Provider>, String>,
     run: Option<CommandRun>,
@@ -58,6 +74,8 @@ impl Workspace {
             dirty: false,
             presets: Rc::new(presets),
             palette: None,
+            new_command: None,
+            commands_path: presets::user_commands_path(),
             provider: commands::load_provider(),
             run: None,
             next_run_id: 0,
@@ -260,6 +278,9 @@ impl Workspace {
         }
         self.dirty = false;
         self.update_title(window);
+        if self.is_commands_file() {
+            self.reload_presets(window, cx);
+        }
         cx.notify();
     }
 
@@ -283,11 +304,16 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-s", SaveAs, None),
         KeyBinding::new("secondary-w", CloseWindow, None),
         KeyBinding::new("secondary-k", OpenCommand, None),
+        KeyBinding::new("secondary-shift-k", AddCommand, None),
     ]
+    .into_iter()
+    .chain(jig_commands::new_command::key_bindings())
+    .collect()
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewport = window.viewport_size();
         let theme = cx.theme();
         let title = self.document.title();
         v_flex()
@@ -299,6 +325,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::open_command))
+            .on_action(cx.listener(Self::add_command))
+            .on_action(cx.listener(Self::edit_commands))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -330,6 +358,16 @@ impl Render for Workspace {
                         .size_full(),
                 ),
             )
+            .when_some(self.new_command.as_ref(), |this, form| {
+                // Centred near the top, like a sheet.
+                let left = ((viewport.width - px(460.)) / 2.).max(px(8.));
+                this.child(deferred(
+                    anchored()
+                        .position(gpui_kit::point(left, px(56.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(form.view.clone()),
+                ))
+            })
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
                     anchored()
@@ -844,5 +882,181 @@ mod tests {
             assert!(this.run.is_none());
             assert!(this.editor.state().focus_handle(cx).is_focused(window));
         });
+    }
+
+    /// A workspace whose commands file lives in a temp dir.
+    fn open_with_commands(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        AnyWindowHandle,
+        Entity<Workspace>,
+        std::path::PathBuf,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        let commands = dir.path().join("config").join("commands.toml");
+        let commands_for_ws = commands.clone();
+        cx.update(|cx| workspace.update(cx, |this, _| this.commands_path = Some(commands_for_ws)));
+        (dir, window, workspace, commands)
+    }
+
+    fn preset_names(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            workspace
+                .read(cx)
+                .presets
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn add_command_from_the_shortcut(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-k", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).new_command.is_some()));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("Create controller", cx);
+            window.press("tab", cx);
+            window.input("Insert a REST controller at the cursor.", cx);
+            window.press("secondary-2", cx);
+            window.press("secondary-enter", cx);
+        });
+
+        let source = std::fs::read_to_string(&commands).unwrap();
+        let saved = jig_commands::presets::parse(&source).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Create controller");
+        assert_eq!(saved[0].prompt, "Insert a REST controller at the cursor.");
+        assert_eq!(saved[0].scope, jig_commands::Scope::Cursor);
+        assert!(
+            preset_names(cx, &workspace).contains(&"Create controller".to_string()),
+            "available in ⌘K at once"
+        );
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(this.new_command.is_none());
+            assert!(this.editor.state().focus_handle(cx).is_focused(window));
+            assert!(
+                matches!(this.run.as_ref().map(|r| &r.bubble), Some(Bubble::Message(m)) if m.contains("Create controller"))
+            );
+            assert_eq!(
+                this.editor.text(cx),
+                ORIGINAL,
+                "the file being edited is untouched"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn save_typed_instruction_as_command(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("wrap this in a tokio task", cx);
+            window.press("secondary-enter", cx);
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.palette.is_none());
+            assert!(
+                this.new_command.is_some(),
+                "the form replaces the command input"
+            );
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("Spawn task", cx);
+            window.press("secondary-enter", cx);
+        });
+        let saved =
+            jig_commands::presets::parse(&std::fs::read_to_string(&commands).unwrap()).unwrap();
+        assert_eq!(
+            saved[0].prompt, "wrap this in a tokio task",
+            "the typed text becomes the prompt"
+        );
+        assert_eq!(saved[0].scope, jig_commands::Scope::Selection);
+    }
+
+    #[gpui_kit::test]
+    fn duplicate_name_keeps_the_form_open(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        std::fs::create_dir_all(commands.parent().unwrap()).unwrap();
+        std::fs::write(&commands, "[[command]]\nname = \"Mine\"\nprompt = \"p\"\n").unwrap();
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("mine", cx);
+            window.press("tab", cx);
+            window.input("again", cx);
+            window.press("secondary-enter", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).new_command.is_some()));
+        assert_eq!(
+            jig_commands::presets::parse(&std::fs::read_to_string(&commands).unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[gpui_kit::test]
+    fn escape_cancels_the_form(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("Half typed", cx);
+            window.press("escape", cx);
+        });
+        assert!(cx.update(|cx| workspace.read(cx).new_command.is_none()));
+        assert!(!commands.exists());
+    }
+
+    #[gpui_kit::test]
+    fn saving_the_commands_file_reloads_presets(cx: &mut TestAppContext) {
+        let (_dir, window, workspace, commands) = open_with_commands(cx);
+        cx.update(|cx| {
+            cx.update_window(window, |_, window, cx| {
+                workspace.update(cx, |this, cx| {
+                    this.edit_commands(&super::EditCommands, window, cx)
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        assert!(commands.exists(), "created with a header");
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                let end = this.editor.text(cx).len();
+                this.editor.apply_edit(
+                    end..end,
+                    "\n[[command]]\nname = \"From file\"\nprompt = \"p\"\n",
+                    window,
+                    cx,
+                );
+            });
+            window.press("secondary-s", cx);
+        });
+        assert!(preset_names(cx, &workspace).contains(&"From file".to_string()));
     }
 }

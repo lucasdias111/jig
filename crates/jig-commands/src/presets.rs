@@ -4,7 +4,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
 const DEFAULT_COMMANDS: &str = include_str!("../../../assets/default-commands.toml");
@@ -23,6 +23,16 @@ pub enum Scope {
 }
 
 impl Scope {
+    pub const ALL: [Scope; 3] = [Scope::Selection, Scope::Cursor, Scope::File];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Scope::Selection => "selection",
+            Scope::Cursor => "cursor",
+            Scope::File => "file",
+        }
+    }
+
     /// The byte range this scope targets in `text`.
     pub fn target(self, text: &str, selection: Range<usize>, cursor: usize) -> Range<usize> {
         match self {
@@ -119,6 +129,69 @@ pub fn load(user_path: Option<&Path>) -> Result<Vec<Preset>> {
         }
     }
     Ok(presets)
+}
+
+/// The text written for a user's own commands file the first time.
+pub const USER_FILE_HEADER: &str = "\
+# Your Jig commands. Each one shows up in the command input (Cmd+K).
+# A command with the same name as a built-in one replaces it.
+#
+# scope: \"selection\" (falls back to the current line), \"cursor\" (insert at
+# the cursor) or \"file\" (the whole file).
+";
+
+/// Create the user's commands file with an explanatory header if it
+/// doesn't exist yet.
+pub fn ensure_user_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    std::fs::write(path, USER_FILE_HEADER).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Append `preset` to the user's commands file, creating it if needed. The
+/// existing text, comments included, is left as it is.
+pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
+    let name = preset.name.trim();
+    if name.is_empty() {
+        bail!("Give the command a name.");
+    }
+    if preset.prompt.trim().is_empty() {
+        bail!("Describe what the command should do.");
+    }
+    ensure_user_file(path)?;
+    let existing =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let user = parse(&existing).with_context(|| format!("parsing {}", path.display()))?;
+    if user.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
+        bail!("You already have a command named “{name}”.");
+    }
+
+    let quote = |text: &str| toml::Value::String(text.to_string()).to_string();
+    let mut entry = String::new();
+    if !existing.is_empty() && !existing.ends_with("\n\n") {
+        entry.push_str(if existing.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        });
+    }
+    entry.push_str(&format!(
+        "[[command]]\nname = {}\nscope = {}\nprompt = {}\n",
+        quote(name),
+        quote(preset.scope.label()),
+        quote(preset.prompt.trim())
+    ));
+
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(entry.as_bytes()))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// Indices of the presets whose names match `query`, best match first. An
@@ -283,6 +356,73 @@ mod tests {
             Scope::Selection.target(text, text.len()..text.len(), text.len()),
             text.len()..text.len()
         );
+    }
+
+    #[test]
+    fn add_user_preset_creates_and_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jig").join("commands.toml");
+        let preset = |name: &str, prompt: &str| Preset {
+            name: name.into(),
+            scope: Scope::Cursor,
+            prompt: prompt.into(),
+        };
+
+        add_user_preset(
+            &path,
+            &preset(
+                "Create controller",
+                "Insert a \"REST\" controller.\nUse axum.",
+            ),
+        )
+        .unwrap();
+        add_user_preset(&path, &preset("Add logging", "Add tracing calls.")).unwrap();
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            source.starts_with("# Your Jig commands."),
+            "header written once"
+        );
+        let user = parse(&source).unwrap();
+        assert_eq!(user.len(), 2);
+        assert_eq!(
+            user[0].prompt, "Insert a \"REST\" controller.\nUse axum.",
+            "quotes and newlines survive"
+        );
+        assert_eq!(user[1].scope, Scope::Cursor);
+        assert!(
+            load(Some(&path))
+                .unwrap()
+                .iter()
+                .any(|p| p.name == "Add logging")
+        );
+    }
+
+    #[test]
+    fn add_user_preset_keeps_comments_and_rejects_bad_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commands.toml");
+        std::fs::write(&path, "# mine\n[[command]]\nname = \"A\"\nprompt = \"a\"").unwrap();
+        let preset = |name: &str, prompt: &str| Preset {
+            name: name.into(),
+            scope: Scope::Selection,
+            prompt: prompt.into(),
+        };
+
+        assert!(add_user_preset(&path, &preset(" ", "p")).is_err());
+        assert!(add_user_preset(&path, &preset("B", "  ")).is_err());
+        assert!(
+            add_user_preset(&path, &preset("a", "dup"))
+                .unwrap_err()
+                .to_string()
+                .contains("already")
+        );
+        // Overriding a built-in is allowed.
+        add_user_preset(&path, &preset("Add docs", "My docs.")).unwrap();
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(source.starts_with("# mine\n"));
+        assert_eq!(parse(&source).unwrap().len(), 2);
     }
 
     #[test]

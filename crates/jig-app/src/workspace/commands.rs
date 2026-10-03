@@ -86,8 +86,14 @@ impl Workspace {
             window,
             |this, _, event: &PaletteEvent, window, cx| {
                 this.close_palette(window, cx);
-                if let PaletteEvent::Run(invocation) = event {
-                    this.run_command(invocation.clone(), window, cx);
+                match event {
+                    PaletteEvent::Run(invocation) => {
+                        this.run_command(invocation.clone(), window, cx)
+                    }
+                    PaletteEvent::SaveAsCommand(text) => {
+                        this.open_add_command(Some(text.clone()), window, cx)
+                    }
+                    PaletteEvent::Dismissed => {}
                 }
             },
         );
@@ -237,6 +243,11 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The command input or the new-command form has the keyboard.
+    fn modal_open(&self) -> bool {
+        self.palette.is_some() || self.new_command.is_some()
+    }
+
     pub(super) fn previewing(&self) -> bool {
         self.run.as_ref().is_some_and(|run| run.preview.is_some())
     }
@@ -285,7 +296,7 @@ impl Workspace {
     }
 
     fn accept_or_propagate(&mut self, cx: &mut Context<Self>) {
-        if self.palette.is_none() && self.accept_preview(cx) {
+        if !self.modal_open() && self.accept_preview(cx) {
             cx.stop_propagation();
         } else {
             cx.propagate();
@@ -294,11 +305,41 @@ impl Workspace {
 
     /// Cmd+Z during review rejects the change.
     pub(super) fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        if self.reject_preview(window, cx) {
+        if !self.modal_open() && self.reject_preview(window, cx) {
             cx.stop_propagation();
         } else {
             cx.propagate();
         }
+    }
+
+    /// Show a short note at the cursor that fades after a few seconds.
+    pub(super) fn show_note(
+        &mut self,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.next_run_id += 1;
+        let id = self.next_run_id;
+        self.run = Some(CommandRun {
+            id,
+            bubble: Bubble::Message(message),
+            anchor: self.floating_anchor(cx),
+            snapshot: String::new(),
+            target: 0..0,
+            preview: None,
+            _task: Some(cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(ERROR_TIMEOUT).await;
+                this.update(cx, |this, cx| {
+                    if this.run.as_ref().is_some_and(|run| run.id == id) {
+                        this.run = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })),
+        });
+        cx.notify();
     }
 
     /// Show `error` in the run's bubble and dismiss it after a few seconds.
@@ -324,7 +365,7 @@ impl Workspace {
     /// Esc rejects a pending change, cancels a running command or dismisses
     /// its bubble. With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_some() {
+        if self.modal_open() {
             cx.propagate();
         } else if self.reject_preview(window, cx) || self.run.take().is_some() {
             self.editor.clear_highlights(cx);
