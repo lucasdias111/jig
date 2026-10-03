@@ -1,7 +1,10 @@
 //! The small floating window that shows a command's progress and reply.
 
+use std::time::{Duration, Instant};
+
+use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -10,8 +13,10 @@ const REMOVED_LINES: usize = 6;
 
 #[derive(Clone, Debug, PartialEq, IntoElement)]
 pub enum Bubble {
+    /// Waiting for the model. `started` drives the elapsed-time counter.
     Running {
         label: String,
+        started: Instant,
     },
     /// A change is in the buffer awaiting accept or reject. `removed` is the
     /// code it replaced.
@@ -58,13 +63,32 @@ impl RenderOnce for Bubble {
         };
 
         match self {
-            Bubble::Running { label } => container.child(
-                h_flex()
-                    .gap_2()
-                    .child(Spinner::new().small().color(theme.muted_foreground))
-                    .child(div().text_color(theme.muted_foreground).child(label))
-                    .child(hint("esc to cancel")),
-            ),
+            Bubble::Running { label, started } => {
+                let accent = theme.primary;
+                let elapsed = started.elapsed().as_secs();
+                container
+                    .border_color(accent.opacity(0.6))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Spinner::new().color(accent))
+                            .child(
+                                ShimmerText::new(format!("{label}…"))
+                                    .id("jig-running-label")
+                                    .font_weight(FontWeight::MEDIUM),
+                            )
+                            .child(div().flex_1())
+                            // The spinner animates every frame, so this stays current.
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{elapsed}s")),
+                            ),
+                    )
+                    .child(progress_bar(accent, theme.muted))
+                    .child(hint("esc to cancel"))
+            }
             Bubble::Error(message) => {
                 container.child(div().text_color(theme.danger).child(message))
             }
@@ -99,4 +123,31 @@ impl RenderOnce for Bubble {
             }
         }
     }
+}
+
+/// An indeterminate progress bar: a segment sliding across a track.
+fn progress_bar(color: Hsla, track: Hsla) -> impl IntoElement {
+    div()
+        .relative()
+        .w_full()
+        .h(px(3.))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(track)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .h_full()
+                .w(relative(0.35))
+                .rounded_full()
+                .bg(color)
+                .with_animation(
+                    "jig-progress",
+                    Animation::new(Duration::from_millis(1400))
+                        .repeat()
+                        .with_easing(ease_in_out),
+                    |bar, delta| bar.left(relative(-0.35 + 1.35 * delta)),
+                ),
+        )
 }

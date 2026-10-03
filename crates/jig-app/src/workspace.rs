@@ -663,6 +663,50 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn waiting_tints_the_target_until_cancelled(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(cx, &workspace, Ok(DOCS_REPLY));
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |this, cx| {
+                this.editor
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(0..9, cx))
+            });
+            window.press("secondary-k", cx);
+        });
+        // Run without letting the request finish.
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.input("docs", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.run.as_ref().unwrap().bubble.is_running());
+            assert_eq!(this.editor.highlighted_ranges(cx), vec![0..9]);
+        });
+        cx.update_window(window, |_, window, cx| window.press("escape", cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.run.is_none());
+            assert!(this.editor.highlighted_ranges(cx).is_empty());
+            assert_eq!(
+                this.editor.text(cx),
+                ORIGINAL,
+                "a cancelled request changes nothing"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
     fn provider_error_shows_and_fades(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lib.rs");

@@ -56,6 +56,11 @@ impl KitEditor {
     pub fn state(&self) -> &Entity<EditorState> {
         &self.state
     }
+
+    /// Ranges currently highlighted through [`EditorHandle::highlight`].
+    pub fn highlighted_ranges(&self, cx: &App) -> Vec<Range<usize>> {
+        self.highlights.get_ranges(cx)
+    }
 }
 
 impl EditorHandle for KitEditor {

@@ -17,6 +17,11 @@ const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
 /// Longest error text shown in the bubble.
 const MAX_ERROR_CHARS: usize = 180;
 
+/// Background of code a command is working on, while waiting for the model.
+fn working_color() -> Hsla {
+    hsla(0.6, 0.8, 0.6, 0.14)
+}
+
 /// Background of code a command just wrote, while it awaits review.
 fn added_color() -> Hsla {
     hsla(0.38, 0.6, 0.5, 0.16)
@@ -70,6 +75,7 @@ impl Workspace {
         // pending change counts as accepted.
         self.accept_preview(cx);
         self.run = None;
+        self.editor.clear_highlights(cx);
         let has_selection = !self.editor.selection(cx).is_empty();
         let anchor = self.floating_anchor(cx);
         let presets = self.presets.clone();
@@ -122,6 +128,7 @@ impl Workspace {
                     id,
                     bubble: Bubble::Running {
                         label: String::new(),
+                        started: std::time::Instant::now(),
                     },
                     anchor,
                     snapshot: text,
@@ -150,10 +157,16 @@ impl Workspace {
                 .ok();
         });
 
-        let label = invocation.name.unwrap_or_else(|| "Running…".into());
+        let label = invocation.name.unwrap_or_else(|| "Working".into());
+        // Tint the code being worked on until the reply arrives.
+        self.editor
+            .highlight(vec![(target.clone(), working_color())], cx);
         self.run = Some(CommandRun {
             id,
-            bubble: Bubble::Running { label },
+            bubble: Bubble::Running {
+                label,
+                started: std::time::Instant::now(),
+            },
             anchor,
             snapshot: text,
             target,
@@ -194,6 +207,8 @@ impl Workspace {
         let Some(run) = self.run.as_mut() else { return };
         let original = run.snapshot[run.target.clone()].to_string();
         if reply.replace == original {
+            self.editor.clear_highlights(cx);
+            let Some(run) = self.run.as_mut() else { return };
             run.bubble = Bubble::Message(if reply.message.is_empty() {
                 "No changes.".into()
             } else {
@@ -291,6 +306,7 @@ impl Workspace {
             return;
         };
         run.bubble = Bubble::Error(shorten(&error));
+        self.editor.clear_highlights(cx);
         run._task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(ERROR_TIMEOUT).await;
             this.update(cx, |this, cx| {
@@ -310,6 +326,7 @@ impl Workspace {
         if self.palette.is_some() {
             cx.propagate();
         } else if self.reject_preview(window, cx) || self.run.take().is_some() {
+            self.editor.clear_highlights(cx);
             cx.stop_propagation();
             cx.notify();
         } else {
