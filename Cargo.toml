@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# The only GPUI dependency. Pinned exactly: GPUI distributions cannot be mixed.
+gpui-kit = { version = "=0.7.0", features = ["tree-sitter-rust"] }
+jig-editor = { path = "crates/jig-editor" }
+jig-commands = { path = "crates/jig-commands" }
+jig-ai = { path = "crates/jig-ai" }
+anyhow = "1"

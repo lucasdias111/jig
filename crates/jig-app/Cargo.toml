@@ -1,0 +1,14 @@
+[package]
+name = "jig-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jig"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+jig-editor.workspace = true
+anyhow.workspace = true
