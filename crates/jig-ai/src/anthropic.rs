@@ -14,6 +14,8 @@ pub struct AnthropicProvider {
     pub model: String,
     pub max_tokens: u32,
     pub auth: AuthStyle,
+    /// Sent with every request, e.g. OpenCode Go's session header.
+    pub extra_headers: Vec<(String, String)>,
     agent: ureq::Agent,
 }
 
@@ -31,8 +33,14 @@ impl AnthropicProvider {
             model: model.to_string(),
             max_tokens,
             auth,
+            extra_headers: Vec::new(),
             agent: http::agent(),
         }
+    }
+
+    pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 }
 
@@ -48,7 +56,12 @@ impl Provider for AnthropicProvider {
             AuthStyle::ApiKey => ("x-api-key", self.api_key.clone()),
             AuthStyle::Bearer => ("authorization", format!("Bearer {}", self.api_key)),
         };
-        let headers = [auth, ("anthropic-version", "2023-06-01".to_string())];
+        let mut headers = vec![auth, ("anthropic-version", "2023-06-01".to_string())];
+        headers.extend(
+            self.extra_headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone())),
+        );
         let response = http::post_json(
             &self.agent,
             &format!("{}/messages", self.base_url),

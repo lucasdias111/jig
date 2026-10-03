@@ -87,7 +87,8 @@ fn openai_compat_round_trip() {
         r#"{"choices":[{"message":{"role":"assistant","content":"{\"replace\":\"fn b() {}\",\"message\":\"Renamed.\"}"}}]}"#,
     );
     let provider =
-        OpenAiCompatProvider::new(&format!("{url}/v1/"), Some("k".into()), "glm", 1000, true);
+        OpenAiCompatProvider::new(&format!("{url}/v1/"), Some("k".into()), "glm", 1000, true)
+            .with_headers(vec![("x-opencode-session".into(), "jig-1".into())]);
     let reply = jig_ai::run(&provider, &request()).unwrap();
     assert_eq!(reply.replace, "fn b() {}");
     assert_eq!(reply.message, "Renamed.");
@@ -95,6 +96,8 @@ fn openai_compat_round_trip() {
     let sent = rx.recv().unwrap();
     assert_eq!(sent.request_line, "POST /v1/chat/completions HTTP/1.1");
     assert_eq!(sent.header("authorization"), Some("Bearer k"));
+    assert_eq!(sent.header("x-opencode-session"), Some("jig-1"));
+    assert!(sent.header("user-agent").unwrap().starts_with("jig/"));
     assert_eq!(sent.body["model"], "glm");
     assert_eq!(sent.body["response_format"]["type"], "json_object");
     assert_eq!(sent.body["messages"][0]["role"], "system");

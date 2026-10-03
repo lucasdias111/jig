@@ -9,6 +9,7 @@ pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(120)))
+        .user_agent(concat!("jig/", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
 }

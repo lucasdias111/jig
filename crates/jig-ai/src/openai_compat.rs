@@ -14,6 +14,8 @@ pub struct OpenAiCompatProvider {
     pub max_tokens: u32,
     /// Ask for `response_format: json_object`. Some servers reject it.
     pub json_mode: bool,
+    /// Sent with every request, e.g. OpenCode Go's session header.
+    pub extra_headers: Vec<(String, String)>,
     agent: ureq::Agent,
 }
 
@@ -31,8 +33,14 @@ impl OpenAiCompatProvider {
             model: model.to_string(),
             max_tokens,
             json_mode,
+            extra_headers: Vec::new(),
             agent: http::agent(),
         }
+    }
+
+    pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 }
 
@@ -54,6 +62,11 @@ impl Provider for OpenAiCompatProvider {
             .api_key
             .iter()
             .map(|key| ("authorization", format!("Bearer {key}")))
+            .chain(
+                self.extra_headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.clone())),
+            )
             .collect();
         let url = format!("{}/chat/completions", self.base_url);
         let response = http::post_json(&self.agent, &url, &headers, &body)?;

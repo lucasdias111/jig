@@ -18,6 +18,7 @@ kind = "openai"
 base_url = "https://opencode.ai/zen/go/v1"
 model = "glm-5.3-flash"
 api_key_env = "OPENCODE_API_KEY"
+session_header = "x-opencode-session"
 
 [[provider]]
 name = "opencode-qwen"
@@ -25,7 +26,7 @@ kind = "anthropic"
 base_url = "https://opencode.ai/zen/go/v1"
 model = "qwen3.8-flash"
 api_key_env = "OPENCODE_API_KEY"
-auth = "bearer"
+session_header = "x-opencode-session"
 
 [[provider]]
 name = "claude"
@@ -77,6 +78,9 @@ pub struct ProviderConfig {
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub auth: AuthStyle,
+    /// Header that carries Jig's session ID. OpenCode Go requires
+    /// `x-opencode-session` to route requests.
+    pub session_header: Option<String>,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     /// OpenAI-compatible only: request `response_format: json_object`.
@@ -147,23 +151,45 @@ impl ProviderConfig {
                 )?),
                 None => None,
             };
+        let headers: Vec<(String, String)> = self
+            .session_header
+            .iter()
+            .map(|name| (name.clone(), session_id().to_string()))
+            .collect();
         Ok(match self.kind {
-            ProviderKind::Openai => Arc::new(OpenAiCompatProvider::new(
-                &self.base_url,
-                api_key,
-                &self.model,
-                self.max_tokens,
-                self.json_mode,
-            )),
-            ProviderKind::Anthropic => Arc::new(AnthropicProvider::new(
-                &self.base_url,
-                api_key.context("Anthropic-format providers need api_key_env.")?,
-                &self.model,
-                self.max_tokens,
-                self.auth,
-            )),
+            ProviderKind::Openai => Arc::new(
+                OpenAiCompatProvider::new(
+                    &self.base_url,
+                    api_key,
+                    &self.model,
+                    self.max_tokens,
+                    self.json_mode,
+                )
+                .with_headers(headers),
+            ),
+            ProviderKind::Anthropic => Arc::new(
+                AnthropicProvider::new(
+                    &self.base_url,
+                    api_key.context("Anthropic-format providers need api_key_env.")?,
+                    &self.model,
+                    self.max_tokens,
+                    self.auth,
+                )
+                .with_headers(headers),
+            ),
         })
     }
+}
+
+/// One ID per Jig launch, stable across that run's requests.
+pub fn session_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        format!("jig-{:x}-{nanos:x}", std::process::id())
+    })
 }
 
 #[cfg(test)]
@@ -195,6 +221,24 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.to_string().contains("OPENCODE_API_KEY is not set"));
+    }
+
+    #[test]
+    fn opencode_providers_send_a_session_header() {
+        let config = Config::built_in();
+        for provider in config
+            .providers
+            .iter()
+            .filter(|p| p.base_url.contains("opencode.ai"))
+        {
+            assert_eq!(
+                provider.session_header.as_deref(),
+                Some("x-opencode-session"),
+                "{}",
+                provider.name
+            );
+        }
+        assert_eq!(session_id(), session_id());
     }
 
     #[test]
