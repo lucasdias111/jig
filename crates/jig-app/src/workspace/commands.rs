@@ -8,7 +8,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, Undo};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
-use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
+use jig_commands::{Bubble, CommandPalette, Invocation, LiveStep, PaletteEvent};
 use jig_editor::EditorHandle;
 
 use super::{OpenCommand, OpenPalette, Workspace};
@@ -137,6 +137,7 @@ impl Workspace {
                         label: String::new(),
                         started: std::time::Instant::now(),
                         with_rules: false,
+                        step: None,
                     },
                     anchor,
                     snapshot: text,
@@ -152,7 +153,15 @@ impl Workspace {
         let request = PromptRequest {
             instruction: invocation.instruction.clone(),
             language: self.editor.language(cx),
-            file_name: self.document.path.as_ref().map(|_| self.document.title()),
+            file_name: self.document.path.as_deref().map(|path| {
+                // Relative to the project, so an exploring model knows
+                // where the file sits.
+                let root = crate::project::root_for(path);
+                path.strip_prefix(&root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
             text: text.clone(),
             target: target.clone(),
             comment: invocation.comment.clone(),
@@ -163,10 +172,28 @@ impl Workspace {
                 .and_then(crate::project::rules_for),
         };
         let with_rules = request.project_rules.is_some();
+        // Exploring needs a saved file, to know which project to look in.
+        let tools = self
+            .document
+            .path
+            .as_deref()
+            .filter(|_| invocation.explore)
+            .and_then(|path| jig_ai::ProjectTools::new(&crate::project::root_for(path)).ok());
+        let step = tools.as_ref().map(|_| LiveStep::default());
+        let live = step.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { jig_ai::run(provider.as_ref(), &request) })
+                .spawn(async move {
+                    match (&tools, &live) {
+                        (Some(tools), Some(live)) => {
+                            jig_ai::run_exploring(provider.as_ref(), &request, tools, &|text| {
+                                live.set(text)
+                            })
+                        }
+                        _ => jig_ai::run(provider.as_ref(), &request),
+                    }
+                })
                 .await;
             this.update_in(cx, |this, window, cx| this.finish(id, result, window, cx))
                 .ok();
@@ -182,6 +209,7 @@ impl Workspace {
                 label,
                 started: std::time::Instant::now(),
                 with_rules,
+                step,
             },
             anchor,
             snapshot: text,

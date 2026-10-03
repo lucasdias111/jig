@@ -1,5 +1,6 @@
 //! The small floating window that shows a command's progress and reply.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::shimmer::ShimmerText;
@@ -19,6 +20,9 @@ pub enum Bubble {
         started: Instant,
         /// Project rules (`JIG.md`) went with the request.
         with_rules: bool,
+        /// What an exploring command is looking at, updated from the
+        /// request's thread. `None` for commands that don't explore.
+        step: Option<LiveStep>,
     },
     /// A change is in the buffer awaiting accept or reject. `removed` is the
     /// code it replaced.
@@ -29,6 +33,32 @@ pub enum Bubble {
     /// A reply that changes nothing, e.g. an explanation.
     Message(String),
     Error(String),
+}
+
+/// Text shared with a background request, read on every frame.
+#[derive(Clone, Default)]
+pub struct LiveStep(Arc<Mutex<String>>);
+
+impl LiveStep {
+    pub fn set(&self, text: String) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = text;
+    }
+
+    pub fn get(&self) -> String {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl PartialEq for LiveStep {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for LiveStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LiveStep").field(&self.get()).finish()
+    }
 }
 
 impl Bubble {
@@ -69,9 +99,11 @@ impl RenderOnce for Bubble {
                 label,
                 started,
                 with_rules,
+                step,
             } => {
                 let accent = theme.primary;
                 let elapsed = started.elapsed().as_secs();
+                let step = step.map(|step| step.get());
                 container
                     .border_color(accent.opacity(0.6))
                     .child(
@@ -92,6 +124,20 @@ impl RenderOnce for Bubble {
                                     .child(format!("{elapsed}s")),
                             ),
                     )
+                    .when_some(step, |this, step| {
+                        let text = if step.is_empty() {
+                            "Exploring the project".to_string()
+                        } else {
+                            step
+                        };
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .truncate()
+                                .child(text),
+                        )
+                    })
                     .child(progress_bar(accent, theme.muted))
                     .child(hint(if with_rules {
                         "with JIG.md · esc to cancel"

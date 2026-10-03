@@ -23,7 +23,7 @@ Jig is a code editor built to give developers control back. AI does the work thr
 | Custom commands | ✅ Add Command form (⇧⌘K), Cmd+Enter to save typed text as a command, Edit Commands File. |
 | Command notes | ✅ `comment` setting per command; Tab adds a one-off note to any command. |
 | Project rules | ✅ The nearest `JIG.md` is sent with every command. |
-| Project exploration | 🚧 In progress. Read-only tools and both provider loops are done; the `explore` setting and UI are next. |
+| Project exploration | ✅ Commands with `explore = true`, or any command with ⌘E, may read the project (read-only, at most 8 tool calls). Verified live with Qwen and GLM, about 19 s per exploring command. |
 | Folder, tabs, Cmd+P, file tree | 📋 Planned next, in that order. |
 
 The code is a Rust workspace with four crates, about 80 tests (including headless UI tests) and a commit per milestone.
@@ -180,15 +180,15 @@ By the end of Milestone 4, the full concept works end to end.
 - Notes on commands: a `comment` setting, and Tab to add a one-off note
 - `JIG.md` project rules sent with every command
 - Qwen3.8 Flash as the default model
+- Project exploration: commands with `explore = true` (or any command with ⌘E in Cmd+K) may call read-only tools (`list_dir`, `read_file`, `search`) inside the project before answering. Ignored and secret-looking files are never visible, there are at most 8 calls, and each step shows live in the waiting bubble.
 
 ### Next
 
-1. **Project exploration** (in progress): commands with `explore = true` may call read-only tools (`list_dir`, `read_file`, `search`) inside the project before answering. Ignored and secret files are never visible, there are at most 8 calls, and each step shows in the waiting bubble. A key in Cmd+K turns it on for a single run.
-2. **Open a folder** as a workspace.
-3. **Tabs**, each with its own buffer, unsaved state and undo history.
-4. **Cmd+P quick open**, reusing the command input's fuzzy filter.
-5. **File tree** sidebar on Cmd+B, hidden by default.
-6. Maybe: a "Show last request" menu item, sending related files automatically, and moving API keys to the Keychain so `Jig.app` works when opened from Finder.
+1. **Open a folder** as a workspace.
+2. **Tabs**, each with its own buffer, unsaved state and undo history.
+3. **Cmd+P quick open**, reusing the command input's fuzzy filter.
+4. **File tree** sidebar on Cmd+B, hidden by default.
+5. Maybe: a "Show last request" menu item, sending related files automatically, and moving API keys to the Keychain so `Jig.app` works when opened from Finder.
 
 ## Command format and AI contract
 
@@ -225,7 +225,7 @@ Typing in the floating input filters the presets. Enter runs the highlighted pre
 
 Each request sends the command prompt (or custom text), the file contents, the language, the selection range and the cursor position.
 
-*Status: the region is marked in the file with `<<<SELECTION>>>…<<<END>>>` or `<<<CURSOR>>>`. The request also carries the user's note (`Note: …`) when there is one, and the nearest `JIG.md` (found from the file's folder up to the `.git` root, capped at 16 KB) as project rules. Nothing else is sent: no other files, no history between commands.*
+*Status: the region is marked in the file with `<<<SELECTION>>>…<<<END>>>` or `<<<CURSOR>>>`. The request also carries the user's note (`Note: …`) when there is one, and the nearest `JIG.md` (found from the file's folder up to the `.git` root, capped at 16 KB) as project rules. Nothing else is sent, unless the command explores: then the model can read other project files through read-only tools. There is no history between commands.*
 
 ### Response
 
@@ -266,4 +266,4 @@ LSP, file tree, tabs, project search, git, terminal, plugins, settings UI, multi
 - Which languages get tree-sitter support first? *Rust for now.*
 - Which local model is the default for testing? *The default is a hosted model, OpenCode Go's Qwen3.8 Flash; Ollama `qwen2.5-coder:7b` is configured for local use.*
 - Open source from day one, or later? *Still open.*
-- How much should the model explore? *Per command, opt-in, read-only and bounded (in progress).*
+- How much should the model explore? *Per command, opt-in, read-only and bounded to 8 tool calls.*

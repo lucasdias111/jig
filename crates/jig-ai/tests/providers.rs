@@ -27,45 +27,52 @@ impl Recorded {
 /// Serve one request with `status` and `body`; returns the base URL and a
 /// receiver for what the client sent.
 fn serve_once(status: u16, body: &'static str) -> (String, mpsc::Receiver<Recorded>) {
+    serve(vec![(status, body)])
+}
+
+/// Serve one request per response, in order, over separate connections.
+fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Recorded>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut request_line = String::new();
-        reader.read_line(&mut request_line).unwrap();
-        let mut headers = Vec::new();
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let line = line.trim_end();
-            if line.is_empty() {
-                break;
+        for (status, body) in responses {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut headers = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                let (name, value) = line.split_once(':').unwrap();
+                headers.push((name.trim().to_string(), value.trim().to_string()));
             }
-            let (name, value) = line.split_once(':').unwrap();
-            headers.push((name.trim().to_string(), value.trim().to_string()));
-        }
-        let length: usize = headers
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
-            .map(|(_, v)| v.parse().unwrap())
-            .unwrap_or(0);
-        let mut raw = vec![0; length];
-        reader.read_exact(&mut raw).unwrap();
-        let mut stream = stream;
-        write!(
+            let length: usize = headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+                .map(|(_, v)| v.parse().unwrap())
+                .unwrap_or(0);
+            let mut raw = vec![0; length];
+            reader.read_exact(&mut raw).unwrap();
+            let mut stream = stream;
+            write!(
             stream,
             "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
-        tx.send(Recorded {
-            request_line: request_line.trim_end().to_string(),
-            headers,
-            body: serde_json::from_slice(&raw).unwrap(),
-        })
-        .unwrap();
+            tx.send(Recorded {
+                request_line: request_line.trim_end().to_string(),
+                headers,
+                body: serde_json::from_slice(&raw).unwrap(),
+            })
+            .unwrap();
+        }
     });
     (url, rx)
 }
@@ -170,5 +177,143 @@ fn unreachable_server_is_an_error() {
             .unwrap_err()
             .to_string()
             .contains("Couldn't reach")
+    );
+}
+
+/// Answers every tool call with a fixed text and remembers the calls.
+struct FakeTools(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+
+impl jig_ai::ToolHost for FakeTools {
+    fn specs(&self) -> Vec<jig_ai::ToolSpec> {
+        vec![jig_ai::ToolSpec {
+            name: "read_file",
+            description: "Read a file.",
+            input_schema: serde_json::json!({ "type": "object", "properties": { "path": { "type": "string" } } }),
+        }]
+    }
+
+    fn call(&self, name: &str, input: &serde_json::Value) -> String {
+        self.0
+            .lock()
+            .unwrap()
+            .push((name.to_string(), input.clone()));
+        "pub struct User;".into()
+    }
+
+    fn describe(&self, _: &str, input: &serde_json::Value) -> String {
+        format!("Reading {}", input["path"].as_str().unwrap_or("?"))
+    }
+}
+
+fn fake_tools() -> FakeTools {
+    FakeTools(Default::default())
+}
+
+#[test]
+fn anthropic_tool_loop() {
+    let (url, rx) = serve(vec![
+        (
+            200,
+            r#"{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","id":"t1","name":"read_file","input":{"path":"src/user.rs"}}],"stop_reason":"tool_use"}"#,
+        ),
+        (
+            200,
+            r#"{"content":[{"type":"text","text":"{\"replace\":\"fn b() {}\",\"message\":\"Done.\"}"}],"stop_reason":"end_turn"}"#,
+        ),
+    ]);
+    let provider = AnthropicProvider::new(&url, "k".into(), "qwen", 1000, AuthStyle::ApiKey);
+    let tools = fake_tools();
+    let steps = std::sync::Mutex::new(Vec::new());
+    let reply = jig_ai::run_exploring(&provider, &request(), &tools, &|step| {
+        steps.lock().unwrap().push(step)
+    })
+    .unwrap();
+    assert_eq!(reply.replace, "fn b() {}");
+    assert_eq!(*steps.lock().unwrap(), ["Reading src/user.rs"]);
+    assert_eq!(tools.0.lock().unwrap()[0].1["path"], "src/user.rs");
+
+    let first = rx.recv().unwrap();
+    assert_eq!(first.body["tools"][0]["name"], "read_file");
+    assert!(first.body["tools"][0]["input_schema"].is_object());
+    assert!(
+        first.body["system"]
+            .as_str()
+            .unwrap()
+            .contains("read-only tools")
+    );
+    assert!(first.body.get("tool_choice").is_none());
+
+    let second = rx.recv().unwrap();
+    let messages = second.body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][1]["type"], "tool_use");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(messages[2]["content"][0]["tool_use_id"], "t1");
+    assert_eq!(messages[2]["content"][0]["content"], "pub struct User;");
+}
+
+#[test]
+fn openai_tool_loop() {
+    let (url, rx) = serve(vec![
+        (
+            200,
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.rs\"}"}}]}}]}"#,
+        ),
+        (
+            200,
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"replace\":\"fn b() {}\",\"message\":\"Done.\"}"}}]}"#,
+        ),
+    ]);
+    let provider = OpenAiCompatProvider::new(&url, Some("k".into()), "glm", 1000, true);
+    let tools = fake_tools();
+    let reply = jig_ai::run_exploring(&provider, &request(), &tools, &|_| {}).unwrap();
+    assert_eq!(reply.replace, "fn b() {}");
+
+    let first = rx.recv().unwrap();
+    assert_eq!(first.body["tools"][0]["type"], "function");
+    assert_eq!(first.body["tools"][0]["function"]["name"], "read_file");
+    assert!(
+        first.body.get("response_format").is_none(),
+        "no JSON mode alongside tools"
+    );
+
+    let second = rx.recv().unwrap();
+    let messages = second.body["messages"].as_array().unwrap();
+    assert_eq!(messages[2]["tool_calls"][0]["id"], "c1");
+    assert_eq!(messages[3]["role"], "tool");
+    assert_eq!(messages[3]["tool_call_id"], "c1");
+    assert_eq!(messages[3]["content"], "pub struct User;");
+}
+
+#[test]
+fn tool_budget_is_enforced() {
+    let (url, rx) = serve(vec![
+        (
+            200,
+            r#"{"content":[{"type":"tool_use","id":"t1","name":"read_file","input":{"path":"a"}},{"type":"tool_use","id":"t2","name":"read_file","input":{"path":"b"}}],"stop_reason":"tool_use"}"#,
+        ),
+        (
+            200,
+            r#"{"content":[{"type":"text","text":"{\"replace\":\"x\"}"}]}"#,
+        ),
+    ]);
+    let provider = AnthropicProvider::new(&url, "k".into(), "qwen", 1000, AuthStyle::ApiKey);
+    let tools = fake_tools();
+    let raw =
+        jig_ai::Provider::complete_with_tools(&provider, "s", "u", &tools, 1, &|_| {}).unwrap();
+    assert_eq!(raw, "{\"replace\":\"x\"}");
+    assert_eq!(tools.0.lock().unwrap().len(), 1, "only one call ran");
+
+    rx.recv().unwrap();
+    let second = rx.recv().unwrap();
+    assert_eq!(
+        second.body["tool_choice"]["type"], "none",
+        "no more tools once the budget is spent"
+    );
+    let results = &second.body["messages"][2]["content"];
+    assert_eq!(
+        results[1]["content"].as_str().unwrap().split('.').next(),
+        Some("Tool limit reached")
     );
 }

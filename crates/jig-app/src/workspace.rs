@@ -309,6 +309,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
     .into_iter()
     .chain(jig_commands::new_command::key_bindings())
+    .chain(jig_commands::palette::key_bindings())
     .collect()
 }
 
@@ -930,6 +931,7 @@ mod tests {
             window.press("tab", cx);
             window.input("Insert a REST controller at the cursor.", cx);
             window.press("secondary-2", cx);
+            window.press("secondary-e", cx);
             window.press("secondary-enter", cx);
         });
 
@@ -939,6 +941,7 @@ mod tests {
         assert_eq!(saved[0].name, "Create controller");
         assert_eq!(saved[0].prompt, "Insert a REST controller at the cursor.");
         assert_eq!(saved[0].scope, jig_commands::Scope::Cursor);
+        assert!(saved[0].explore, "Cmd+E turned exploring on");
         assert!(
             preset_names(cx, &workspace).contains(&"Create controller".to_string()),
             "available in ⌘K at once"
@@ -1141,5 +1144,74 @@ mod tests {
         run_preset(cx, window, &workspace, 0..9, "docs");
         let second = provider.0.lock().unwrap()[1].clone();
         assert!(second.contains("Prefer anyhow."), "{second}");
+    }
+
+    /// Reads `src/models.rs` through the tools and writes code that uses it.
+    struct ExploringProvider(std::sync::Mutex<Vec<String>>);
+
+    impl Provider for ExploringProvider {
+        fn complete(&self, _: &str, _: &str) -> anyhow::Result<String> {
+            anyhow::bail!("expected the tool path")
+        }
+
+        fn complete_with_tools(
+            &self,
+            system: &str,
+            user: &str,
+            tools: &dyn jig_ai::ToolHost,
+            _: usize,
+            on_step: &dyn Fn(String),
+        ) -> anyhow::Result<String> {
+            assert!(system.contains("read-only tools"));
+            self.0.lock().unwrap().push(user.to_string());
+            let input = serde_json::json!({ "path": "src/models.rs" });
+            on_step(tools.describe("read_file", &input));
+            let model = tools.call("read_file", &input);
+            let secret = tools.call("read_file", &serde_json::json!({ "path": ".env" }));
+            assert!(
+                secret.starts_with("Error:"),
+                "secrets stay hidden: {secret}"
+            );
+            let replace = format!("// uses: {}", model.trim());
+            Ok(serde_json::json!({ "replace": replace, "message": "Used the model." }).to_string())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn exploring_command_reads_the_project(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/models.rs"), "pub struct User;\n").unwrap();
+        std::fs::write(dir.path().join(".env"), "KEY=secret").unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        let provider = Arc::new(ExploringProvider(Default::default()));
+        let provider_for_ws: Arc<dyn Provider> = provider.clone();
+        cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(provider_for_ws)));
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |this, cx| {
+                this.editor
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(0..9, cx))
+            });
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-e", cx);
+            window.input("simplify", cx);
+            window.press("enter", cx);
+        });
+
+        assert_eq!(text(cx, &workspace), "// uses: pub struct User;\n");
+        let user = provider.0.lock().unwrap()[0].clone();
+        assert!(
+            user.contains("File: src/lib.rs"),
+            "the path is project-relative: {user}"
+        );
     }
 }

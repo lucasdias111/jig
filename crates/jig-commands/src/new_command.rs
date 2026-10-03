@@ -11,6 +11,7 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::ToggleExplore;
 use crate::presets::{CommentMode, Preset, Scope};
 
 actions!(
@@ -35,6 +36,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-4", NoteNone, Some(CONTEXT)),
         KeyBinding::new("secondary-5", NoteOptional, Some(CONTEXT)),
         KeyBinding::new("secondary-6", NoteRequired, Some(CONTEXT)),
+        KeyBinding::new("secondary-e", ToggleExplore, Some(CONTEXT)),
     ]
 }
 
@@ -49,6 +51,7 @@ pub struct NewCommandForm {
     hint: Entity<InputState>,
     scope: Scope,
     comment: CommentMode,
+    explore: bool,
     error: Option<SharedString>,
 }
 
@@ -88,6 +91,7 @@ impl NewCommandForm {
             hint,
             scope,
             comment: CommentMode::None,
+            explore: false,
             error: None,
         }
     }
@@ -113,6 +117,7 @@ impl NewCommandForm {
                 scope: self.scope,
                 prompt,
                 comment: self.comment,
+                explore: self.explore,
                 comment_hint: (asks && !hint.is_empty()).then_some(hint),
             }));
         }
@@ -179,6 +184,11 @@ impl NewCommandForm {
 
     fn set_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
         self.scope = scope;
+        cx.notify();
+    }
+
+    fn toggle_explore(&mut self, _: &ToggleExplore, _: &mut Window, cx: &mut Context<Self>) {
+        self.explore = !self.explore;
         cx.notify();
     }
 
@@ -255,6 +265,17 @@ impl Render for NewCommandForm {
                 )
             })
             .collect();
+        let explore = chip(
+            ("jig-explore", 0),
+            "explore project",
+            "⌘E".into(),
+            self.explore,
+            cx,
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| this.toggle_explore(&ToggleExplore, window, cx)),
+        );
         let focused = self.focused(window, cx);
         let theme = cx.theme();
         let label = |text: &'static str| {
@@ -286,6 +307,7 @@ impl Render for NewCommandForm {
             .on_action(cx.listener(|this, _: &NoteRequired, _, cx| {
                 this.set_comment(CommentMode::Required, cx)
             }))
+            .on_action(cx.listener(Self::toggle_explore))
             .w(px(460.))
             .p_3()
             .gap_2()
@@ -312,6 +334,14 @@ impl Render for NewCommandForm {
             .when(self.comment != CommentMode::None, |this| {
                 this.child(Input::new(&self.hint))
             })
+            .child(
+                h_flex().gap_2().child(explore).child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Reads other project files first. Slower."),
+                ),
+            )
             .when_some(self.error.clone(), |this, error| {
                 this.child(div().text_xs().text_color(theme.danger).child(error))
             })

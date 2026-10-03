@@ -86,6 +86,10 @@ pub struct Preset {
     /// Placeholder for the note, e.g. "Entity name".
     #[serde(default)]
     pub comment_hint: Option<String>,
+    /// Let the model look at other files in the project (read-only) before
+    /// it answers. Slower, so off unless a command needs it.
+    #[serde(default)]
+    pub explore: bool,
 }
 
 /// What the user chose to run from the command input.
@@ -97,6 +101,8 @@ pub struct Invocation {
     pub scope: Scope,
     /// The user's note for this run, sent alongside the instruction.
     pub comment: Option<String>,
+    /// The model may explore the project before answering.
+    pub explore: bool,
 }
 
 impl Invocation {
@@ -106,7 +112,14 @@ impl Invocation {
             instruction: preset.prompt.clone(),
             scope: preset.scope,
             comment: None,
+            explore: preset.explore,
         }
+    }
+
+    /// Turn exploring on for this run, whatever the command's setting.
+    pub fn exploring(mut self, explore: bool) -> Self {
+        self.explore |= explore;
+        self
     }
 
     /// Attach the user's note. Blank notes are dropped.
@@ -126,6 +139,7 @@ impl Invocation {
         };
         Self {
             comment: None,
+            explore: false,
             name: None,
             instruction: text.trim().to_string(),
             scope,
@@ -187,6 +201,7 @@ pub const USER_FILE_HEADER: &str = "\
 # the cursor) or \"file\" (the whole file).
 # comment: \"none\" (default), \"optional\" or \"required\": ask for a note
 # that is sent along with the prompt. comment_hint: placeholder for it.
+# explore = true: let the model read other files in the project first.
 #
 # [[command]]
 # name = \"Create controller\"
@@ -243,6 +258,9 @@ pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
     ));
     if preset.comment != CommentMode::None {
         entry.push_str(&format!("comment = {}\n", quote(preset.comment.label())));
+    }
+    if preset.explore {
+        entry.push_str("explore = true\n");
     }
     if let Some(hint) = preset
         .comment_hint
@@ -515,6 +533,7 @@ mod tests {
             prompt: "p".into(),
             comment: CommentMode::Optional,
             comment_hint: Some("Entity".into()),
+            explore: true,
             ..Default::default()
         };
         add_user_preset(&path, &preset).unwrap();

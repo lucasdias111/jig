@@ -15,9 +15,15 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::ToggleExplore;
 use crate::presets::{self, CommentMode, Invocation, Preset};
 
 const MAX_ROWS: usize = 8;
+const CONTEXT: &str = "JigPalette";
+
+pub fn key_bindings() -> Vec<KeyBinding> {
+    vec![KeyBinding::new("secondary-e", ToggleExplore, Some(CONTEXT))]
+}
 
 pub enum PaletteEvent {
     Run(Invocation),
@@ -50,6 +56,8 @@ pub struct CommandPalette {
     selected: usize,
     has_selection: bool,
     note: Option<NoteStep>,
+    /// Cmd+E: let this run explore the project.
+    explore: bool,
     _subscription: Subscription,
 }
 
@@ -98,6 +106,7 @@ impl CommandPalette {
             selected: 0,
             has_selection,
             note: None,
+            explore: false,
             _subscription: subscription,
         };
         this.refilter(cx);
@@ -145,13 +154,12 @@ impl CommandPalette {
             Some(Row::Preset(preset)) if self.presets[*preset].comment != CommentMode::None => {
                 self.start_note(*preset, window, cx)
             }
-            Some(Row::Preset(preset)) => cx.emit(PaletteEvent::Run(Invocation::preset(
-                &self.presets[*preset],
-            ))),
-            Some(Row::Custom(text)) => cx.emit(PaletteEvent::Run(Invocation::custom(
-                text,
-                self.has_selection,
-            ))),
+            Some(Row::Preset(preset)) => cx.emit(PaletteEvent::Run(
+                Invocation::preset(&self.presets[*preset]).exploring(self.explore),
+            )),
+            Some(Row::Custom(text)) => cx.emit(PaletteEvent::Run(
+                Invocation::custom(text, self.has_selection).exploring(self.explore),
+            )),
             None => {}
         }
     }
@@ -206,7 +214,9 @@ impl CommandPalette {
             return;
         }
         cx.emit(PaletteEvent::Run(
-            Invocation::preset(preset).with_comment(&text),
+            Invocation::preset(preset)
+                .with_comment(&text)
+                .exploring(self.explore),
         ));
     }
 
@@ -246,6 +256,11 @@ impl CommandPalette {
         }
     }
 
+    fn toggle_explore(&mut self, _: &ToggleExplore, _: &mut Window, cx: &mut Context<Self>) {
+        self.explore = !self.explore;
+        cx.notify();
+    }
+
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         if self.note.is_some() {
@@ -277,11 +292,14 @@ impl CommandPalette {
         let (label, detail): (SharedString, SharedString) = match row {
             Row::Preset(i) => {
                 let preset = &self.presets[*i];
-                let detail = match preset.comment {
+                let mut detail = match preset.comment {
                     CommentMode::None if selected => format!("{} · ⇥ note", preset.scope.label()),
                     CommentMode::None => preset.scope.label().to_string(),
                     _ => format!("{} · note", preset.scope.label()),
                 };
+                if preset.explore {
+                    detail.push_str(" · explores");
+                }
                 (preset.name.clone().into(), detail.into())
             }
             Row::Custom(text) => (format!("Run “{text}”").into(), "⌘↩ save as command".into()),
@@ -371,7 +389,8 @@ impl Render for CommandPalette {
         let theme = cx.theme();
 
         let palette = v_flex()
-            .key_context("JigPalette")
+            .key_context(CONTEXT)
+            .on_action(cx.listener(Self::toggle_explore))
             .capture_action(cx.listener(Self::on_enter))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_up))
@@ -401,7 +420,23 @@ impl Render for CommandPalette {
             .when(!rows.is_empty(), |this| {
                 this.child(div().h(px(1.)).mx_1().bg(theme.border))
                     .children(rows)
-            });
+            })
+            .child(
+                div()
+                    .px_2()
+                    .py_0p5()
+                    .text_xs()
+                    .text_color(if self.explore {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(if self.explore {
+                        "Explores the project this run · ⌘E to turn off"
+                    } else {
+                        "⌘E to let this run explore the project"
+                    }),
+            );
         crate::motion::pop_in(palette, "jig-palette")
     }
 }
@@ -443,7 +478,10 @@ mod tests {
         has_selection: bool,
         presets: Vec<presets::Preset>,
     ) -> (gpui_kit::AnyWindowHandle, Entity<Host>) {
-        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys(super::key_bindings());
+        });
         let handles = cx.update(|cx| {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -521,6 +559,7 @@ mod tests {
                 invocation,
                 Invocation {
                     comment: None,
+                    explore: false,
                     name: None,
                     instruction: "add".into(),
                     scope: Scope::Cursor
@@ -677,5 +716,43 @@ mod tests {
 
         step(cx, window, |window, cx| window.press("escape", cx));
         assert_eq!(events(cx, &host), vec![None], "Esc in the list dismisses");
+    }
+
+    #[gpui_kit::test]
+    fn cmd_e_lets_one_run_explore(cx: &mut TestAppContext) {
+        let mut presets = note_presets();
+        presets[2].explore = false;
+        let (window, host) = open_with(cx, true, presets);
+        // Off by default.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("simplify", cx);
+            window.press("enter", cx);
+        });
+        assert!(!events(cx, &host)[0].clone().unwrap().explore);
+
+        let (window, host) = open_with(cx, true, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-e", cx);
+            window.input("simplify", cx);
+            window.press("enter", cx);
+        });
+        assert!(events(cx, &host)[0].clone().unwrap().explore);
+    }
+
+    #[gpui_kit::test]
+    fn exploring_commands_explore(cx: &mut TestAppContext) {
+        let presets = presets::parse(
+            "[[command]]\nname = \"Create controller\"\nprompt = \"p\"\nexplore = true\n",
+        )
+        .unwrap();
+        let (window, host) = open_with(cx, false, presets);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("controller", cx);
+            window.press("enter", cx);
+        });
+        assert!(events(cx, &host)[0].clone().unwrap().explore);
     }
 }

@@ -23,6 +23,9 @@ Rules for "replace":
 
 Rules for "message": at most 20 words, plain text, no greetings, no follow-up questions."#;
 
+/// Added to the system prompt when the command may explore the project.
+pub const EXPLORE: &str = "You can call read-only tools to look at other files in the project (paths are relative to the project root). Use them only when the instruction needs something that isn't in the file, such as a type, a function signature or a convention defined elsewhere. The file you are editing is already included in full above; don't read it again. Look at as little as you need, then reply with the JSON object described above.";
+
 /// Everything the model needs for one command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptRequest {

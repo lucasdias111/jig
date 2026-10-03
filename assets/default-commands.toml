@@ -6,8 +6,11 @@
 # comment: "none" (default), "optional" or "required". Asks for a note that
 # is sent along with the prompt, e.g. the entity a controller is for.
 # comment_hint: placeholder text for that note.
+# explore = true: the model may look at other files in the project (read-only)
+# before answering. Slower; for commands that need context from elsewhere.
 #
-# Tab on any command in the command input adds a one-off note.
+# Tab on any command in the command input adds a one-off note, and Cmd+E
+# lets any command explore for one run.
 
 [[command]]
 name = "Add docs"
