@@ -1,0 +1,35 @@
+# Jig's built-in commands. Add your own in ~/.config/jig/commands.toml;
+# a command there with the same name replaces the built-in one.
+#
+# scope: "selection" (falls back to the current line), "cursor" (insert at
+# the cursor) or "file" (the whole file).
+
+[[command]]
+name = "Add docs"
+scope = "selection"
+prompt = "Add concise doc comments to this code. Do not change the code itself."
+
+[[command]]
+name = "Extract function"
+scope = "selection"
+prompt = "Extract this code into a well-named function and replace it with a call to that function. Return both the new function and the call site."
+
+[[command]]
+name = "Simplify"
+scope = "selection"
+prompt = "Simplify this code without changing its behaviour."
+
+[[command]]
+name = "Fix"
+scope = "selection"
+prompt = "Fix the bug or compile error in this code. Change as little as possible."
+
+[[command]]
+name = "Explain"
+scope = "selection"
+prompt = "Explain what this code does. Return the code unchanged in `replace`."
+
+[[command]]
+name = "Add tests"
+scope = "cursor"
+prompt = "Insert a unit test module at the cursor that covers the code in this file."

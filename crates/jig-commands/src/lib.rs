@@ -1,1 +1,8 @@
-//! Placeholder: filled in by later milestones.
+//! The command layer: presets, the floating command input, and (later) the
+//! reply bubble and diff preview.
+
+pub mod palette;
+pub mod presets;
+
+pub use palette::{CommandPalette, PaletteEvent};
+pub use presets::{Invocation, Preset, Scope};

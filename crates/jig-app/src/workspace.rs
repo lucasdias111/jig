@@ -1,33 +1,36 @@
 //! The one window: a single document in a single editor.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jig_commands::{CommandPalette, Invocation, PaletteEvent, Preset, presets};
 use jig_editor::{EditorHandle, KitEditor};
 
 use crate::document::Document;
 
-actions!(
-    jig,
-    [
-        Quit,
-        Open,
-        Save,
-        SaveAs,
-        CloseWindow,
-        DebugEdit,
-        ToggleDebugOverlay
-    ]
-);
+actions!(jig, [Quit, Open, Save, SaveAs, CloseWindow, OpenCommand]);
 
 pub struct Workspace {
     document: Document,
     editor: KitEditor,
     dirty: bool,
-    show_overlay: bool,
+    presets: Rc<Vec<Preset>>,
+    palette: Option<OpenPalette>,
+    /// The last command run. Until the AI round trip lands (M3), running a
+    /// command only flashes its target range.
+    last_invocation: Option<Invocation>,
     _editor_events: Subscription,
+}
+
+struct OpenPalette {
+    view: Entity<CommandPalette>,
+    /// Window position of the palette's top-left corner, fixed when it opens.
+    anchor: Point<Pixels>,
+    _events: Subscription,
 }
 
 impl Workspace {
@@ -38,14 +41,28 @@ impl Workspace {
             None => (Document::default(), None),
         };
         let (editor, subscription) = Self::build_editor(&document, window, cx);
+        let (presets, presets_error) = match presets::load(presets::user_commands_path().as_deref())
+        {
+            Ok(presets) => (presets, None),
+            Err(error) => (presets::defaults(), Some(error)),
+        };
         let mut this = Self {
             document,
             editor,
             dirty: false,
-            show_overlay: false,
+            presets: Rc::new(presets),
+            palette: None,
+            last_invocation: None,
             _editor_events: subscription,
         };
         this.update_title(window);
+        if let Some(error) = presets_error {
+            this.show_error(
+                &format!("Using the built-in commands. {error:#}"),
+                window,
+                cx,
+            );
+        }
 
         window.on_window_should_close(cx, {
             let workspace = cx.entity().downgrade();
@@ -245,19 +262,63 @@ impl Workspace {
         self.when_discard_ok(window, cx, |_, _, cx| cx.quit());
     }
 
-    fn debug_edit(&mut self, _: &DebugEdit, window: &mut Window, cx: &mut Context<Self>) {
-        let selection = self.editor.selection(cx);
-        let original = self.editor.text(cx)[selection.clone()].to_string();
-        let range = self
+    fn open_command(&mut self, _: &OpenCommand, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            return;
+        }
+        let has_selection = !self.editor.selection(cx).is_empty();
+        let anchor = self
             .editor
-            .apply_edit(selection, &format!("/* jig */{original}"), window, cx);
-        self.editor
-            .highlight(vec![(range, hsla(0.38, 0.6, 0.5, 0.18))], cx);
+            .anchor_point(cx)
+            .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
+            // The cursor is scrolled out of view: open near the top instead.
+            .unwrap_or(gpui_kit::point(px(48.), px(48.)));
+        let presets = self.presets.clone();
+        let view = cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &PaletteEvent, window, cx| {
+                this.close_palette(window, cx);
+                if let PaletteEvent::Run(invocation) = event {
+                    this.run_command(invocation.clone(), window, cx);
+                }
+            },
+        );
+        self.palette = Some(OpenPalette {
+            view,
+            anchor,
+            _events: events,
+        });
+        cx.notify();
     }
 
-    fn toggle_overlay(&mut self, _: &ToggleDebugOverlay, _: &mut Window, cx: &mut Context<Self>) {
-        self.show_overlay = !self.show_overlay;
-        cx.notify();
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.take().is_some() {
+            self.editor.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn run_command(&mut self, invocation: Invocation, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.editor.text(cx);
+        let target =
+            invocation
+                .scope
+                .target(&text, self.editor.selection(cx), self.editor.cursor(cx));
+        self.last_invocation = Some(invocation);
+
+        // Placeholder until M3: flash the range the command would replace.
+        self.editor
+            .highlight(vec![(target, hsla(0.6, 0.8, 0.55, 0.22))], cx);
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(700))
+                .await;
+            this.update(cx, |this, cx| this.editor.clear_highlights(cx))
+                .ok();
+        })
+        .detach();
     }
 }
 
@@ -268,14 +329,12 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-s", Save, None),
         KeyBinding::new("secondary-shift-s", SaveAs, None),
         KeyBinding::new("secondary-w", CloseWindow, None),
-        KeyBinding::new("secondary-shift-e", DebugEdit, None),
-        KeyBinding::new("secondary-shift-o", ToggleDebugOverlay, None),
+        KeyBinding::new("secondary-k", OpenCommand, None),
     ]
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let anchor = self.editor.anchor_point(cx).filter(|_| self.show_overlay);
         div()
             .size_full()
             .on_action(cx.listener(Self::quit))
@@ -283,19 +342,14 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::close_window))
-            .on_action(cx.listener(Self::debug_edit))
-            .on_action(cx.listener(Self::toggle_overlay))
+            .on_action(cx.listener(Self::open_command))
             .child(Editor::new(self.editor.state()).bordered(false).size_full())
-            .when_some(anchor, |this, anchor| {
-                // Debug marker where the floating command input will open.
+            .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
-                    anchored().position(anchor).child(
-                        div()
-                            .w(px(160.))
-                            .h(px(4.))
-                            .rounded_full()
-                            .bg(hsla(0.6, 0.9, 0.55, 0.9)),
-                    ),
+                    anchored()
+                        .position(palette.anchor)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(palette.view.clone()),
                 ))
             })
     }
@@ -307,8 +361,8 @@ mod tests {
     use std::path::Path;
 
     use gpui_kit::{
-        AnyWindowHandle, AppContext, Bounds, Entity, Point, TestAppContext, WindowBounds,
-        WindowOptions, px, size,
+        AnyWindowHandle, AppContext, Bounds, Entity, Focusable, Point, TestAppContext,
+        WindowBounds, WindowOptions, px, size,
     };
     use jig_editor::EditorHandle;
 
@@ -388,5 +442,70 @@ mod tests {
             window.press("secondary-z", cx);
         });
         step(cx, window, |_, cx| assert!(!workspace.read(cx).dirty));
+    }
+
+    #[gpui_kit::test]
+    fn cmd_k_runs_a_preset_and_returns_focus(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |this, cx| {
+                this.editor
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(0..9, cx))
+            });
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            assert!(workspace.read(cx).palette.is_some());
+            window.render_frame(cx);
+            window.input("docs", cx);
+            window.press("enter", cx);
+        });
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.palette.is_none(),
+                "running a command closes the palette"
+            );
+            let invocation = this.last_invocation.clone().expect("a command ran");
+            assert_eq!(invocation.name.as_deref(), Some("Add docs"));
+            assert!(
+                this.editor.state().focus_handle(cx).is_focused(window),
+                "focus returns to the editor"
+            );
+            assert_eq!(
+                this.editor.text(cx),
+                "fn a() {}\n",
+                "M2 does not edit the buffer"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_palette(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        });
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(this.palette.is_none());
+            assert!(this.last_invocation.is_none());
+            assert!(this.editor.state().focus_handle(cx).is_focused(window));
+        });
     }
 }
