@@ -693,9 +693,7 @@ impl Render for FileTree {
                                 .rounded(px(6.))
                                 .text_size(px(13.))
                                 .text_color(color)
-                                .when(active && !highlighted, |this| {
-                                    this.bg(theme.sidebar_accent)
-                                })
+                                .when(active && !highlighted, |this| this.bg(theme.sidebar_accent))
                                 .when(highlighted, |this| this.bg(theme.sidebar_primary))
                                 .when(!highlighted && !active, |this| {
                                     this.hover(|s| s.bg(theme.sidebar_accent.opacity(0.5)))
@@ -716,6 +714,13 @@ impl Render for FileTree {
                                         .text_color(icon_color),
                                 )
                                 .child(div().pl_0p5().truncate().child(row.name.clone()))
+                                // Select on press, as Finder does. Pressing focuses
+                                // the tree, which would otherwise light up the
+                                // previous selection until the click completes.
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| this.select(ix, cx)),
+                                )
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.focus_handle.focus(window, cx);
                                     this.activate(ix, cx);

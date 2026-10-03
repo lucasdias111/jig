@@ -7,7 +7,7 @@
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, Input, InputState, OutdentInline, Textarea, TextareaState,
 };
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -209,20 +209,27 @@ fn chip(
     let theme = cx.theme();
     h_flex()
         .id(id)
-        .px_2()
-        .py_0p5()
-        .gap_1()
-        .rounded_md()
-        .text_sm()
-        .border_1()
-        .border_color(if active { theme.primary } else { theme.border })
-        .when(active, |chip| chip.bg(theme.primary.opacity(0.15)))
-        .when(!active, |chip| chip.hover(|chip| chip.bg(theme.list_hover)))
+        .h(px(26.))
+        .px_2p5()
+        .gap_1p5()
+        .rounded(px(7.))
+        .text_size(px(12.))
+        // Like a segmented control: the chosen option is filled with the accent.
+        .when(active, |chip| {
+            chip.bg(theme.primary).text_color(theme.primary_foreground)
+        })
+        .when(!active, |chip| {
+            chip.bg(theme.foreground.opacity(0.06))
+                .hover(|chip| chip.bg(theme.foreground.opacity(0.1)))
+        })
         .child(label)
         .child(
             div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
+                .text_size(px(11.))
+                .when(active, |this| {
+                    this.text_color(theme.primary_foreground.opacity(0.75))
+                })
+                .when(!active, |this| this.text_color(theme.muted_foreground))
                 .child(shortcut),
         )
 }
@@ -280,12 +287,16 @@ impl Render for NewCommandForm {
         let theme = cx.theme();
         let label = |text: &'static str| {
             div()
-                .text_xs()
+                .pt_1()
+                .text_size(px(11.))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.muted_foreground)
                 .child(text)
         };
 
-        let form = v_flex()
+        let form = crate::surface::panel(cx)
+            .flex()
+            .flex_col()
             .key_context(CONTEXT)
             .capture_action(cx.listener(Self::on_enter))
             .capture_action(cx.listener(Self::on_escape))
@@ -309,19 +320,14 @@ impl Render for NewCommandForm {
             }))
             .on_action(cx.listener(Self::toggle_explore))
             .w(px(460.))
-            .p_3()
+            .p_4()
             .gap_2()
-            .bg(theme.popover)
-            .text_color(theme.popover_foreground)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(10.))
-            .shadow_lg()
+            .text_size(px(13.))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(15.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("New command"),
+                    .child("New Command"),
             )
             .child(label("Name"))
             .child(Input::new(&self.name))

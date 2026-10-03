@@ -74,25 +74,16 @@ impl Bubble {
 impl RenderOnce for Bubble {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let container = v_flex()
+        let container = crate::surface::panel(cx)
+            .flex()
+            .flex_col()
             .max_w(px(520.))
-            .min_w(px(220.))
-            .px_3()
-            .py_2()
-            .gap_1p5()
-            .text_sm()
-            .bg(theme.popover)
-            .text_color(theme.popover_foreground)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(10.))
-            .shadow_lg();
-        let hint = |text: &'static str| {
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(text)
-        };
+            .min_w(px(240.))
+            .px_3p5()
+            .py_2p5()
+            .gap_2()
+            .text_size(px(13.));
+        let hint = |text: &'static str| crate::surface::hint(text, cx);
 
         let bubble = match self {
             Bubble::Running {
@@ -105,7 +96,7 @@ impl RenderOnce for Bubble {
                 let elapsed = started.elapsed().as_secs();
                 let step = step.map(|step| step.get());
                 container
-                    .border_color(accent.opacity(0.6))
+                    .border_color(accent.opacity(0.45))
                     .child(
                         h_flex()
                             .gap_2()
@@ -163,8 +154,9 @@ impl RenderOnce for Bubble {
                     .when(!removed.trim().is_empty(), |this| {
                         this.child(
                             v_flex()
-                                .p_2()
-                                .rounded_md()
+                                .px_2p5()
+                                .py_2()
+                                .rounded(px(7.))
                                 .bg(theme.danger.opacity(0.08))
                                 .font_family(theme.mono_font_family.clone())
                                 .text_xs()

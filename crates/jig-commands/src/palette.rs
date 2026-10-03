@@ -11,7 +11,7 @@ use std::rc::Rc;
 use gpui_kit::component::input::{
     Backspace, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveUp,
 };
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -304,23 +304,31 @@ impl CommandPalette {
             }
             Row::Custom(text) => (format!("Run “{text}”").into(), "⌘↩ save as command".into()),
         };
+        // Selected like a macOS menu item: accent fill, white text.
         h_flex()
             .id(("jig-command", index))
-            .px_2()
-            .py_1()
+            .h(px(28.))
+            .px_2p5()
             .gap_2()
-            .rounded_md()
+            .rounded(px(6.))
             .justify_between()
-            .text_sm()
+            .text_size(px(13.))
             .text_color(theme.popover_foreground)
-            .when(selected, |row| row.bg(theme.list_active))
-            .when(!selected, |row| row.hover(|row| row.bg(theme.list_hover)))
+            .when(selected, |row| {
+                row.bg(theme.primary).text_color(theme.primary_foreground)
+            })
+            .when(!selected, |row| {
+                row.hover(|row| row.bg(theme.foreground.opacity(0.06)))
+            })
             .child(div().truncate().child(label))
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_size(px(11.))
+                    .when(selected, |this| {
+                        this.text_color(theme.primary_foreground.opacity(0.8))
+                    })
+                    .when(!selected, |this| this.text_color(theme.muted_foreground))
                     .child(detail),
             )
             .on_mouse_down(
@@ -341,15 +349,15 @@ impl CommandPalette {
             _ => "note optional",
         };
         h_flex()
-            .px_2()
-            .pt_1()
+            .px_2p5()
+            .pt_1p5()
             .gap_2()
-            .text_xs()
+            .text_size(px(11.))
             .child(
                 div()
                     .px_1p5()
                     .py_0p5()
-                    .rounded_md()
+                    .rounded(px(5.))
                     .bg(theme.primary.opacity(0.15))
                     .text_color(theme.popover_foreground)
                     .font_weight(FontWeight::MEDIUM)
@@ -388,7 +396,9 @@ impl Render for CommandPalette {
             .map(|note| self.render_note_header(note, cx).into_any_element());
         let theme = cx.theme();
 
-        let palette = v_flex()
+        let palette = crate::surface::panel(cx)
+            .flex()
+            .flex_col()
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::toggle_explore))
             .capture_action(cx.listener(Self::on_enter))
@@ -397,35 +407,41 @@ impl Render for CommandPalette {
             .capture_action(cx.listener(Self::on_down))
             .capture_action(cx.listener(Self::on_tab))
             .capture_action(cx.listener(Self::on_backspace))
-            .w(px(380.))
-            .p_1()
+            .w(px(420.))
+            .p_1p5()
             .gap_0p5()
-            .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(10.))
-            .shadow_lg()
             .children(header)
-            .child(Input::new(&self.input).appearance(false).cleanable(false))
+            // Spotlight-sized input.
+            .child(
+                div()
+                    .px_1()
+                    .text_size(px(15.))
+                    .child(Input::new(&self.input).appearance(false).cleanable(false)),
+            )
             .when(self.note.is_some(), |this| {
                 this.child(
                     div()
-                        .px_2()
+                        .px_2p5()
                         .pb_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("↩ run · esc back"),
+                        .child(crate::surface::hint("↩ run · esc back", cx)),
                 )
             })
             .when(!rows.is_empty(), |this| {
-                this.child(div().h(px(1.)).mx_1().bg(theme.border))
-                    .children(rows)
+                this.child(
+                    div()
+                        .h(px(1.))
+                        .mx_neg_1p5()
+                        .my_1()
+                        .bg(theme.foreground.opacity(0.08)),
+                )
+                .children(rows)
             })
             .child(
                 div()
-                    .px_2()
-                    .py_0p5()
-                    .text_xs()
+                    .px_2p5()
+                    .pt_1()
+                    .pb_0p5()
+                    .text_size(px(11.))
                     .text_color(if self.explore {
                         theme.primary
                     } else {

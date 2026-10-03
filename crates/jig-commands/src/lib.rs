@@ -15,6 +15,7 @@ pub mod motion;
 pub mod new_command;
 pub mod palette;
 pub mod presets;
+pub mod surface;
 
 pub use bubble::{Bubble, LiveStep};
 pub use new_command::{NewCommandEvent, NewCommandForm};
