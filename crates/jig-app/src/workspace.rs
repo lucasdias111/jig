@@ -55,6 +55,11 @@ const CONTEXT: &str = "Workspace";
 const MIN_SIDEBAR_WIDTH: f32 = 160.;
 const MAX_SIDEBAR_WIDTH: f32 = 480.;
 
+/// The unified title bar; `main.rs` centres the traffic lights in it.
+const TITLE_BAR_HEIGHT: f32 = 46.;
+/// Room kept clear for the traffic lights when the sidebar is hidden.
+const TRAFFIC_LIGHTS_WIDTH: f32 = 84.;
+
 pub struct Workspace {
     /// Never empty: closing the last tab leaves an Untitled one.
     tabs: Vec<Tab>,
@@ -360,14 +365,16 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
         let theme = cx.theme();
-        let title = self.document().title();
         let sidebar = self.render_sidebar(cx);
-        let tab_bar = self.render_tab_bar(cx);
+        let sidebar_top = self.render_sidebar_top(cx);
+        let title = self.render_title(cx);
         let root = v_flex();
         self.sidebar_drag_handlers(root, cx)
             .key_context(CONTEXT)
+            .relative()
             .size_full()
-            .bg(theme.background)
+            // No background here: on macOS the window is translucent and
+            // the sidebar lets it show; the editor side paints its own.
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
@@ -390,20 +397,30 @@ impl Render for Workspace {
             .capture_action(cx.listener(Self::on_accept_indent))
             .capture_action(cx.listener(Self::on_undo))
             .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .flex_1()
-                        .justify_center()
-                        // Balance the traffic lights so the title sits centred.
-                        .mr(px(70.))
-                        .gap_1p5()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(title)
-                        .when(self.tab().dirty, |this| {
-                            this.child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
-                        }),
-                ),
+                // One unified bar across the window: the sidebar's top runs
+                // up under the traffic lights, the rest holds the title or tabs.
+                TitleBar::new()
+                    .h(px(TITLE_BAR_HEIGHT))
+                    .pl_0()
+                    .border_b_0()
+                    .bg(transparent_black())
+                    .child(
+                        h_flex().size_full().children(sidebar_top).child(
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .when(self.sidebar_shown(), |this| this.pl_2())
+                                .when(!self.sidebar_shown(), |this| {
+                                    this.pl(px(TRAFFIC_LIGHTS_WIDTH))
+                                })
+                                .pr_2()
+                                .bg(theme.background)
+                                .border_b_1()
+                                .border_color(theme.title_bar_border)
+                                .child(title),
+                        ),
+                    ),
             )
             .child(
                 h_flex()
@@ -412,8 +429,15 @@ impl Render for Workspace {
                     .items_stretch()
                     .children(sidebar)
                     .child(
-                        v_flex().flex_1().min_w_0().children(tab_bar).child(
-                            div().flex_1().min_h_0().pl_2().pr_3().pb_2().child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .bg(theme.background)
+                            .pl_2()
+                            .pr_3()
+                            .pt_1()
+                            .pb_2()
+                            .child(
                                 Editor::new(self.editor().state())
                                     .bordered(false)
                                     // Locked while a command's change awaits review.
@@ -421,15 +445,15 @@ impl Render for Workspace {
                                     .readonly(self.previewing())
                                     .size_full(),
                             ),
-                        ),
                     ),
             )
+            .children(self.render_sidebar_handle(cx))
             .when_some(self.new_command.as_ref(), |this, form| {
                 // Centred near the top, like a sheet.
                 let left = ((viewport.width - px(460.)) / 2.).max(px(8.));
                 this.child(deferred(
                     anchored()
-                        .position(gpui_kit::point(left, px(56.)))
+                        .position(gpui_kit::point(left, px(TITLE_BAR_HEIGHT + 8.)))
                         .snap_to_window_with_margin(px(8.))
                         .child(form.view.clone()),
                 ))
@@ -1287,6 +1311,101 @@ mod tests {
             tree_rows(cx, &workspace),
             ["src", "  ui", "  lib.rs", "README.md"],
             "an empty folder expands to nothing"
+        );
+    }
+
+    fn start_new(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        workspace: &Entity<Workspace>,
+        kind: crate::file_tree::NewEntry,
+    ) {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            let tree = ws.read(cx).tree.as_ref().unwrap().view.clone();
+            tree.update(cx, |tree, cx| tree.start_new(kind, window, cx));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn new_file_and_folder_from_the_sidebar(cx: &mut TestAppContext) {
+        use crate::file_tree::NewEntry;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, dir.path());
+
+        // "src" is selected, so the file goes inside it.
+        start_new(cx, window, &workspace, NewEntry::File);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("my", cx);
+            window.press("space", cx);
+            window.input("file.rs", cx);
+            window.press("enter", cx);
+        });
+        let created = dir.path().join("src/my file.rs");
+        assert!(created.is_file(), "space types into the name");
+        assert_eq!(
+            tree_rows(cx, &workspace),
+            ["src", "  lib.rs", "  my file.rs"]
+        );
+        cx.update(|cx| {
+            let open = workspace.read(cx).document().path.clone().unwrap();
+            assert_eq!(
+                open.canonicalize().unwrap(),
+                created.canonicalize().unwrap()
+            );
+        });
+
+        // The new file is selected, so the folder goes next to it.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-e", cx);
+        });
+        start_new(cx, window, &workspace, NewEntry::Folder);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("ui", cx);
+            window.press("enter", cx);
+        });
+        assert!(dir.path().join("src/ui").is_dir());
+        assert!(tree_focused(cx, window, &workspace));
+        assert_eq!(tree_rows(cx, &workspace)[1], "  ui", "folders sort first");
+
+        // "ui" is now selected, so this goes inside it. A name that's
+        // taken keeps the field open; Escape drops it.
+        std::fs::write(dir.path().join("src/ui/taken.rs"), "kept").unwrap();
+        start_new(cx, window, &workspace, NewEntry::File);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("taken.rs", cx);
+            window.press("enter", cx);
+        });
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/ui/taken.rs")).unwrap(),
+            "kept"
+        );
+        let naming = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let tree = workspace.read(cx).tree.as_ref().unwrap().view.read(cx);
+                tree.naming_error()
+            })
+        };
+        assert_eq!(naming(cx), Some(Some("taken.rs already exists.".into())));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        });
+        assert_eq!(naming(cx), None, "Escape drops the name field");
+        assert!(
+            tree_focused(cx, window, &workspace),
+            "Escape returns to the tree"
+        );
+        assert_eq!(
+            tree_rows(cx, &workspace),
+            ["src", "  ui", "    taken.rs", "  lib.rs", "  my file.rs"]
         );
     }
 

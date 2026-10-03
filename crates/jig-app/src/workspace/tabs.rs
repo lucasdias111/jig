@@ -14,8 +14,10 @@ use crate::document::Document;
 
 const CLOSE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
 
-/// Widest a tab grows before its name is cut short.
-const MAX_TAB_WIDTH: f32 = 200.;
+/// Tabs share the title bar's width between these bounds; past the
+/// narrowest, the strip scrolls.
+const MIN_TAB_WIDTH: f32 = 120.;
+const MAX_TAB_WIDTH: f32 = 260.;
 
 pub(super) struct Tab {
     pub(super) document: Document,
@@ -279,13 +281,34 @@ impl Workspace {
             .collect()
     }
 
-    /// The strip of tabs above the editor. Hidden while there's only one,
-    /// so a single file stays just code.
-    pub(super) fn render_tab_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.tabs.len() < 2 {
-            return None;
-        }
+    /// What the title bar shows: the file's name, or with two or more
+    /// tabs open, the tabs themselves, Safari-style.
+    pub(super) fn render_title(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        if self.tabs.len() < 2 {
+            return h_flex()
+                .flex_1()
+                .min_w_0()
+                .justify_center()
+                .gap_1()
+                .text_size(px(13.))
+                .child(
+                    div()
+                        .truncate()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.foreground.opacity(0.85))
+                        .child(self.document().title()),
+                )
+                .when(self.tab().dirty, |this| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .child("— Edited"),
+                    )
+                })
+                .into_any_element();
+        }
         let tabs = self
             .tabs
             .iter()
@@ -294,8 +317,8 @@ impl Workspace {
             .map(|(ix, (tab, label))| {
                 let active = ix == self.active;
                 let group = SharedString::from(format!("tab-{ix}"));
-                // The close button shows on the current and hovered tab; an
-                // unsaved tab shows a dot there until hovered.
+                // The close button sits on the left, as in Safari, on the
+                // hovered tab; an unsaved tab shows a dot there until hovered.
                 let close = div()
                     .id(("close-tab", ix))
                     .absolute()
@@ -304,16 +327,16 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .hover(|s| s.bg(theme.secondary_hover))
+                    .hover(|s| s.bg(theme.foreground.opacity(0.1)))
                     .child(
                         Icon::default()
                             .data(CLOSE)
-                            .size(px(10.))
+                            .size(px(9.))
                             .text_color(theme.muted_foreground),
                     )
-                    .when(tab.dirty || !active, |this| {
-                        this.invisible().group_hover(group.clone(), |s| s.visible())
-                    })
+                    .invisible()
+                    .group_hover(group.clone(), |s| s.visible())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.close_tab_at(ix, window, cx);
@@ -331,22 +354,25 @@ impl Workspace {
                 h_flex()
                     .id(("tab", ix))
                     .group(group.clone())
-                    .flex_none()
+                    .relative()
+                    .flex_1()
+                    .flex_basis(px(0.))
+                    .min_w(px(MIN_TAB_WIDTH))
                     .max_w(px(MAX_TAB_WIDTH))
-                    .h(px(26.))
-                    .pl_2p5()
-                    .pr_1()
+                    .h(px(28.))
+                    .px_1p5()
                     .gap_1()
-                    .rounded(px(6.))
-                    .text_xs()
+                    .rounded(px(7.))
+                    .text_size(px(12.))
                     .when(active, |this| {
-                        this.bg(theme.secondary).text_color(theme.foreground)
+                        this.bg(theme.foreground.opacity(0.07))
+                            .text_color(theme.foreground)
+                            .font_weight(FontWeight::MEDIUM)
                     })
                     .when(!active, |this| {
                         this.text_color(theme.muted_foreground)
-                            .hover(|s| s.bg(theme.list_hover))
+                            .hover(|s| s.bg(theme.foreground.opacity(0.04)))
                     })
-                    .child(div().min_w_0().truncate().child(label))
                     .child(
                         div()
                             .relative()
@@ -355,25 +381,33 @@ impl Workspace {
                             .children(marker)
                             .child(close),
                     )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .justify_center()
+                            .child(div().truncate().child(label)),
+                    )
+                    // Balances the close button so the name stays centred.
+                    .child(div().flex_none().size(px(16.)))
+                    // Clicking a tab selects it rather than dragging the window.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| this.close_tab_at(ix, window, cx)),
                     )
             });
-        Some(
-            h_flex()
-                .id("tab-bar")
-                .flex_none()
-                .w_full()
-                .gap_1()
-                .pl_2()
-                .pr_3()
-                .pb_1p5()
-                .overflow_x_scroll()
-                .track_scroll(&self.tab_scroll)
-                .children(tabs)
-                .into_any_element(),
-        )
+        h_flex()
+            .id("tab-bar")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .gap_1()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll)
+            .children(tabs)
+            .into_any_element()
     }
 }

@@ -5,17 +5,26 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, StyledExt as _, h_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 const CONTEXT: &str = "FileTree";
-const ROW_HEIGHT: f32 = 24.;
-const INDENT: f32 = 12.;
+/// The tree's context while a name is being typed, so its single-key
+/// bindings (space, arrows) reach the name field instead.
+const NAMING_CONTEXT: &str = "FileTreeNaming";
+const ROW_HEIGHT: f32 = 26.;
+const INDENT: f32 = 14.;
 
 const CHEVRON_RIGHT: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>"#;
+const FILE_PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/></svg>"#;
+const FOLDER_PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>"#;
+const FOLDER: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.88a2 2 0 0 1 1.42.59L12.2 6H18.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>"#;
+const FILE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.75" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>"#;
 const CHEVRON_DOWN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
 actions!(
@@ -26,7 +35,8 @@ actions!(
         CollapseOrParent,
         ExpandOrChild,
         OpenSelected,
-        Dismiss
+        Dismiss,
+        CancelNaming
     ]
 );
 
@@ -39,6 +49,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
         KeyBinding::new("space", OpenSelected, Some(CONTEXT)),
         KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
+        KeyBinding::new("escape", CancelNaming, Some(NAMING_CONTEXT)),
     ]
 }
 
@@ -172,6 +183,48 @@ impl TreeModel {
     }
 }
 
+/// What the New File and New Folder buttons make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewEntry {
+    File,
+    Folder,
+}
+
+/// Create `name` inside `dir` and return its path. `name` may contain `/`
+/// to create folders on the way, like `src/ui/tree.rs`.
+pub fn create_entry(dir: &Path, name: &str, kind: NewEntry) -> Result<PathBuf, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name.".into());
+    }
+    let relative = Path::new(name);
+    if !relative
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("Use a name inside this folder.".into());
+    }
+    let path = dir.join(relative);
+    if path.exists() {
+        return Err(format!("{name} already exists."));
+    }
+    let created = match kind {
+        NewEntry::Folder => std::fs::create_dir_all(&path),
+        NewEntry::File => path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map(drop)
+            }),
+    };
+    created.map_err(|error| format!("Could not create {name}: {error}"))?;
+    Ok(path)
+}
+
 /// The folders and files directly inside `dir`, folders first, each group
 /// sorted by name ignoring case. Unreadable folders list as empty.
 fn read_listing(root: &Path, dir: &Path, parent_ignored: bool) -> Vec<Entry> {
@@ -237,9 +290,20 @@ pub enum FileTreeEvent {
 
 impl EventEmitter<FileTreeEvent> for FileTree {}
 
+/// The name field shown in the tree while making a file or folder.
+struct Naming {
+    /// The folder the new entry goes in.
+    dir: PathBuf,
+    kind: NewEntry,
+    input: Entity<InputState>,
+    error: Option<String>,
+    _events: Subscription,
+}
+
 /// The sidebar view.
 pub struct FileTree {
     model: TreeModel,
+    naming: Option<Naming>,
     selected: Option<usize>,
     /// The file open in the editor, highlighted in the tree.
     active: Option<PathBuf>,
@@ -251,6 +315,7 @@ impl FileTree {
     pub fn new(root: &Path, cx: &mut Context<Self>) -> Self {
         Self {
             model: TreeModel::new(root),
+            naming: None,
             selected: None,
             active: None,
             focus_handle: cx.focus_handle(),
@@ -260,6 +325,11 @@ impl FileTree {
 
     pub fn root(&self) -> &Path {
         self.model.root()
+    }
+
+    #[cfg(test)]
+    pub fn naming_error(&self) -> Option<Option<String>> {
+        self.naming.as_ref().map(|naming| naming.error.clone())
     }
 
     #[cfg(test)]
@@ -387,6 +457,139 @@ impl FileTree {
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(FileTreeEvent::Dismissed);
     }
+
+    /// Where a new entry goes: the selected folder, the selected file's
+    /// folder, or the root.
+    fn target_dir(&self) -> PathBuf {
+        match self.selected.and_then(|ix| self.model.rows().get(ix)) {
+            Some(row) if row.is_dir => row.path.clone(),
+            Some(row) => row
+                .path
+                .parent()
+                .map_or_else(|| self.model.root().to_path_buf(), Path::to_path_buf),
+            None => self.model.root().to_path_buf(),
+        }
+    }
+
+    /// Show a name field for a new file or folder in the target folder.
+    pub fn start_new(&mut self, kind: NewEntry, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = self.target_dir();
+        if dir != self.model.root() {
+            self.model.set_expanded(&dir, true);
+        }
+        let placeholder = match kind {
+            NewEntry::File => "File name",
+            NewEntry::Folder => "Folder name",
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+            InputEvent::PressEnter { .. } => this.finish_new(window, cx),
+            InputEvent::Blur => this.cancel_new(cx),
+            InputEvent::Change => {
+                if let Some(naming) = &mut this.naming {
+                    naming.error = None;
+                }
+                cx.notify();
+            }
+            InputEvent::Focus => {}
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.naming = Some(Naming {
+            dir,
+            kind,
+            input,
+            error: None,
+            _events: events,
+        });
+        if let Some(ix) = self.naming_index() {
+            self.scroll_handle
+                .scroll_to_item(ix, ScrollStrategy::Nearest);
+        }
+        cx.notify();
+    }
+
+    fn finish_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(naming) = &mut self.naming else {
+            return;
+        };
+        let name = naming.input.read(cx).value().to_string();
+        match create_entry(&naming.dir, &name, naming.kind) {
+            Ok(path) => {
+                let kind = naming.kind;
+                self.naming = None;
+                self.model.refresh();
+                self.selected = self.model.reveal(&path);
+                self.focus_handle.focus(window, cx);
+                if kind == NewEntry::File {
+                    cx.emit(FileTreeEvent::Open(path));
+                }
+            }
+            Err(error) => naming.error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn cancel_new(&mut self, cx: &mut Context<Self>) {
+        if self.naming.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn on_naming_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.naming.is_none() {
+            cx.propagate();
+            return;
+        }
+        self.cancel_naming(&CancelNaming, window, cx);
+        cx.stop_propagation();
+    }
+
+    fn cancel_naming(&mut self, _: &CancelNaming, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_new(cx);
+        self.focus_handle.focus(window, cx);
+    }
+
+    /// The list position of the name field: first in its folder.
+    fn naming_index(&self) -> Option<usize> {
+        let naming = self.naming.as_ref()?;
+        if naming.dir == self.model.root() {
+            return Some(0);
+        }
+        self.model.index_of(&naming.dir).map(|ix| ix + 1)
+    }
+
+    fn naming_depth(&self) -> usize {
+        let Some(naming) = &self.naming else { return 0 };
+        self.model
+            .index_of(&naming.dir)
+            .map_or(0, |ix| self.model.rows()[ix].depth + 1)
+    }
+}
+
+fn header_button(
+    id: &'static str,
+    icon: &'static [u8],
+    tooltip: &'static str,
+    cx: &Context<FileTree>,
+    on_click: impl Fn(&mut FileTree, &mut Window, &mut Context<FileTree>) + 'static,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(22.))
+        .rounded(px(5.))
+        .text_color(theme.muted_foreground)
+        .hover(|s| s.bg(theme.sidebar_accent).text_color(theme.foreground))
+        .child(Icon::default().data(icon).size(px(14.)))
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            on_click(this, window, cx)
+        }))
+        .into_any_element()
 }
 
 impl Render for FileTree {
@@ -396,69 +599,145 @@ impl Render for FileTree {
             .model
             .root()
             .file_name()
-            .map(|name| name.to_string_lossy().to_uppercase())
+            .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let naming_at = self.naming_index();
+        let rows = self.model.rows().len() + usize::from(naming_at.is_some());
+        let new_file = header_button("new-file", FILE_PLUS, "New File", cx, |this, window, cx| {
+            this.start_new(NewEntry::File, window, cx)
+        });
+        let new_folder = header_button(
+            "new-folder",
+            FOLDER_PLUS,
+            "New Folder",
+            cx,
+            |this, window, cx| this.start_new(NewEntry::Folder, window, cx),
+        );
         let theme = cx.theme();
-        let list = uniform_list(
-            "file-tree-rows",
-            self.model.rows().len(),
-            cx.processor(move |this, range: Range<usize>, _, cx| {
-                let theme = cx.theme();
-                range
-                    .map(|ix| {
-                        let row = &this.model.rows()[ix];
-                        let selected = this.selected == Some(ix);
-                        let active = this.active.as_ref() == Some(&row.path);
-                        let color = if row.ignored {
-                            theme.muted_foreground.opacity(0.6)
-                        } else if active {
-                            theme.foreground
-                        } else {
-                            theme.sidebar_foreground
-                        };
-                        let chevron = row.is_dir.then(|| {
-                            Icon::default()
-                                .data(if row.expanded {
-                                    CHEVRON_DOWN
-                                } else {
-                                    CHEVRON_RIGHT
+        let error = self.naming.as_ref().and_then(|n| n.error.clone());
+        let list =
+            uniform_list(
+                "file-tree-rows",
+                rows,
+                cx.processor(move |this, range: Range<usize>, _, cx| {
+                    let theme = cx.theme();
+                    range
+                        .map(|list_ix| {
+                            if Some(list_ix) == naming_at
+                                && let Some(naming) = &this.naming
+                            {
+                                let depth = this.naming_depth();
+                                return h_flex()
+                                    .id("new-entry")
+                                    .h(px(ROW_HEIGHT))
+                                    .w_full()
+                                    .pl(px(4. + depth as f32 * INDENT))
+                                    .pr_1()
+                                    .gap_1()
+                                    .child(div().w(px(12.)).flex_none())
+                                    .child(div().w(px(15.)).flex_none())
+                                    .child(div().flex_1().min_w_0().child(
+                                        Input::new(&naming.input).xsmall().cleanable(false),
+                                    ));
+                            }
+                            let ix = match naming_at {
+                                Some(at) if list_ix > at => list_ix - 1,
+                                _ => list_ix,
+                            };
+                            let row = &this.model.rows()[ix];
+                            let selected = this.selected == Some(ix);
+                            let active = this.active.as_ref() == Some(&row.path);
+                            // Like a Finder sidebar: the accent fill marks the
+                            // keyboard selection while the tree has focus, a
+                            // quiet grey one the open file.
+                            let highlighted = selected && focused;
+                            let color = if highlighted {
+                                theme.sidebar_primary_foreground
+                            } else if row.ignored {
+                                theme.muted_foreground.opacity(0.6)
+                            } else if active {
+                                theme.sidebar_accent_foreground
+                            } else {
+                                theme.sidebar_foreground
+                            };
+                            let icon_color = if highlighted {
+                                theme.sidebar_primary_foreground
+                            } else if row.ignored {
+                                theme.muted_foreground.opacity(0.5)
+                            } else if row.is_dir {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            };
+                            let chevron = row.is_dir.then(|| {
+                                Icon::default()
+                                    .data(if row.expanded {
+                                        CHEVRON_DOWN
+                                    } else {
+                                        CHEVRON_RIGHT
+                                    })
+                                    .size(px(10.))
+                                    .text_color(if highlighted {
+                                        theme.sidebar_primary_foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                            });
+                            h_flex()
+                                .id(list_ix)
+                                .h(px(ROW_HEIGHT))
+                                .w_full()
+                                .pl(px(4. + row.depth as f32 * INDENT))
+                                .pr_2()
+                                .gap_1()
+                                .rounded(px(6.))
+                                .text_size(px(13.))
+                                .text_color(color)
+                                .when(active && !highlighted, |this| {
+                                    this.bg(theme.sidebar_accent)
                                 })
-                                .size(px(12.))
-                                .text_color(theme.muted_foreground)
-                        });
-                        h_flex()
-                            .id(ix)
-                            .h(px(ROW_HEIGHT))
-                            .w_full()
-                            .pl(px(8. + row.depth as f32 * INDENT))
-                            .pr_2()
-                            .gap_1()
-                            .rounded(px(4.))
-                            .text_sm()
-                            .text_color(color)
-                            .when(active && !(selected && focused), |this| {
-                                this.bg(theme.sidebar_accent)
-                            })
-                            .when(selected && focused, |this| this.bg(theme.list_active))
-                            .when(!selected, |this| this.hover(|s| s.bg(theme.list_hover)))
-                            .child(div().w(px(12.)).flex_none().children(chevron))
-                            .child(div().truncate().child(row.name.clone()))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.focus_handle.focus(window, cx);
-                                this.activate(ix, cx);
-                            }))
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(&self.scroll_handle)
-        .size_full()
-        .px_1();
+                                .when(highlighted, |this| this.bg(theme.sidebar_primary))
+                                .when(!highlighted && !active, |this| {
+                                    this.hover(|s| s.bg(theme.sidebar_accent.opacity(0.5)))
+                                })
+                                .child(
+                                    div()
+                                        .w(px(12.))
+                                        .flex_none()
+                                        .flex()
+                                        .justify_center()
+                                        .children(chevron),
+                                )
+                                .child(
+                                    Icon::default()
+                                        .data(if row.is_dir { FOLDER } else { FILE })
+                                        .size(px(15.))
+                                        .flex_none()
+                                        .text_color(icon_color),
+                                )
+                                .child(div().pl_0p5().truncate().child(row.name.clone()))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.focus_handle.focus(window, cx);
+                                    this.activate(ix, cx);
+                                }))
+                        })
+                        .collect()
+                }),
+            )
+            .track_scroll(&self.scroll_handle)
+            .size_full()
+            .px_2();
 
         div()
             .id("file-tree")
-            .key_context(CONTEXT)
+            .key_context(if self.naming.is_some() {
+                NAMING_CONTEXT
+            } else {
+                CONTEXT
+            })
             .track_focus(&self.focus_handle)
+            .capture_action(cx.listener(Self::on_naming_escape))
+            .on_action(cx.listener(Self::cancel_naming))
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::collapse_or_parent))
@@ -468,17 +747,40 @@ impl Render for FileTree {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.sidebar)
             .child(
-                div()
-                    .px_3()
-                    .pb_1p5()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(theme.muted_foreground)
-                    .truncate()
-                    .child(root_name),
+                h_flex()
+                    .pl_4()
+                    .pr_2()
+                    .pt_0p5()
+                    .pb_1()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(11.))
+                            .font_semibold()
+                            .text_color(theme.muted_foreground)
+                            .truncate()
+                            .child(root_name),
+                    )
+                    .child(new_file)
+                    .child(new_folder),
             )
+            .when_some(error, |this, error| {
+                this.child(
+                    div()
+                        .mx_2()
+                        .mb_1()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.))
+                        .text_xs()
+                        .text_color(theme.danger)
+                        .bg(theme.danger.opacity(0.1))
+                        .child(error),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -495,7 +797,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::TreeModel;
+    use super::{NewEntry, TreeModel, create_entry};
 
     fn names(model: &TreeModel) -> Vec<String> {
         model
@@ -590,6 +892,30 @@ mod tests {
         assert_eq!(model.rows()[ix].name, "tree.rs");
         assert_eq!(model.rows()[ix].depth, 2);
         assert_eq!(model.reveal(Path::new("/elsewhere/x.rs")), None);
+    }
+
+    #[test]
+    fn creates_files_and_folders() {
+        let dir = project();
+        let root = dir.path();
+        let file = create_entry(root, " notes.md ", NewEntry::File).unwrap();
+        assert_eq!(file, root.join("notes.md"));
+        assert!(file.is_file());
+        let nested = create_entry(root, "src/ui/tabs.rs", NewEntry::File).unwrap();
+        assert!(nested.is_file(), "folders on the way are created");
+        assert!(
+            create_entry(root, "docs/guides", NewEntry::Folder)
+                .unwrap()
+                .is_dir()
+        );
+
+        assert_eq!(
+            create_entry(root, "notes.md", NewEntry::File),
+            Err("notes.md already exists.".into())
+        );
+        assert!(create_entry(root, "  ", NewEntry::File).is_err());
+        assert!(create_entry(root, "../out.rs", NewEntry::File).is_err());
+        assert!(create_entry(root, "/tmp/out.rs", NewEntry::Folder).is_err());
     }
 
     #[test]

@@ -34,10 +34,22 @@ fn main() {
         .detach();
 
         // A transparent titlebar: the workspace draws its own, so only the
-        // traffic lights and the code remain.
+        // traffic lights and the code remain. On macOS the window is
+        // translucent so the sidebar picks up the desktop's vibrancy; the
+        // editor paints its own opaque background.
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(960.), px(720.)), cx)),
+            window_bounds: Some(WindowBounds::centered(size(px(1080.), px(760.)), cx)),
             window_min_size: Some(size(px(480.), px(320.))),
+            titlebar: Some(TitlebarOptions {
+                // Centred in the workspace's taller title bar.
+                traffic_light_position: Some(point(px(16.), px(16.))),
+                ..TitleBar::title_bar_options()
+            }),
+            window_background: if cfg!(target_os = "macos") {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Opaque
+            },
             ..TitleBar::window_options()
         };
         gpui_kit::open_window(options, cx, |window, cx| {

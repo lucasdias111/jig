@@ -115,38 +115,51 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn sidebar_shown(&self) -> bool {
+        self.sidebar_open && self.tree.is_some()
+    }
+
+    /// The sidebar below the title bar: the project's files.
     pub(super) fn render_sidebar(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let tree = self.tree.as_ref().filter(|_| self.sidebar_open)?;
-        let theme = cx.theme();
         Some(
-            div()
-                .relative()
-                .flex_none()
-                .w(self.sidebar_width)
+            sidebar_panel(self.sidebar_width, cx)
                 .h_full()
-                .border_r_1()
-                .border_color(theme.sidebar_border)
                 .child(tree.view.clone())
-                .child(
-                    // The draggable edge.
-                    div()
-                        .id("sidebar-resize")
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(-3.))
-                        .w(px(6.))
-                        .cursor_col_resize()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.resizing_sidebar = true;
-                                cx.stop_propagation();
-                            }),
-                        ),
-                )
                 .into_any_element(),
         )
+    }
+
+    /// The sidebar's part of the title bar, under the traffic lights, so
+    /// the sidebar reads as running the full height of the window.
+    pub(super) fn render_sidebar_top(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.sidebar_shown().then(|| {
+            sidebar_panel(self.sidebar_width, cx)
+                .h_full()
+                .into_any_element()
+        })
+    }
+
+    /// The sidebar's draggable edge, over the full height of the window.
+    pub(super) fn render_sidebar_handle(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.sidebar_shown().then(|| {
+            div()
+                .id("sidebar-resize")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(self.sidebar_width - px(3.))
+                .w(px(6.))
+                .cursor_col_resize()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.resizing_sidebar = true;
+                        cx.stop_propagation();
+                    }),
+                )
+                .into_any_element()
+        })
     }
 
     /// Mouse handlers for the whole window, active while the sidebar's
@@ -174,4 +187,22 @@ impl Workspace {
                 )
         })
     }
+}
+
+/// The sidebar's surface. On macOS it is translucent over the window's
+/// blur, like Finder's; elsewhere the window is opaque, so it is solid.
+fn sidebar_panel(width: Pixels, cx: &App) -> Div {
+    let theme = cx.theme();
+    let background = if cfg!(target_os = "macos") {
+        theme.sidebar.opacity(0.8)
+    } else {
+        theme.sidebar
+    };
+    div()
+        .relative()
+        .flex_none()
+        .w(width)
+        .bg(background)
+        .border_r_1()
+        .border_color(theme.sidebar_border)
 }
