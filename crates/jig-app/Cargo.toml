@@ -12,6 +12,7 @@ path = "src/main.rs"
 gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
+jig-ai.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

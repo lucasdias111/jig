@@ -1,16 +1,20 @@
 //! The one window: a single document in a single editor.
 
+mod commands;
+
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
+use std::sync::Arc;
 
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jig_commands::{CommandPalette, Invocation, PaletteEvent, Preset, presets};
+use jig_ai::Provider;
+use jig_commands::{CommandPalette, Preset, presets};
 use jig_editor::{EditorHandle, KitEditor};
 
 use crate::document::Document;
+use commands::CommandRun;
 
 actions!(jig, [Quit, Open, Save, SaveAs, CloseWindow, OpenCommand]);
 
@@ -20,9 +24,10 @@ pub struct Workspace {
     dirty: bool,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
-    /// The last command run. Until the AI round trip lands (M3), running a
-    /// command only flashes its target range.
-    last_invocation: Option<Invocation>,
+    /// The configured model, or why it couldn't be set up.
+    provider: Result<Arc<dyn Provider>, String>,
+    run: Option<CommandRun>,
+    next_run_id: u64,
     _editor_events: Subscription,
 }
 
@@ -52,7 +57,9 @@ impl Workspace {
             dirty: false,
             presets: Rc::new(presets),
             palette: None,
-            last_invocation: None,
+            provider: commands::load_provider(),
+            run: None,
+            next_run_id: 0,
             _editor_events: subscription,
         };
         this.update_title(window);
@@ -95,6 +102,7 @@ impl Workspace {
             cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.refresh_dirty(window, cx);
+                    this.on_buffer_changed(cx);
                 }
                 cx.notify();
             });
@@ -261,65 +269,6 @@ impl Workspace {
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
         self.when_discard_ok(window, cx, |_, _, cx| cx.quit());
     }
-
-    fn open_command(&mut self, _: &OpenCommand, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_some() {
-            return;
-        }
-        let has_selection = !self.editor.selection(cx).is_empty();
-        let anchor = self
-            .editor
-            .anchor_point(cx)
-            .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
-            // The cursor is scrolled out of view: open near the top instead.
-            .unwrap_or(gpui_kit::point(px(48.), px(48.)));
-        let presets = self.presets.clone();
-        let view = cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
-        let events = cx.subscribe_in(
-            &view,
-            window,
-            |this, _, event: &PaletteEvent, window, cx| {
-                this.close_palette(window, cx);
-                if let PaletteEvent::Run(invocation) = event {
-                    this.run_command(invocation.clone(), window, cx);
-                }
-            },
-        );
-        self.palette = Some(OpenPalette {
-            view,
-            anchor,
-            _events: events,
-        });
-        cx.notify();
-    }
-
-    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.take().is_some() {
-            self.editor.focus(window, cx);
-            cx.notify();
-        }
-    }
-
-    fn run_command(&mut self, invocation: Invocation, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.editor.text(cx);
-        let target =
-            invocation
-                .scope
-                .target(&text, self.editor.selection(cx), self.editor.cursor(cx));
-        self.last_invocation = Some(invocation);
-
-        // Placeholder until M3: flash the range the command would replace.
-        self.editor
-            .highlight(vec![(target, hsla(0.6, 0.8, 0.55, 0.22))], cx);
-        cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(700))
-                .await;
-            this.update(cx, |this, cx| this.editor.clear_highlights(cx))
-                .ok();
-        })
-        .detach();
-    }
 }
 
 pub fn key_bindings() -> Vec<KeyBinding> {
@@ -343,6 +292,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::open_command))
+            .capture_action(cx.listener(Self::on_escape))
             .child(Editor::new(self.editor.state()).bordered(false).size_full())
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
@@ -350,6 +300,14 @@ impl Render for Workspace {
                         .position(palette.anchor)
                         .snap_to_window_with_margin(px(8.))
                         .child(palette.view.clone()),
+                ))
+            })
+            .when_some(self.run.as_ref(), |this, run| {
+                this.child(deferred(
+                    anchored()
+                        .position(run.anchor)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(run.bubble.clone()),
                 ))
             })
     }
@@ -364,9 +322,71 @@ mod tests {
         AnyWindowHandle, AppContext, Bounds, Entity, Focusable, Point, TestAppContext,
         WindowBounds, WindowOptions, px, size,
     };
+    use std::sync::Arc;
+
+    use jig_ai::Provider;
+    use jig_commands::Bubble;
     use jig_editor::EditorHandle;
 
     use super::{Workspace, key_bindings};
+
+    /// Answers every request with a fixed reply.
+    struct FakeProvider(Result<&'static str, &'static str>);
+
+    impl Provider for FakeProvider {
+        fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
+            assert!(user.contains("<<<SELECTION>>>"), "the target is marked");
+            self.0.map(str::to_string).map_err(|e| anyhow::anyhow!(e))
+        }
+    }
+
+    fn use_provider(
+        cx: &mut TestAppContext,
+        workspace: &Entity<Workspace>,
+        reply: Result<&'static str, &'static str>,
+    ) {
+        cx.update(|cx| {
+            workspace.update(cx, |this, _| {
+                this.provider = Ok(Arc::new(FakeProvider(reply)))
+            })
+        });
+    }
+
+    /// Select `range`, then run the preset matching `query` through Cmd+K.
+    fn run_preset(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        workspace: &Entity<Workspace>,
+        range: std::ops::Range<usize>,
+        query: &str,
+    ) {
+        let workspace = workspace.clone();
+        let query = query.to_string();
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |this, cx| {
+                this.editor
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(range, cx))
+            });
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            window.input(&query, cx);
+            window.press("enter", cx);
+        });
+    }
+
+    fn bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<Bubble> {
+        cx.update(|cx| {
+            workspace
+                .read(cx)
+                .run
+                .as_ref()
+                .map(|run| run.bubble.clone())
+        })
+    }
 
     fn open(cx: &mut TestAppContext, path: &Path) -> (AnyWindowHandle, Entity<Workspace>) {
         cx.update(|cx| {
@@ -445,11 +465,91 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn cmd_k_runs_a_preset_and_returns_focus(cx: &mut TestAppContext) {
+    fn command_shows_reply_without_editing(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lib.rs");
         std::fs::write(&path, "fn a() {}\n").unwrap();
         let (window, workspace) = open(cx, &path);
+        use_provider(
+            cx,
+            &workspace,
+            Ok(r#"{"replace": "/// Does a.\nfn a() {}", "message": "Added a doc comment."}"#),
+        );
+
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.palette.is_none(),
+                "running a command closes the palette"
+            );
+            assert!(
+                this.editor.state().focus_handle(cx).is_focused(window),
+                "focus returns to the editor"
+            );
+            let run = this.run.as_ref().expect("a command ran");
+            assert_eq!(run.target, 0..9);
+            assert_eq!(
+                run.bubble,
+                Bubble::Reply {
+                    message: "Added a doc comment.".into(),
+                    proposed: "/// Does a.\nfn a() {}".into()
+                }
+            );
+            assert_eq!(
+                this.editor.text(cx),
+                "fn a() {}\n",
+                "M3 does not edit the buffer"
+            );
+        });
+
+        // Esc dismisses the reply.
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert_eq!(bubble(cx, &workspace), None);
+    }
+
+    #[gpui_kit::test]
+    fn provider_error_shows_and_fades(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(cx, &workspace, Err("401 Unauthorized: invalid api key"));
+
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        assert_eq!(
+            bubble(cx, &workspace),
+            Some(Bubble::Error("401 Unauthorized: invalid api key".into()))
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(bubble(cx, &workspace), None);
+    }
+
+    #[gpui_kit::test]
+    fn malformed_reply_is_an_error(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(cx, &workspace, Ok("Sure, here is the code: fn a() {}"));
+
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        assert!(matches!(bubble(cx, &workspace), Some(Bubble::Error(_))));
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).editor.text(cx)),
+            "fn a() {}\n"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn reply_for_a_changed_buffer_is_discarded(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        use_provider(cx, &workspace, Ok(r#"{"replace": "x", "message": "m"}"#));
 
         step(cx, window, |window, cx| {
             window.render_frame(cx);
@@ -460,30 +560,44 @@ mod tests {
             });
             window.press("secondary-k", cx);
         });
-        step(cx, window, |window, cx| {
-            assert!(workspace.read(cx).palette.is_some());
+        // Start the command; its request is queued but has not run yet.
+        cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             window.input("docs", cx);
             window.press("enter", cx);
+        })
+        .unwrap();
+        // Edit while the request is in flight, then let it finish.
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            assert!(ws.read(cx).run.as_ref().unwrap().bubble.is_running());
+            ws.update(cx, |this, cx| {
+                this.editor.apply_edit(10..10, "// typed\n", window, cx);
+            });
         });
-        step(cx, window, |window, cx| {
-            let this = workspace.read(cx);
-            assert!(
-                this.palette.is_none(),
-                "running a command closes the palette"
-            );
-            let invocation = this.last_invocation.clone().expect("a command ran");
-            assert_eq!(invocation.name.as_deref(), Some("Add docs"));
-            assert!(
-                this.editor.state().focus_handle(cx).is_focused(window),
-                "focus returns to the editor"
-            );
-            assert_eq!(
-                this.editor.text(cx),
-                "fn a() {}\n",
-                "M2 does not edit the buffer"
-            );
+        match bubble(cx, &workspace) {
+            Some(Bubble::Error(message)) => assert!(message.contains("changed"), "{message}"),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[gpui_kit::test]
+    fn missing_api_key_is_reported(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        cx.update(|cx| {
+            workspace.update(cx, |this, _| {
+                this.provider = Err("OPENCODE_API_KEY is not set.".into())
+            })
         });
+
+        run_preset(cx, window, &workspace, 0..9, "docs");
+        assert_eq!(
+            bubble(cx, &workspace),
+            Some(Bubble::Error("OPENCODE_API_KEY is not set.".into()))
+        );
     }
 
     #[gpui_kit::test]
@@ -504,7 +618,7 @@ mod tests {
         step(cx, window, |window, cx| {
             let this = workspace.read(cx);
             assert!(this.palette.is_none());
-            assert!(this.last_invocation.is_none());
+            assert!(this.run.is_none());
             assert!(this.editor.state().focus_handle(cx).is_focused(window));
         });
     }

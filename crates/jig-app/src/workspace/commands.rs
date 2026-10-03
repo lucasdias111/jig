@@ -1,0 +1,239 @@
+//! Running a command: the palette, the AI request, and the reply bubble.
+
+use std::ops::Range;
+use std::sync::Arc;
+use std::time::Duration;
+
+use gpui_kit::component::input::Escape;
+use gpui_kit::*;
+use jig_ai::{PromptRequest, Provider, Reply};
+use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
+use jig_editor::EditorHandle;
+
+use super::{OpenCommand, OpenPalette, Workspace};
+
+/// How long an error stays up before it fades on its own.
+const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
+/// Longest error text shown in the bubble.
+const MAX_ERROR_CHARS: usize = 180;
+
+/// One command from the moment it's chosen until its bubble goes away.
+pub(super) struct CommandRun {
+    id: u64,
+    pub(super) bubble: Bubble,
+    pub(super) anchor: Point<Pixels>,
+    /// The buffer when the command started. A reply for a buffer that has
+    /// since changed is discarded.
+    snapshot: String,
+    #[allow(dead_code)] // Applied by the diff preview in M4.
+    pub(super) target: Range<usize>,
+    pub(super) reply: Option<Reply>,
+    _task: Option<Task<()>>,
+}
+
+pub(super) fn load_provider() -> Result<Arc<dyn Provider>, String> {
+    jig_ai::Config::load(jig_ai::Config::user_path().as_deref())
+        .and_then(|config| config.default_provider().build())
+        .map_err(|error| format!("{error:#}"))
+}
+
+impl Workspace {
+    /// Where floating UI opens: just below the cursor or selection.
+    fn floating_anchor(&self, cx: &App) -> Point<Pixels> {
+        self.editor
+            .anchor_point(cx)
+            .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
+            // The cursor is scrolled out of view: open near the top instead.
+            .unwrap_or(gpui_kit::point(px(48.), px(48.)))
+    }
+
+    pub(super) fn open_command(
+        &mut self,
+        _: &OpenCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.palette.is_some() {
+            return;
+        }
+        // A new command replaces whatever the last one left on screen.
+        self.run = None;
+        let has_selection = !self.editor.selection(cx).is_empty();
+        let anchor = self.floating_anchor(cx);
+        let presets = self.presets.clone();
+        let view = cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &PaletteEvent, window, cx| {
+                this.close_palette(window, cx);
+                if let PaletteEvent::Run(invocation) = event {
+                    this.run_command(invocation.clone(), window, cx);
+                }
+            },
+        );
+        self.palette = Some(OpenPalette {
+            view,
+            anchor,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.take().is_some() {
+            self.editor.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn run_command(
+        &mut self,
+        invocation: Invocation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.editor.text(cx);
+        let target =
+            invocation
+                .scope
+                .target(&text, self.editor.selection(cx), self.editor.cursor(cx));
+        let anchor = self.floating_anchor(cx);
+        self.next_run_id += 1;
+        let id = self.next_run_id;
+
+        let provider = match &self.provider {
+            Ok(provider) => provider.clone(),
+            Err(error) => {
+                let error = error.clone();
+                self.run = Some(CommandRun {
+                    id,
+                    bubble: Bubble::Running {
+                        label: String::new(),
+                    },
+                    anchor,
+                    snapshot: text,
+                    target,
+                    reply: None,
+                    _task: None,
+                });
+                self.fail(id, error, window, cx);
+                return;
+            }
+        };
+
+        let request = PromptRequest {
+            instruction: invocation.instruction.clone(),
+            language: self.editor.language(cx),
+            file_name: self.document.path.as_ref().map(|_| self.document.title()),
+            text: text.clone(),
+            target: target.clone(),
+        };
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { jig_ai::run(provider.as_ref(), &request) })
+                .await;
+            this.update_in(cx, |this, window, cx| this.finish(id, result, window, cx))
+                .ok();
+        });
+
+        let label = invocation.name.unwrap_or_else(|| "Running…".into());
+        self.run = Some(CommandRun {
+            id,
+            bubble: Bubble::Running { label },
+            anchor,
+            snapshot: text,
+            target,
+            reply: None,
+            _task: Some(task),
+        });
+        cx.notify();
+    }
+
+    fn finish(
+        &mut self,
+        id: u64,
+        result: anyhow::Result<Reply>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(run) = self.run.as_mut().filter(|run| run.id == id) else {
+            return; // Cancelled or replaced while waiting.
+        };
+        if self.editor.text(cx) != run.snapshot {
+            self.fail(
+                id,
+                "The file changed while waiting, so nothing was applied.".into(),
+                window,
+                cx,
+            );
+            return;
+        }
+        match result {
+            Ok(reply) => {
+                run.bubble = Bubble::Reply {
+                    message: reply.message.clone(),
+                    proposed: reply.replace.clone(),
+                };
+                run.reply = Some(reply);
+                cx.notify();
+            }
+            Err(error) => self.fail(id, format!("{error:#}"), window, cx),
+        }
+    }
+
+    /// Show `error` in the run's bubble and dismiss it after a few seconds.
+    fn fail(&mut self, id: u64, error: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(run) = self.run.as_mut().filter(|run| run.id == id) else {
+            return;
+        };
+        run.bubble = Bubble::Error(shorten(&error));
+        run._task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(ERROR_TIMEOUT).await;
+            this.update(cx, |this, cx| {
+                if this.run.as_ref().is_some_and(|run| run.id == id) {
+                    this.run = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// Esc cancels a running command or dismisses its bubble. With the
+    /// palette open, the palette handles Esc itself.
+    pub(super) fn on_escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_none() && self.run.take().is_some() {
+            cx.stop_propagation();
+            cx.notify();
+        } else {
+            cx.propagate();
+        }
+    }
+
+    /// Any edit makes a shown reply stale.
+    pub(super) fn on_buffer_changed(&mut self, cx: &mut Context<Self>) {
+        if self
+            .run
+            .as_ref()
+            .is_some_and(|run| !run.bubble.is_running())
+        {
+            self.run = None;
+            cx.notify();
+        }
+    }
+}
+
+fn shorten(error: &str) -> String {
+    let error = error.trim();
+    if error.chars().count() <= MAX_ERROR_CHARS {
+        error.to_string()
+    } else {
+        format!(
+            "{}…",
+            error.chars().take(MAX_ERROR_CHARS).collect::<String>()
+        )
+    }
+}
