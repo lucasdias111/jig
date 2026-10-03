@@ -63,6 +63,9 @@ impl Workspace {
             _editor_events: subscription,
         };
         this.update_title(window);
+        crate::theme::sync(window, cx);
+        cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx))
+            .detach();
         if let Some(error) = presets_error {
             this.show_error(
                 &format!("Using the built-in commands. {error:#}"),

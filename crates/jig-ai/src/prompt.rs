@@ -34,9 +34,7 @@ pub struct PromptRequest {
     pub target: Range<usize>,
 }
 
-/// Commands for [`PromptRequest`].
 impl PromptRequest {
-    /// Returns the text covered by `target`.
     pub fn target_text(&self) -> &str {
         &self.text[self.target.clone()]
     }

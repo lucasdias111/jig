@@ -1,6 +1,7 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
 mod document;
+mod theme;
 mod workspace;
 
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        theme::init(cx);
         cx.bind_keys(workspace::key_bindings());
         // Reached only when no window handles Quit (e.g. none is open).
         cx.on_action(|_: &Quit, cx| cx.quit());

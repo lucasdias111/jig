@@ -3556,6 +3556,7 @@ dependencies = [
  "jig-ai",
  "jig-commands",
  "jig-editor",
+ "serde_json",
  "tempfile",
 ]
 

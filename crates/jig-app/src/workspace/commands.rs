@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, Undo};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
@@ -18,13 +19,13 @@ const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_ERROR_CHARS: usize = 180;
 
 /// Background of code a command is working on, while waiting for the model.
-fn working_color() -> Hsla {
-    hsla(0.6, 0.8, 0.6, 0.14)
+fn working_color(cx: &App) -> Hsla {
+    cx.theme().primary.opacity(0.16)
 }
 
 /// Background of code a command just wrote, while it awaits review.
-fn added_color() -> Hsla {
-    hsla(0.38, 0.6, 0.5, 0.16)
+fn added_color(cx: &App) -> Hsla {
+    cx.theme().success.opacity(0.18)
 }
 
 /// One command from the moment it's chosen until its bubble goes away.
@@ -160,7 +161,7 @@ impl Workspace {
         let label = invocation.name.unwrap_or_else(|| "Working".into());
         // Tint the code being worked on until the reply arrives.
         self.editor
-            .highlight(vec![(target.clone(), working_color())], cx);
+            .highlight(vec![(target.clone(), working_color(cx))], cx);
         self.run = Some(CommandRun {
             id,
             bubble: Bubble::Running {
@@ -229,7 +230,7 @@ impl Workspace {
         let range = self.editor.apply_edit(target, &reply.replace, window, cx);
         self.editor.set_readonly(true, cx);
         self.editor
-            .highlight(vec![(range.clone(), added_color())], cx);
+            .highlight(vec![(range.clone(), added_color(cx))], cx);
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
             preview.range = range;
         }
