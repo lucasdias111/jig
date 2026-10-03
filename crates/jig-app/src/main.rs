@@ -1,6 +1,7 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
 mod document;
+mod menus;
 mod theme;
 mod workspace;
 
@@ -17,6 +18,7 @@ fn main() {
         gpui_kit::init(cx);
         theme::init(cx);
         cx.bind_keys(workspace::key_bindings());
+        menus::init(cx);
         // Reached only when no window handles Quit (e.g. none is open).
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_window_closed(|cx, _| {
