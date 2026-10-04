@@ -17,6 +17,8 @@ const CLOSE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 
 /// Tabs share the title bar's width between these bounds; past the
 /// narrowest, the strip scrolls.
+/// Height of the row of tabs under the title bar.
+const TAB_BAR_HEIGHT: f32 = 36.;
 const MIN_TAB_WIDTH: f32 = 120.;
 const MAX_TAB_WIDTH: f32 = 260.;
 
@@ -338,44 +340,37 @@ impl Workspace {
             .collect()
     }
 
-    /// What the title bar shows: the file's name, or with two or more
-    /// tabs open, the tabs themselves, Safari-style.
+    /// What the title bar shows: the project's name, or nothing outside a
+    /// project. Either way it fills the space, keeping the controls right.
     pub(super) fn render_title(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        if self.home || self.tabs.len() < 2 {
-            let title = if self.home {
-                self.project_root(cx)
-                    .and_then(|root| {
-                        root.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| "Jig".into())
-            } else {
-                self.document().title()
-            };
-            return h_flex()
-                .flex_1()
-                .min_w_0()
-                .justify_center()
-                .gap_1()
-                .text_size(px(13.))
-                .child(
-                    div()
-                        .truncate()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.foreground.opacity(0.85))
-                        .child(title),
-                )
-                .when(self.tab().dirty, |this| {
-                    this.child(
-                        div()
-                            .flex_none()
-                            .text_color(theme.muted_foreground)
-                            .child("— Edited"),
-                    )
-                })
-                .into_any_element();
+        let title = self.project_root(cx).and_then(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .justify_center()
+            .gap_1()
+            .text_size(px(13.))
+            .children(title.map(|title| {
+                div()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground.opacity(0.85))
+                    .child(title)
+            }))
+            .into_any_element()
+    }
+
+    /// The open tabs, in a row above the editor, even when there's only
+    /// one. None on the home page.
+    pub(super) fn render_tab_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.home {
+            return None;
         }
+        let theme = cx.theme();
         let languages = crate::settings::get(cx).languages;
         let tabs = self
             .tabs
@@ -492,15 +487,20 @@ impl Workspace {
                         cx.listener(move |this, _, window, cx| this.close_tab_at(ix, window, cx)),
                     )
             });
-        h_flex()
-            .id("tab-bar")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .gap_1()
-            .overflow_x_scroll()
-            .track_scroll(&self.tab_scroll)
-            .children(tabs)
-            .into_any_element()
+        Some(
+            h_flex()
+                .id("tab-bar")
+                .flex_none()
+                .w_full()
+                .h(px(TAB_BAR_HEIGHT))
+                .px_2()
+                .gap_1()
+                .border_b_1()
+                .border_color(theme.title_bar_border)
+                .overflow_x_scroll()
+                .track_scroll(&self.tab_scroll)
+                .children(tabs)
+                .into_any_element(),
+        )
     }
 }

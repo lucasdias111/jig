@@ -34,6 +34,10 @@ struct State {
     documents: HashMap<String, Document>,
     /// What typed after a name asks for completions, such as `.`.
     completion_triggers: Vec<String>,
+    /// Sent in `initialize`, such as the plugins jdtls loads.
+    init_options: Value,
+    /// The server said it has loaded the project, as jdtls does.
+    service_ready: bool,
 }
 
 struct Document {
@@ -61,9 +65,10 @@ impl Client {
     pub fn start(
         name: &'static str,
         root: PathBuf,
+        init_options: Value,
         command: impl FnOnce() -> Option<Command> + Send + 'static,
     ) -> Arc<Self> {
-        let client = Arc::new(Self::new());
+        let client = Arc::new(Self::new(init_options));
         let state = client.state.clone();
         std::thread::spawn(move || {
             let Some(mut command) = command() else {
@@ -98,13 +103,13 @@ impl Client {
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
     ) -> Arc<Self> {
-        let client = Arc::new(Self::new());
+        let client = Arc::new(Self::new(Value::Null));
         let state = client.state.clone();
         std::thread::spawn(move || connect(&state, &root, reader, writer));
         client
     }
 
-    fn new() -> Self {
+    fn new(init_options: Value) -> Self {
         Self {
             state: Arc::new(Mutex::new(State {
                 phase: Phase::Starting(Vec::new()),
@@ -112,10 +117,22 @@ impl Client {
                 pending: HashMap::new(),
                 documents: HashMap::new(),
                 completion_triggers: Vec::new(),
+                init_options,
+                service_ready: false,
             })),
             // 0 is `initialize`.
             next_id: AtomicI64::new(1),
         }
+    }
+
+    /// What it was started with, in `initialize`.
+    pub fn init_options(&self) -> Value {
+        self.state.lock().unwrap().init_options.clone()
+    }
+
+    /// Whether the server has said it loaded the project. Only some say so.
+    pub fn is_service_ready(&self) -> bool {
+        self.state.lock().unwrap().service_ready
     }
 
     pub fn is_dead(&self) -> bool {
@@ -287,6 +304,7 @@ fn connect(
         }
     });
 
+    let init_options = state.lock().unwrap().init_options.clone();
     let root_uri = super::file_uri(root);
     let name = root
         .file_name()
@@ -298,6 +316,7 @@ fn connect(
         "params": {
             "processId": std::process::id(),
             "clientInfo": {"name": "Jig"},
+            "initializationOptions": init_options,
             "rootPath": root,
             "rootUri": root_uri,
             "workspaceFolders": [{"uri": root_uri, "name": name}],
@@ -395,7 +414,12 @@ fn connect(
                     let _ = pending.send(response);
                 }
             }
-            // Notifications: diagnostics, progress, logs. Not used yet.
+            // jdtls says when it has loaded the project, which its
+            // commands need first.
+            (None, Some("language/status")) if message["params"]["type"] == "ServiceReady" => {
+                state.lock().unwrap().service_ready = true;
+            }
+            // Other notifications: diagnostics, progress, logs. Not used yet.
             _ => {}
         }
     }
@@ -544,7 +568,7 @@ pub mod tests {
 
     #[test]
     fn a_server_that_cant_start_fails_requests() {
-        let client = Client::start("nothing", PathBuf::from("/"), || {
+        let client = Client::start("nothing", PathBuf::from("/"), Value::Null, || {
             Some(Command::new("/nonexistent/jig-test-server"))
         });
         let response = futures::executor::block_on(client.request("x", json!({})));

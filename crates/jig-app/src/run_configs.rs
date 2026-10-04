@@ -25,11 +25,12 @@ pub const TEMPLATE: &str = r#"# Run configurations for this project. Pick one wi
 #          otherwise (relative to the root).
 # env      is added to the environment.
 #
-# Debugging (⌃D) works on its own for `cargo run` commands. For anything
-# else, say what to debug:
-# program  the executable, relative to the root;
-# args     its arguments;
-# build    a shell command that builds it first.
+# Debugging (⌃D) works on its own for commands a debugger takes, such as
+# `cargo run`, `npm run dev`, `python3 app.py` or `go run .`. Otherwise:
+# program   what to debug, relative to the root: an executable or a script;
+# args      its arguments;
+# build     a shell command that builds it first;
+# debugger  which debugger to use, by its key in Settings.
 
 [[run]]
 name = "Run"
@@ -39,6 +40,7 @@ command = ""
 # program = "target/debug/app"
 # args = ["--verbose"]
 # build = "make"
+# debugger = "rust"
 "#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +54,8 @@ pub struct RunConfig {
     pub source: Source,
     /// What to debug, when the file says.
     pub debug: Option<DebugProgram>,
+    /// The debugger to use, by key, when the file says.
+    pub debugger: Option<String>,
 }
 
 /// An executable to debug, from `program`, `args` and `build` in the file.
@@ -71,6 +75,8 @@ pub enum Source {
     Cargo,
     Npm,
     Go,
+    Maven,
+    Gradle,
 }
 
 impl Source {
@@ -80,6 +86,8 @@ impl Source {
             Source::Cargo => "Cargo",
             Source::Npm => "package.json",
             Source::Go => "Go",
+            Source::Maven => "Maven",
+            Source::Gradle => "Gradle",
         }
     }
 }
@@ -103,6 +111,7 @@ struct FileEntry {
     #[serde(default)]
     args: Vec<String>,
     build: Option<String>,
+    debugger: Option<String>,
 }
 
 /// Every configuration for the project at `root`: its file's first, then
@@ -149,6 +158,7 @@ pub fn from_file(root: &Path) -> Result<Vec<RunConfig>> {
                 args: entry.args,
                 build: entry.build.filter(|build| !build.trim().is_empty()),
             }),
+            debugger: entry.debugger,
         })
         .collect())
 }
@@ -165,6 +175,15 @@ pub fn detect(root: &Path) -> Vec<RunConfig> {
     if root.join("go.mod").is_file() {
         configs.extend(go(root));
     }
+    if root.join("pom.xml").is_file() {
+        configs.extend(maven(root));
+    }
+    if ["build.gradle", "build.gradle.kts"]
+        .iter()
+        .any(|file| root.join(file).is_file())
+    {
+        configs.extend(gradle(root));
+    }
     dedupe_names(&mut configs);
     configs
 }
@@ -177,6 +196,7 @@ fn config(root: &Path, name: String, command: String, source: Source) -> RunConf
         env: Vec::new(),
         source,
         debug: None,
+        debugger: None,
     }
 }
 
@@ -298,6 +318,83 @@ fn go(root: &Path) -> Vec<RunConfig> {
     configs
 }
 
+/// Each class under `src/main/java` with a `main` method, run with Maven's
+/// exec plugin. Debugging takes that class's file, so it debugs that one.
+fn maven(root: &Path) -> Vec<RunConfig> {
+    let mvn = if root.join("mvnw").is_file() {
+        "./mvnw"
+    } else {
+        "mvn"
+    };
+    main_classes(&root.join("src/main/java"))
+        .into_iter()
+        .map(|(class, file)| {
+            let name = class.rsplit('.').next().unwrap_or(&class).to_string();
+            let command = format!(
+                "{mvn} -q compile exec:java -Dexec.mainClass={}",
+                shell_word(&class)
+            );
+            RunConfig {
+                debug: Some(DebugProgram {
+                    program: file,
+                    args: Vec::new(),
+                    build: None,
+                }),
+                ..config(root, name, command, Source::Maven)
+            }
+        })
+        .collect()
+}
+
+/// Gradle's `run`, for projects with the application plugin.
+fn gradle(root: &Path) -> Vec<RunConfig> {
+    let gradle = if root.join("gradlew").is_file() {
+        "./gradlew"
+    } else {
+        "gradle"
+    };
+    vec![config(
+        root,
+        "gradle run".into(),
+        format!("{gradle} run"),
+        Source::Gradle,
+    )]
+}
+
+/// Classes under `dir` with a `main` method, as (qualified name, file).
+/// Looks no further than a few thousand files.
+fn main_classes(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
+    let walk = ignore::WalkBuilder::new(dir).build();
+    for entry in walk.filter_map(Result::ok).take(5_000) {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "java") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if !text.contains("static void main(") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let package = text.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("package ")
+                .map(|rest| rest.trim_end_matches(';').trim().to_string())
+        });
+        let class = match package {
+            Some(package) => format!("{package}.{stem}"),
+            None => stem.to_string(),
+        };
+        found.push((class, path.to_path_buf()));
+    }
+    found.sort();
+    found
+}
+
 /// Detected names can clash, e.g. a `test` script and Cargo's tests; the
 /// later ones get their source added.
 fn dedupe_names(configs: &mut [RunConfig]) {
@@ -308,6 +405,58 @@ fn dedupe_names(configs: &mut [RunConfig]) {
             seen.insert(config.name.to_lowercase());
         }
     }
+}
+
+/// `command` split into words as `sh` would, or `None` when it does more
+/// than run one program: pipes, `&&`, variables, redirections.
+pub fn split_command(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        c => word.push(c),
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '\\' => word.push(chars.next()?),
+                        '$' | '`' => return None,
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                word.push(chars.next()?);
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            '|' | '&' | ';' | '<' | '>' | '$' | '`' | '(' | ')' | '*' | '?' => return None,
+            c => {
+                in_word = true;
+                word.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    (!words.is_empty()).then_some(words)
 }
 
 /// `word` quoted for `sh` if it needs it.
@@ -365,6 +514,7 @@ command = "  "
                 env: vec![("PORT".into(), "8000".into())],
                 source: Source::File,
                 debug: None,
+                debugger: None,
             }]
         );
     }
@@ -441,6 +591,36 @@ command = "  "
     }
 
     #[test]
+    fn maven_projects_list_their_main_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("pom.xml"), "<project/>").unwrap();
+        let sources = root.join("src/main/java/sample");
+        fs::create_dir_all(&sources).unwrap();
+        fs::write(
+            sources.join("App.java"),
+            "package sample;\npublic class App {\n  public static void main(String[] args) {}\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            sources.join("Util.java"),
+            "package sample;\nclass Util {}\n",
+        )
+        .unwrap();
+        let configs = detect(root);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "App");
+        assert_eq!(
+            configs[0].command,
+            "mvn -q compile exec:java -Dexec.mainClass=sample.App"
+        );
+        assert_eq!(
+            configs[0].debug.as_ref().unwrap().program,
+            sources.join("App.java")
+        );
+    }
+
+    #[test]
     fn clashing_detected_names_get_their_source() {
         let mut configs = vec![
             config(
@@ -458,6 +638,17 @@ command = "  "
         ];
         dedupe_names(&mut configs);
         assert_eq!(configs[1].name, "test (package.json)");
+    }
+
+    #[test]
+    fn commands_split_like_sh() {
+        assert_eq!(
+            split_command(r#"cargo run -- "two words" 'it''s' a\ b"#).unwrap(),
+            ["cargo", "run", "--", "two words", "its", "a b"]
+        );
+        assert_eq!(split_command("echo $HOME"), None);
+        assert_eq!(split_command("ls | wc"), None);
+        assert_eq!(split_command("echo 'open"), None);
     }
 
     #[test]

@@ -110,7 +110,7 @@ struct OpenRunPicker {
 impl Workspace {
     /// The project configurations belong to: the sidebar's, or the open
     /// file's.
-    fn run_root(&self, cx: &App) -> Option<PathBuf> {
+    pub(super) fn run_root(&self, cx: &App) -> Option<PathBuf> {
         self.project_root(cx).or_else(|| {
             self.document()
                 .path

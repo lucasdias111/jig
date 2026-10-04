@@ -1,0 +1,218 @@
+# Jig's built-in debuggers. Add your own in ~/.config/jig/debuggers.toml;
+# one there with the same key replaces the built-in one. Any debugger that
+# speaks the Debug Adapter Protocol works; nvim-dap's adapter list is a good
+# place to find how to start one. Turn each on in Settings, under Languages.
+#
+# key            Its name in settings.toml.
+# name           What Settings calls it.
+# languages      Files that take breakpoints, by Jig's language names.
+# adapter        A program speaking DAP on its stdin and stdout, or
+# server         one serving it on a TCP port: include ${port}.
+#                Either runs in the run configuration's folder.
+# lsp            Or: a language server Jig runs, as Java's debugger lives in
+#                jdtls; with lsp_start, the command that answers with the
+#                adapter's port, and lsp_bundles, plugins the server loads
+#                at start (`*` matches in a file name).
+# adapter_env    Added to the adapter's environment.
+# adapter_id     Sent in `initialize`; defaults to the key.
+# check          A command that succeeds when the debugger is installed.
+# install        A shell command that installs it, run by Settings' Install
+#                button. ${debuggers} is the folder Jig keeps debuggers in;
+#                programs in ${debuggers}/bin are found like ones on the PATH.
+# help           How to get it, for when it's missing. A table of
+#                { macos, linux, default } when that differs.
+# commands       Run configurations it debugs, by how their command starts:
+#                "go run" takes `go run .`.
+# extensions     The same, for a run.toml `program` with these extensions.
+# executables    true: also takes any other `program`, as a native binary.
+# build          "cargo": build with `cargo build` first and debug what it
+#                reports. Otherwise a run.toml `build` command runs first.
+# launch         The `launch` request's arguments. Variables:
+#                  ${name} ${cwd} ${root}  the run configuration
+#                  ${program} ${args}      what to debug: the `program`, or
+#                                          the command's first word after
+#                                          the matched start; then the rest
+#                  ${command} ${command_args}  the whole command line, split
+#                  ${env}       its environment, as a table
+#                  ${env_list}  the same, as "KEY=value" strings
+#                  ${file}      the file open when debugging started
+#                A value that is just a variable takes its type, so
+#                args = "${args}" is a list.
+# launch_program The same, used when run.toml gives a `program`.
+#
+# Tools Jig finds for you: ${node}, ${lldb_dap}, ${js_debug} (js-debug's
+# folder) and ${lldb_rust_formatters} (LLDB commands for Rust values). With
+# jdtls: ${java_main_class} (the open file's, else the project's first),
+# ${java_project}, ${java_class_paths} and ${java_module_paths}.
+
+[[debugger]]
+key = "rust"
+name = "Rust, C and C++"
+languages = ["rust"]
+adapter = ["${lldb_dap}"]
+adapter_id = "lldb-dap"
+commands = ["cargo run"]
+executables = true
+build = "cargo"
+help.macos = "It comes with Xcode's command line tools: xcode-select --install"
+help.default = "Install LLDB with your package manager, for example sudo apt install lldb or sudo dnf install lldb; Jig finds lldb-dap (or lldb-dap-18 and so on) on the PATH."
+
+[debugger.launch]
+type = "lldb-dap"
+request = "launch"
+name = "${name}"
+program = "${program}"
+args = "${args}"
+cwd = "${cwd}"
+env = "${env_list}"
+stopOnEntry = false
+initCommands = "${lldb_rust_formatters}"
+
+[[debugger]]
+key = "typescript"
+name = "TypeScript and JavaScript"
+languages = ["typescript", "tsx", "javascript"]
+server = ["${node}", "${js_debug}/src/dapDebugServer.js", "${port}", "127.0.0.1"]
+adapter_id = "pwa-node"
+commands = ["node", "npm", "npx", "pnpm", "yarn", "tsx", "ts-node", "nodemon", "vite", "next"]
+extensions = ["js", "mjs", "cjs", "ts", "mts", "cts"]
+help = "Needs Node, and Microsoft's js-debug: install it here, or unpack js-debug-dap from github.com/microsoft/vscode-js-debug/releases into Jig's debuggers folder."
+install = """
+tmp=$(mktemp -d) &&
+curl --fail --silent --show-error --location --output "$tmp/js-debug.tar.gz" \
+  https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.0/js-debug-dap-v1.140.0.tar.gz &&
+tar -xzf "$tmp/js-debug.tar.gz" -C "$tmp" &&
+rm -rf "${debuggers}/js-debug" &&
+mv "$tmp/js-debug" "${debuggers}/js-debug"
+status=$?
+rm -rf "$tmp"
+exit $status
+"""
+
+# js-debug runs the command and attaches to every Node process it starts.
+[debugger.launch]
+type = "pwa-node"
+request = "launch"
+name = "${name}"
+runtimeExecutable = "${command}"
+runtimeArgs = "${command_args}"
+cwd = "${cwd}"
+env = "${env}"
+console = "internalConsole"
+sourceMaps = true
+skipFiles = ["<node_internals>/**"]
+
+# Node 23.6 and later run TypeScript as it is.
+[debugger.launch_program]
+type = "pwa-node"
+request = "launch"
+name = "${name}"
+program = "${program}"
+args = "${args}"
+cwd = "${cwd}"
+env = "${env}"
+console = "internalConsole"
+sourceMaps = true
+skipFiles = ["<node_internals>/**"]
+
+[[debugger]]
+key = "python"
+name = "Python"
+languages = ["python"]
+adapter = ["python3", "-m", "debugpy.adapter"]
+adapter_env = { PYTHONPATH = "${debuggers}/debugpy" }
+check = ["python3", "-c", "import debugpy"]
+adapter_id = "debugpy"
+commands = ["python3", "python"]
+extensions = ["py"]
+help = "Needs Python 3, and debugpy: install it here, or with pip install debugpy."
+install = 'python3 -m pip install --quiet --disable-pip-version-check --upgrade --target "${debuggers}/debugpy" debugpy'
+
+[debugger.launch]
+type = "debugpy"
+request = "launch"
+name = "${name}"
+program = "${program}"
+args = "${args}"
+cwd = "${cwd}"
+env = "${env}"
+console = "internalConsole"
+justMyCode = true
+
+[[debugger]]
+key = "go"
+name = "Go"
+languages = ["go"]
+server = ["dlv", "dap", "--listen=127.0.0.1:${port}"]
+adapter_id = "go"
+commands = ["go run"]
+extensions = ["go"]
+help = "Needs Go, and Delve: install it here, or with go install github.com/go-delve/delve/cmd/dlv@latest."
+install = 'GOBIN="${debuggers}/bin" go install github.com/go-delve/delve/cmd/dlv@latest'
+
+[debugger.launch]
+type = "go"
+request = "launch"
+name = "${name}"
+mode = "debug"
+program = "${program}"
+args = "${args}"
+cwd = "${cwd}"
+env = "${env}"
+# Send the program's output to Jig rather than Delve's own terminal.
+outputMode = "remote"
+
+[[debugger]]
+key = "java"
+name = "Java"
+languages = ["java"]
+lsp = "jdtls"
+lsp_start = "vscode.java.startDebugSession"
+lsp_bundles = ["${debuggers}/java-debug/com.microsoft.java.debug.plugin-*.jar"]
+adapter_id = "java"
+commands = ["mvn", "./mvnw", "gradle", "./gradlew", "java"]
+extensions = ["java"]
+help = "Needs a JDK, jdtls (the Java language server) and Microsoft's java-debug plugin for it: install them here."
+# java-debug from Maven Central; jdtls from Eclipse, unless it's installed.
+install = """
+set -e
+mkdir -p "${debuggers}/java-debug" "${debuggers}/bin"
+curl --fail --silent --show-error --location \
+  --output "${debuggers}/java-debug/com.microsoft.java.debug.plugin-0.53.1.jar" \
+  https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/0.53.1/com.microsoft.java.debug.plugin-0.53.1.jar
+if ! command -v jdtls >/dev/null && [ ! -x "${debuggers}/bin/jdtls" ]; then
+  tmp=$(mktemp -d)
+  curl --fail --silent --show-error --location --output "$tmp/jdtls.tar.gz" \
+    https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz
+  rm -rf "${debuggers}/jdtls" && mkdir -p "${debuggers}/jdtls"
+  tar -xzf "$tmp/jdtls.tar.gz" -C "${debuggers}/jdtls"
+  rm -rf "$tmp"
+  ln -sf "${debuggers}/jdtls/bin/jdtls" "${debuggers}/bin/jdtls"
+fi
+"""
+
+# Whatever the command, jdtls finds the main class and compiles the project.
+[debugger.launch]
+type = "java"
+request = "launch"
+name = "${name}"
+mainClass = "${java_main_class}"
+projectName = "${java_project}"
+classPaths = "${java_class_paths}"
+modulePaths = "${java_module_paths}"
+cwd = "${cwd}"
+env = "${env}"
+console = "internalConsole"
+
+[debugger.launch_program]
+type = "java"
+request = "launch"
+name = "${name}"
+mainClass = "${java_main_class}"
+projectName = "${java_project}"
+classPaths = "${java_class_paths}"
+modulePaths = "${java_module_paths}"
+args = "${args}"
+cwd = "${cwd}"
+env = "${env}"
+console = "internalConsole"

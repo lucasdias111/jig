@@ -544,6 +544,7 @@ mod tests {
             env: Vec::new(),
             source: crate::run_configs::Source::File,
             debug: None,
+            debugger: None,
         };
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let process = Process::spawn(&config, dir.path(), false, tx).unwrap();

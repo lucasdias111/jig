@@ -19,10 +19,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::{Value, json};
 
-use super::{DebugSelected, Resume, StepInto, StepOut, StepOver, Workspace};
+use super::{DebugSelected, EditDebuggers, Resume, StepInto, StepOut, StepOver, Workspace};
 use crate::dap::{self, Message};
-use crate::debug_target::{self, DebugTarget, NodeLaunch};
-use crate::debuggers::{self, Adapter, Kind};
+use crate::debug_target::{self, Build, DebugPlan};
+use crate::debuggers::{self, Debugger, Vars};
 use crate::run_configs::RunConfig;
 use crate::run_output::{OutputLine, Stream, Style};
 
@@ -87,10 +87,16 @@ pub(super) struct Variable {
 }
 
 pub(super) struct DebugSession {
-    target: DebugTarget,
+    plan: DebugPlan,
+    /// The project, for `${root}`.
+    root: PathBuf,
+    /// The file open when debugging started, for `${file}`.
+    file: Option<PathBuf>,
+    /// Values a language server worked out for the launch, such as Java's
+    /// main class; filled in before its adapter's port is known.
+    lsp_values: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
     pub(super) phase: Phase,
     pub(super) view: View,
-    adapter: Adapter,
     /// What to debug, once known: given, or reported by the build.
     executable: Option<PathBuf>,
     /// Connections to the adapter, by id: the session, then any child
@@ -167,7 +173,7 @@ impl DebugSession {
             .push(dap::Client::connect_tcp(id, server.port, inbox.clone()));
         self.child_launches.insert(id, configuration);
         self.active = id;
-        let arguments = initialize_arguments(self.target.kind());
+        let arguments = initialize_arguments(self.plan.debugger.adapter_id());
         self.request_to(id, "initialize", arguments, Pending::Initialize);
     }
 
@@ -233,9 +239,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Start `adapter` and connect to it, as connection 0.
+/// Start `debugger`'s adapter in `cwd` and connect to it, as connection 0.
 fn start_adapter(
-    adapter: &Adapter,
+    debugger: &Debugger,
+    cwd: &std::path::Path,
     inbox: dap::Inbox,
 ) -> anyhow::Result<(dap::Client, Option<dap::Server>)> {
     #[cfg(test)]
@@ -244,21 +251,76 @@ fn start_adapter(
     {
         return Ok((client, None));
     }
-    match adapter {
-        Adapter::Stdio(program) => Ok((dap::Client::start(0, program, inbox)?, None)),
-        Adapter::NodeServer { node, script } => {
-            let server = dap::Server::start(node, &[script])?;
-            let client = dap::Client::connect_tcp(0, server.port, inbox);
-            Ok((client, Some(server)))
-        }
+    let port = dap::free_port()?;
+    let mut vars = Vars::new(cwd);
+    vars.set("port", json!(port.to_string()));
+    let adapter = debugger
+        .adapter_command(&vars)
+        .map_err(anyhow::Error::msg)?;
+    if adapter.server {
+        let server = dap::Server::start(&adapter, cwd, port)?;
+        let client = dap::Client::connect_tcp(0, port, inbox);
+        Ok((client, Some(server)))
+    } else {
+        Ok((dap::Client::start(0, &adapter, cwd, inbox)?, None))
     }
 }
 
-fn initialize_arguments(kind: Kind) -> Value {
-    let adapter_id = match kind {
-        Kind::Lldb => "lldb-dap",
-        Kind::JsDebug => "pwa-node",
-    };
+/// Start a debugger that lives in language server `server`: once it has
+/// loaded the project and worked out what to launch, it says the port.
+fn start_lsp_adapter(
+    debugger: &Debugger,
+    root: &std::path::Path,
+    prefer: Vec<PathBuf>,
+    values: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    inbox: dap::Inbox,
+    cx: &mut App,
+) -> anyhow::Result<dap::Client> {
+    let (server, start) = debugger
+        .lsp()
+        .ok_or_else(|| anyhow::anyhow!("{} doesn't live in a language server.", debugger.name))?;
+    let language = debugger
+        .languages
+        .iter()
+        .find(|language| crate::lsp::server_for(language).is_some_and(|s| s.name == server))
+        .ok_or_else(|| anyhow::anyhow!("Jig doesn't run {server} for any of its languages."))?;
+    let client = crate::lsp::client_for(&root.join("_"), language, cx)
+        .ok_or_else(|| anyhow::anyhow!("{server} isn't installed."))?;
+    let wanted = debuggers::lsp_bundles(server);
+    let loaded = client.init_options()["bundles"].clone();
+    if wanted.iter().any(|bundle| {
+        !loaded
+            .as_array()
+            .is_some_and(|l| l.contains(&json!(bundle)))
+    }) {
+        anyhow::bail!(
+            "{server} was started before its debugger plugin was installed. Quit and reopen \
+             Jig to load it."
+        );
+    }
+    let (port_tx, port_rx) = std::sync::mpsc::channel();
+    let (server, start, root) = (server.to_string(), start.to_string(), root.to_path_buf());
+    std::thread::spawn(move || {
+        let started = crate::lsp_debug::start(&client, &server, &start, &root, &prefer);
+        let _ = port_tx.send(started.map(|started| {
+            *values.lock().unwrap() = started.values;
+            started.port
+        }));
+    });
+    Ok(dap::Client::connect_when(0, port_rx, inbox))
+}
+
+#[cfg(test)]
+fn faked() -> bool {
+    FAKE_ADAPTER.with(|fake| fake.borrow().is_some())
+}
+
+#[cfg(not(test))]
+fn faked() -> bool {
+    false
+}
+
+fn initialize_arguments(adapter_id: &str) -> Value {
     json!({
         "clientID": "jig",
         "clientName": "Jig",
@@ -292,68 +354,54 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = debug_target::target_for(&config) else {
-            self.show_error(
-                &format!(
-                    "Jig can't tell what to debug for “{}”. It debugs `cargo run` commands \
-                     and commands that run Node on their own; for others, add `program` to \
-                     the configuration in {}.",
-                    config.name,
-                    crate::run_configs::FILE
-                ),
-                window,
-                cx,
-            );
-            return;
+        let plan = match debug_target::plan_for(&config, &debuggers::registry()) {
+            Ok(plan) => plan,
+            Err(why) => {
+                self.show_error(&why, window, cx);
+                return;
+            }
         };
-        let debugger = debuggers::get(target.kind());
-        let settings = &self.settings.debugging;
-        if !settings.is_enabled(debugger.key) {
+        let debugger = plan.debugger.clone();
+        if !self.settings.debugging.is_enabled(&debugger.key) {
             self.show_error(
                 &format!(
                     "Debugging {} is off. Turn it on in Settings, under Languages.",
-                    debugger.label
+                    debugger.name
                 ),
                 window,
                 cx,
             );
             return;
         }
-        #[cfg(test)]
-        let faked = FAKE_ADAPTER.with(|fake| fake.borrow().is_some());
-        #[cfg(not(test))]
-        let faked = false;
-        let adapter = if faked {
-            Ok(Adapter::Stdio(PathBuf::new()))
-        } else {
-            debuggers::find(debugger.kind, settings.path(debugger.key))
-        };
-        let adapter = match adapter {
-            Ok(adapter) => adapter,
-            Err(missing) => {
-                self.show_error(
-                    &format!(
-                        "Jig can't debug {}: {missing} {}",
-                        debugger.label,
-                        debugger.install_help()
-                    ),
-                    window,
-                    cx,
-                );
-                return;
-            }
-        };
-        let executable = target.executable();
-        let build = target.build_command().map(|command| RunConfig {
+        if !faked()
+            && let Some(missing) = debuggers::missing(&debugger, &config.cwd)
+        {
+            self.show_error(
+                &format!(
+                    "Jig can't debug {}: {missing} {}",
+                    debugger.name,
+                    debugger.help()
+                ),
+                window,
+                cx,
+            );
+            return;
+        }
+        let executable = plan.program().map(std::path::Path::to_path_buf);
+        let build = plan.build.command().map(|command| RunConfig {
             command,
             ..config.clone()
         });
-        let json = matches!(target, DebugTarget::Cargo { .. });
+        let json = matches!(plan.build, Build::Cargo(_));
+        let root = self.run_root(cx).unwrap_or_else(|| config.cwd.clone());
+        let file = (!self.home).then(|| self.document().path.clone()).flatten();
         let debug = DebugSession {
-            target,
+            plan,
+            root,
+            file,
+            lsp_values: Default::default(),
             phase: Phase::Building,
             view: View::Console,
-            adapter,
             executable,
             clients: Vec::new(),
             active: 0,
@@ -381,6 +429,33 @@ impl Workspace {
         if !building {
             self.launch_debugger(window, cx);
         }
+    }
+
+    /// Open `~/.config/jig/debuggers.toml`, starting it from the template.
+    pub(super) fn edit_debuggers(
+        &mut self,
+        _: &EditDebuggers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = debuggers::user_path() else {
+            return;
+        };
+        if !path.exists() {
+            let created = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, debuggers::USER_TEMPLATE));
+            if let Err(error) = created {
+                self.show_error(
+                    &format!("Couldn't create {}: {error}", path.display()),
+                    window,
+                    cx,
+                );
+                return;
+            }
+        }
+        self.open_file(&path, window, cx);
     }
 
     /// Cargo's JSON messages while building: the one naming the executable.
@@ -412,7 +487,7 @@ impl Workspace {
             Some("Stopped")
         } else if !success {
             Some("Build failed")
-        } else if debug.executable.is_none() {
+        } else if matches!(debug.plan.build, Build::Cargo(_)) && debug.executable.is_none() {
             Some("The build made nothing to debug")
         } else {
             None
@@ -434,20 +509,37 @@ impl Workspace {
         let Some(debug) = session.debug.as_mut() else {
             return;
         };
-        let what = match &debug.target {
-            DebugTarget::Node {
-                launch: NodeLaunch::Command(words),
-                ..
-            } => words.join(" "),
-            _ => debug
-                .executable
-                .clone()
-                .unwrap_or_default()
-                .display()
-                .to_string(),
+        let what = match (&debug.plan.build, &debug.executable) {
+            (Build::Cargo(_), Some(executable)) => executable.display().to_string(),
+            _ => debug.plan.describe(),
         };
         let (sender, receiver) = futures::channel::mpsc::unbounded();
-        match start_adapter(&debug.adapter, sender.clone()) {
+        let debugger = debug.plan.debugger.clone();
+        let started = match debugger.lsp().filter(|_| !faked()) {
+            Some((server, _)) => {
+                session.lines.push(OutputLine::meta(format!(
+                    "Waiting for {server} to load the project…"
+                )));
+                let prefer: Vec<PathBuf> = debug
+                    .plan
+                    .program()
+                    .map(std::path::Path::to_path_buf)
+                    .into_iter()
+                    .chain(debug.file.clone())
+                    .collect();
+                start_lsp_adapter(
+                    &debugger,
+                    &debug.root,
+                    prefer,
+                    debug.lsp_values.clone(),
+                    sender.clone(),
+                    cx,
+                )
+                .map(|client| (client, None))
+            }
+            None => start_adapter(&debugger, &session.config.cwd, sender.clone()),
+        };
+        match started {
             Ok((client, server)) => {
                 debug.clients = vec![client];
                 debug.server = server;
@@ -457,7 +549,7 @@ impl Workspace {
                 session
                     .lines
                     .push(OutputLine::meta(format!("Debugging {what}")));
-                let arguments = initialize_arguments(debug.target.kind());
+                let arguments = initialize_arguments(debugger.adapter_id());
                 debug.request_to(0, "initialize", arguments, Pending::Initialize);
             }
             Err(error) => {
@@ -523,7 +615,7 @@ impl Workspace {
                 };
                 let failure = message.unwrap_or_else(|| "it failed".into());
                 match pending {
-                    Pending::Initialize if success && id == 0 => self.send_launch(),
+                    Pending::Initialize if success && id == 0 => self.send_launch(cx),
                     Pending::Initialize if success => {
                         if let Some(debug) = self.debug_mut()
                             && let Some(configuration) = debug.child_launches.remove(&id)
@@ -559,6 +651,7 @@ impl Workspace {
                     debug.start_child(configuration);
                 }
             }
+            Message::Failed(why) => self.end_debugging(&why, cx),
             // A child session ending is just its process ending; the
             // session ends with connection 0.
             Message::Closed if id != 0 => {
@@ -582,10 +675,10 @@ impl Workspace {
     fn on_dap_event(&mut self, id: usize, event: &str, body: &Value, cx: &mut Context<Self>) {
         match event {
             "initialized" => {
-                let Some(kind) = self.debug().map(|debug| debug.target.kind()) else {
+                let Some(key) = self.debug().map(|debug| debug.plan.debugger.key.clone()) else {
                     return;
                 };
-                let breakpoints = self.breakpoints_for(kind, cx);
+                let breakpoints = self.breakpoints_for(&key, cx);
                 let Some(debug) = self.debug_mut() else {
                     return;
                 };
@@ -677,7 +770,7 @@ impl Workspace {
         }
     }
 
-    fn send_launch(&mut self) {
+    fn send_launch(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.runs.session.as_mut() else {
             return;
         };
@@ -685,9 +778,18 @@ impl Workspace {
         let Some(debug) = session.debug.as_mut() else {
             return;
         };
-        let program = debug.executable.clone().unwrap_or_default();
-        let arguments = debug.target.launch_arguments(&config, &program);
-        debug.request_to(0, "launch", arguments, Pending::Launch);
+        let mut extra = debug.lsp_values.lock().unwrap().clone();
+        if let Some(file) = &debug.file {
+            extra.push(("file".into(), json!(file)));
+        }
+        let arguments =
+            debug
+                .plan
+                .launch_arguments(&config, &debug.root, debug.executable.as_deref(), &extra);
+        match arguments {
+            Ok(arguments) => debug.request_to(0, "launch", arguments, Pending::Launch),
+            Err(why) => self.end_debugging(&why, cx),
+        }
     }
 
     fn on_stack_trace(&mut self, body: &Value, window: &mut Window, cx: &mut Context<Self>) {

@@ -18,6 +18,7 @@ mod git_panel;
 mod indentation;
 mod languages;
 mod lsp;
+mod lsp_debug;
 mod menus;
 mod project;
 mod project_search;

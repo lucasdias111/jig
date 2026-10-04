@@ -2,6 +2,7 @@
 //! Model.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -27,7 +28,7 @@ use crate::settings::{
     MIN_FONT_SIZE, ThemeChoice,
 };
 use crate::theme::{self, EDITABLE, Section};
-use crate::workspace::{AddCommand, EditCommands, EditModelConfig};
+use crate::workspace::{AddCommand, EditCommands, EditDebuggers, EditModelConfig};
 
 actions!(jig, [OpenSettings]);
 
@@ -184,7 +185,7 @@ pub struct SettingsWindow {
     /// order. A key is saved as it's typed and never read back in.
     key_inputs: Vec<(&'static ProviderTemplate, Entity<InputState>)>,
     /// From Install, per debugger key.
-    installs: HashMap<&'static str, Fetch<()>>,
+    installs: HashMap<String, Fetch<()>>,
     /// From Test: how long the quick model took to answer.
     check: Option<Fetch<SharedString>>,
     /// Why the last change to the providers didn't work.
@@ -537,7 +538,6 @@ impl SettingsWindow {
     }
 
     fn languages_page(&self, cx: &Context<Self>) -> SettingPage {
-        let debugging = settings::get(cx).debugging;
         let highlight_item = |language: &'static Language| {
             SettingItem::new(
                 language.label,
@@ -575,46 +575,59 @@ impl SettingsWindow {
             .keywords([language.name])
         };
 
-        let debug_item = |debugger: &'static Debugger| {
-            let status = debuggers::status(debugger, debugging.path(debugger.key));
+        let registry = debuggers::registry();
+        let debug_item = |debugger: &Arc<Debugger>| {
+            let (status, _) = debuggers::status(debugger);
+            let (get, set) = (debugger.key.clone(), debugger.key.clone());
             SettingItem::new(
-                debugger.label,
+                debugger.name.clone(),
                 SettingField::switch(
-                    |cx| settings::get(cx).debugging.is_enabled(debugger.key),
-                    |on, cx| settings::update(cx, |s| s.debugging.set_enabled(debugger.key, on)),
+                    move |cx| settings::get(cx).debugging.is_enabled(&get),
+                    move |on, cx| settings::update(cx, |s| s.debugging.set_enabled(&set, on)),
                 )
                 .default_value(debugger.key == "rust"),
             )
             .description(status)
-            .keywords(["debug", "debugger", "breakpoint", debugger.key])
+            .keywords(["debug", "debugger", "breakpoint"])
         };
-        let debug_items = |debugger: &'static Debugger| {
+        let debug_items = |debugger: &Arc<Debugger>| {
             let mut items = vec![debug_item(debugger)];
             if debugger.installable() {
-                items.push(self.install_item(debugger, cx));
+                items.push(self.install_item(debugger.clone(), cx));
             }
             items
         };
-        let debug_path_item = |debugger: &'static Debugger| {
-            SettingItem::new(
-                format!("{} debugger", debugger.label),
-                SettingField::input(
-                    |cx| {
-                        settings::get(cx)
-                            .debugging
-                            .path(debugger.key)
-                            .unwrap_or_default()
-                            .to_string()
-                            .into()
-                    },
-                    |text: SharedString, cx| {
-                        settings::update(cx, |s| s.debugging.set_path(debugger.key, &text))
-                    },
-                )
-                .default_value(SharedString::default()),
-            )
-            .keywords(["debug", "debugger", "path", debugger.key])
-        };
+        let edit_item = SettingItem::render({
+            let error = registry.error.clone();
+            move |_, _, cx| {
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "Any debugger that speaks the Debug Adapter Protocol can be \
+                                 added, or a built-in one changed, in debuggers.toml.",
+                            ),
+                    )
+                    .when_some(error.clone(), |this, error| {
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    })
+                    .child(
+                        h_flex().child(
+                            Button::new("edit-debuggers")
+                                .label("Edit Debuggers File")
+                                .small()
+                                .outline()
+                                .on_click(|_, _, cx| {
+                                    send_to_workspace(Box::new(EditDebuggers), cx)
+                                }),
+                        ),
+                    )
+            }
+        })
+        .keywords(["debug", "debugger", "add", "file", "toml"]);
 
         SettingPage::new("Languages")
             .icon(Icon::default().data(CODE))
@@ -640,16 +653,8 @@ impl SettingsWindow {
                         "Languages turned on take breakpoints and debug with ⌃D. Each \
                          says where Jig found its debugger, or how to get it.",
                     )
-                    .items(debuggers::ALL.iter().flat_map(debug_items)),
-            )
-            .group(
-                SettingGroup::new()
-                    .title("Debugger locations")
-                    .description(
-                        "Only needed when Jig doesn't find a debugger on its own: the \
-                         lldb-dap program, or the folder js-debug was unpacked into.",
-                    )
-                    .items(debuggers::ALL.iter().map(debug_path_item)),
+                    .items(registry.debuggers.iter().flat_map(debug_items))
+                    .item(edit_item),
             )
     }
 
@@ -966,56 +971,36 @@ impl SettingsWindow {
         group
     }
 
-    /// Install (or reinstall) a debugger Jig can download, and how that went.
-    fn install_item(&self, debugger: &'static Debugger, cx: &Context<Self>) -> SettingItem {
+    /// Install (or reinstall) a debugger, and how that went.
+    fn install_item(&self, debugger: Arc<Debugger>, cx: &Context<Self>) -> SettingItem {
         let this = cx.entity().downgrade();
-        let fetch = self.installs.get(debugger.key);
+        let fetch = self.installs.get(&debugger.key);
         let installing = matches!(fetch, Some(Fetch::Running));
-        let installed = debuggers::debuggers_dir().is_some_and(|dir| dir.join("js-debug").is_dir());
+        let (_, ready) = debuggers::status(&debugger);
         let report = fetch.map(|fetch| match fetch {
-            Fetch::Running => (
-                SharedString::from(format!(
-                    "Downloading js-debug {}…",
-                    debuggers::JS_DEBUG_VERSION
-                )),
-                true,
-            ),
+            Fetch::Running => (SharedString::from("Installing…"), true),
             Fetch::Done(()) => ("Installed.".into(), true),
             Fetch::Failed(error) => (error.clone(), false),
         });
-        let label = if installed {
-            "Reinstall js-debug"
-        } else {
-            "Install js-debug"
-        };
+        let label = if ready { "Reinstall" } else { "Install" };
+        let id = SharedString::from(format!("install-{}", debugger.key));
         SettingItem::render(move |_, _, cx| {
             let this = this.clone();
+            let debugger = debugger.clone();
             v_flex()
                 .gap_1()
                 .child(
                     h_flex().gap_2().items_center().child(
-                        Button::new("install-js-debug")
+                        Button::new(id.clone())
                             .label(label)
                             .small()
                             .outline()
                             .disabled(installing)
                             .on_click(move |_, _, cx| {
+                                let debugger = debugger.clone();
                                 this.update(cx, |this, cx| this.install(debugger, cx)).ok();
                             }),
                     ),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "Downloads js-debug {} from Microsoft's releases on GitHub \
-                             into {}.",
-                            debuggers::JS_DEBUG_VERSION,
-                            debuggers::debuggers_dir()
-                                .map(|dir| dir.display().to_string())
-                                .unwrap_or_default()
-                        )),
                 )
                 .when_some(report.clone(), |this, (text, ok)| {
                     this.child(
@@ -1030,30 +1015,31 @@ impl SettingsWindow {
                     )
                 })
         })
-        .keywords(["install", "download", "debug", "js-debug", debugger.key])
+        .keywords(["install", "download", "debug", "debugger"])
     }
 
-    /// Download and unpack the debugger in the background; turn it on once
-    /// it's there.
-    fn install(&mut self, debugger: &'static Debugger, cx: &mut Context<Self>) {
-        if matches!(self.installs.get(debugger.key), Some(Fetch::Running)) {
+    /// Run the debugger's install command in the background; turn it on
+    /// once it's there.
+    fn install(&mut self, debugger: Arc<Debugger>, cx: &mut Context<Self>) {
+        if matches!(self.installs.get(&debugger.key), Some(Fetch::Running)) {
             return;
         }
-        self.installs.insert(debugger.key, Fetch::Running);
+        self.installs.insert(debugger.key.clone(), Fetch::Running);
         cx.spawn(async move |this, cx| {
+            let installing = debugger.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { debuggers::install_js_debug() })
+                .spawn(async move { debuggers::install(&installing) })
                 .await;
             this.update(cx, |this, cx| {
                 let fetch = match result {
-                    Ok(_) => {
-                        settings::update(cx, |s| s.debugging.set_enabled(debugger.key, true));
+                    Ok(()) => {
+                        settings::update(cx, |s| s.debugging.set_enabled(&debugger.key, true));
                         Fetch::Done(())
                     }
                     Err(error) => Fetch::Failed(format!("{error:#}").into()),
                 };
-                this.installs.insert(debugger.key, fetch);
+                this.installs.insert(debugger.key.clone(), fetch);
                 cx.notify();
             })
             .ok();

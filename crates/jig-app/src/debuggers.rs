@@ -1,144 +1,610 @@
-//! The debuggers Jig knows: what each debugs, how to find its adapter, and
-//! what to say when it isn't there. Settings turns each on or off, and can
-//! install js-debug, a download of plain JavaScript. LLDB comes from Xcode
-//! on macOS and from the package manager on Linux, so Jig only finds it.
+//! The debuggers Jig knows, as described in `assets/default-debuggers.toml`
+//! and the user's `~/.config/jig/debuggers.toml`: how to start each one's
+//! adapter, which run configurations it takes, how to install it, and the
+//! `launch` request to send, with `${variables}` filled in. Any debugger
+//! speaking the Debug Adapter Protocol can be added there; nothing about a
+//! particular one lives in code but a few tools Jig finds for you.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// `lldb-dap`: Xcode's on macOS, LLVM's on Linux.
-    Lldb,
-    /// Microsoft's `js-debug`, run on Node.
-    JsDebug,
+const BUILT_IN: &str = include_str!("../../../assets/default-debuggers.toml");
+
+/// A starter for the user's `debuggers.toml`.
+pub const USER_TEMPLATE: &str = r#"# Your debuggers. One with the same key as a built-in replaces it; see
+# assets/default-debuggers.toml in Jig's source for the built-ins and every
+# field. Turn new ones on in Settings, under Languages.
+#
+# [[debugger]]
+# key = "ruby"
+# name = "Ruby"
+# languages = ["ruby"]
+# server = ["rdbg", "--open", "--port", "${port}", "--", "ruby", "${program}"]
+# commands = ["ruby"]
+# extensions = ["rb"]
+# help = "Install it with gem install debug."
+#
+# [debugger.launch]
+# type = "rdbg"
+# request = "attach"
+# name = "${name}"
+# cwd = "${cwd}"
+"#;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DebuggerFile {
+    #[serde(default)]
+    debugger: Vec<Debugger>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Debugger {
-    pub kind: Kind,
     /// Its key in `settings.toml`.
-    pub key: &'static str,
-    pub label: &'static str,
-    /// The languages, by highlighter name, whose files take breakpoints.
-    pub languages: &'static [&'static str],
+    pub key: String,
+    pub name: String,
+    /// The languages, by Jig's names, whose files take breakpoints.
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    adapter: Vec<String>,
+    #[serde(default)]
+    server: Vec<String>,
+    /// Asks this language server, as Jig runs it, for the adapter's port.
+    lsp: Option<String>,
+    /// The `workspace/executeCommand` that answers with the port.
+    lsp_start: Option<String>,
+    /// Plugins the language server loads at start; `*` matches in a file
+    /// name.
+    #[serde(default)]
+    lsp_bundles: Vec<String>,
+    #[serde(default)]
+    adapter_env: BTreeMap<String, String>,
+    adapter_id: Option<String>,
+    check: Option<Vec<String>>,
+    install: Option<String>,
+    help: Option<Help>,
+    /// How the commands it debugs start, as words.
+    #[serde(default)]
+    commands: Vec<String>,
+    /// Extensions of a run.toml `program` it debugs.
+    #[serde(default)]
+    extensions: Vec<String>,
+    /// Takes any other `program`, as a native executable.
+    #[serde(default)]
+    executables: bool,
+    /// `"cargo"`: built with `cargo build` before debugging.
+    build: Option<String>,
+    launch: toml::Table,
+    launch_program: Option<toml::Table>,
 }
 
-pub const ALL: &[Debugger] = &[
-    Debugger {
-        kind: Kind::Lldb,
-        key: "rust",
-        label: "Rust, C and C++",
-        languages: &["rust"],
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum Help {
+    Text(String),
+    PerOs {
+        macos: Option<String>,
+        linux: Option<String>,
+        default: Option<String>,
     },
-    Debugger {
-        kind: Kind::JsDebug,
-        key: "typescript",
-        label: "TypeScript and JavaScript",
-        languages: &["typescript", "tsx", "javascript"],
-    },
-];
-
-/// The js-debug release Settings installs: the one Jig is tested with.
-pub const JS_DEBUG_VERSION: &str = "1.140.0";
+}
 
 impl Debugger {
-    /// Whether Settings can install it.
+    pub fn adapter_id(&self) -> &str {
+        self.adapter_id.as_deref().unwrap_or(&self.key)
+    }
+
     pub fn installable(&self) -> bool {
-        self.kind == Kind::JsDebug
+        self.install.is_some()
     }
 
-    /// How to get it, for Settings and for when debugging can't start.
-    pub fn install_help(&self) -> String {
-        match self.kind {
-            Kind::Lldb if cfg!(target_os = "macos") => {
-                "It comes with Xcode's command line tools: xcode-select --install".into()
+    pub fn builds_with_cargo(&self) -> bool {
+        self.build.as_deref() == Some("cargo")
+    }
+
+    pub fn commands(&self) -> &[String] {
+        &self.commands
+    }
+
+    pub fn takes_extension(&self, extension: &str) -> bool {
+        self.extensions.iter().any(|e| e == extension)
+    }
+
+    pub fn takes_executables(&self) -> bool {
+        self.executables
+    }
+
+    /// How to get it, for this system.
+    pub fn help(&self) -> String {
+        match &self.help {
+            None => format!("Jig couldn't find {}'s debugger.", self.name),
+            Some(Help::Text(text)) => text.clone(),
+            Some(Help::PerOs {
+                macos,
+                linux,
+                default,
+            }) => {
+                let specific = if cfg!(target_os = "macos") {
+                    macos
+                } else if cfg!(target_os = "linux") {
+                    linux
+                } else {
+                    &None
+                };
+                specific
+                    .clone()
+                    .or_else(|| default.clone())
+                    .unwrap_or_default()
             }
-            Kind::Lldb => "Install LLDB with your package manager, for example \
-                           sudo apt install lldb or sudo dnf install lldb; Jig finds \
-                           lldb-dap (or lldb-dap-18 and so on) on the PATH."
-                .into(),
-            Kind::JsDebug => "Install it in Settings, under Languages, or give its folder there. \
-                 It runs on Node, which needs installing too."
-                .into(),
         }
     }
+
+    /// The `launch` template: the `program` one when the run configuration
+    /// gave a program and there is one.
+    pub fn launch_template(&self, from_program: bool) -> Value {
+        let table = match (&self.launch_program, from_program) {
+            (Some(program), true) => program,
+            _ => &self.launch,
+        };
+        serde_json::to_value(table).unwrap_or(Value::Null)
+    }
+
+    /// The language server it asks for its adapter, and the command that
+    /// does it, when it's started that way.
+    pub fn lsp(&self) -> Option<(&str, &str)> {
+        Some((self.lsp.as_deref()?, self.lsp_start.as_deref()?))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let ways = [
+            !self.adapter.is_empty(),
+            !self.server.is_empty(),
+            self.lsp.is_some(),
+        ];
+        if ways.into_iter().filter(|way| *way).count() != 1 {
+            bail!(
+                "debugger “{}” needs one of `adapter`, `server` or `lsp`",
+                self.key
+            );
+        }
+        if self.lsp.is_some() != self.lsp_start.is_some() {
+            bail!("debugger “{}”: `lsp` goes with `lsp_start`", self.key);
+        }
+        if !self.server.is_empty() && !self.server.iter().any(|arg| arg.contains("${port}")) {
+            bail!("debugger “{}”: `server` must pass ${{port}}", self.key);
+        }
+        if let Some(build) = &self.build
+            && build != "cargo"
+        {
+            bail!("debugger “{}”: the only `build` is \"cargo\"", self.key);
+        }
+        Ok(())
+    }
+
+    /// The adapter to start, with variables filled in, or what's missing.
+    pub fn adapter_command(&self, vars: &Vars) -> Result<AdapterCommand, String> {
+        let (words, server) = if self.server.is_empty() {
+            (&self.adapter, false)
+        } else {
+            (&self.server, true)
+        };
+        let words = words
+            .iter()
+            .map(|word| vars.expand_str(word))
+            .collect::<Result<Vec<_>, _>>()?;
+        let program = resolve_program(&words[0])?;
+        let env = self
+            .adapter_env
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), vars.expand_str(value)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        // Shown in Settings: js-debug's folder says more than Node's path.
+        let shown = if words.iter().any(|w| w.contains("dapDebugServer.js")) {
+            vars.get("js_debug")
+                .ok()
+                .and_then(|v| v.as_str().map(PathBuf::from))
+                .unwrap_or_else(|| program.clone())
+        } else {
+            program.clone()
+        };
+        Ok(AdapterCommand {
+            program,
+            args: words[1..].to_vec(),
+            env,
+            server,
+            shown,
+        })
+    }
+
+    fn passes_check(&self, vars: &Vars) -> bool {
+        let Some(check) = &self.check else {
+            return true;
+        };
+        let mut checks = CHECKS.lock().unwrap();
+        let checks = checks.get_or_insert_with(HashMap::new);
+        if let Some(passed) = checks.get(&self.key) {
+            return *passed;
+        }
+        let passed = (|| {
+            let words = check
+                .iter()
+                .map(|word| vars.expand_str(word))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            let env = self
+                .adapter_env
+                .iter()
+                .map(|(key, value)| Some((key.clone(), vars.expand_str(value).ok()?)))
+                .collect::<Option<Vec<_>>>()?;
+            let status = Command::new(resolve_program(&words[0]).ok()?)
+                .args(&words[1..])
+                .envs(env)
+                .env("PATH", crate::lsp::search_path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()?;
+            Some(status.success())
+        })()
+        .unwrap_or(false);
+        checks.insert(self.key.clone(), passed);
+        passed
+    }
 }
 
-pub fn get(kind: Kind) -> &'static Debugger {
-    ALL.iter()
-        .find(|debugger| debugger.kind == kind)
-        .expect("every kind is listed")
-}
+/// Which `check`s passed, so Settings doesn't run them on every repaint.
+static CHECKS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 
-/// The debugger for files in `language`, if there is one.
-pub fn for_language(language: &str) -> Option<&'static Debugger> {
-    ALL.iter()
-        .find(|debugger| debugger.languages.contains(&language))
-}
-
-/// A found adapter, and how it's run.
+/// A ready-to-run adapter.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Adapter {
-    /// A program speaking DAP on its stdin and stdout.
-    Stdio(PathBuf),
-    /// A script Node runs as a DAP server on a TCP port.
-    NodeServer { node: PathBuf, script: PathBuf },
+pub struct AdapterCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    /// Serves DAP on a TCP port, rather than on its stdin and stdout.
+    pub server: bool,
+    /// What Settings says it's using.
+    pub shown: PathBuf,
 }
 
-impl Adapter {
-    /// Where it is, for Settings.
-    pub fn describe(&self) -> String {
-        match self {
-            Adapter::Stdio(path) => path.display().to_string(),
-            Adapter::NodeServer { script, .. } => {
-                // `…/js-debug/src/dapDebugServer.js` reads best as its folder.
-                let folder = script.parent().and_then(Path::parent).unwrap_or(script);
-                folder.display().to_string()
+/// The debuggers, built-in and the user's, and what was wrong with the
+/// user's file if anything.
+pub struct Registry {
+    pub debuggers: Vec<Arc<Debugger>>,
+    pub error: Option<String>,
+}
+
+impl Registry {
+    pub fn get(&self, key: &str) -> Option<Arc<Debugger>> {
+        self.debuggers.iter().find(|d| d.key == key).cloned()
+    }
+
+    /// The debugger for files in `language`, if there is one.
+    pub fn for_language(&self, language: &str) -> Option<Arc<Debugger>> {
+        self.debuggers
+            .iter()
+            .find(|d| d.languages.iter().any(|l| l == language))
+            .cloned()
+    }
+}
+
+/// The debuggers as they are now; the user's file is read again when it
+/// has changed.
+pub fn registry() -> Arc<Registry> {
+    type Cached = (Option<SystemTime>, Arc<Registry>);
+    static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+    let path = user_path();
+    let modified = path
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok());
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((stamp, registry)) = cache.as_ref()
+        && *stamp == modified
+    {
+        return registry.clone();
+    }
+    let registry = Arc::new(load(path.as_deref()));
+    *CHECKS.lock().unwrap() = None;
+    *cache = Some((modified, registry.clone()));
+    registry
+}
+
+/// The user's `debuggers.toml`; `None` in tests.
+pub fn user_path() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/jig/debuggers.toml"))
+}
+
+fn parse(text: &str) -> Result<Vec<Debugger>> {
+    let file: DebuggerFile = toml::from_str(text)?;
+    for debugger in &file.debugger {
+        debugger.validate()?;
+    }
+    Ok(file.debugger)
+}
+
+fn load(user: Option<&Path>) -> Registry {
+    let mut debuggers = parse(BUILT_IN).expect("the built-in debuggers parse");
+    let mut error = None;
+    if let Some(path) = user
+        && let Ok(text) = std::fs::read_to_string(path)
+    {
+        match parse(&text) {
+            Ok(own) => {
+                for debugger in own {
+                    match debuggers.iter_mut().find(|d| d.key == debugger.key) {
+                        Some(built_in) => *built_in = debugger,
+                        None => debuggers.push(debugger),
+                    }
+                }
             }
+            Err(e) => error = Some(format!("debuggers.toml isn't valid: {e:#}")),
         }
+    }
+    Registry {
+        debuggers: debuggers.into_iter().map(Arc::new).collect(),
+        error,
+    }
+}
+
+/// Values for `${variables}`. Tools are looked for only when used.
+pub struct Vars {
+    values: HashMap<String, Value>,
+    cwd: PathBuf,
+}
+
+impl Vars {
+    pub fn new(cwd: &Path) -> Self {
+        Self {
+            values: HashMap::new(),
+            cwd: cwd.to_path_buf(),
+        }
+    }
+
+    pub fn set(&mut self, name: &str, value: Value) -> &mut Self {
+        self.values.insert(name.to_string(), value);
+        self
+    }
+
+    pub fn get(&self, name: &str) -> Result<Value, String> {
+        if let Some(value) = self.values.get(name) {
+            return Ok(value.clone());
+        }
+        let path = |path: Option<PathBuf>, missing: &str| {
+            path.map(|path| json!(path))
+                .ok_or_else(|| missing.to_string())
+        };
+        match name {
+            "debuggers" => path(debuggers_dir(), "There's no home folder for debuggers."),
+            "node" => path(program_on_path("node"), "Node isn't installed."),
+            "lldb_dap" => path(lldb_dap(), "lldb-dap isn't installed."),
+            "js_debug" => path(js_debug(), "js-debug isn't installed."),
+            "lldb_rust_formatters" => Ok(json!(rust_init_commands(&self.cwd))),
+            _ => Err(format!(
+                "debuggers.toml uses ${{{name}}}, which Jig doesn't know."
+            )),
+        }
+    }
+
+    /// `text` with its variables filled in, as text.
+    pub fn expand_str(&self, text: &str) -> Result<String, String> {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(start) = rest.find("${") {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+            let Some(end) = after.find('}') else {
+                out.push_str(&rest[start..]);
+                return Ok(out);
+            };
+            match self.get(&after[..end])? {
+                Value::String(s) => out.push_str(&s),
+                Value::Null => {}
+                other => out.push_str(&other.to_string()),
+            }
+            rest = &after[end + 1..];
+        }
+        out.push_str(rest);
+        Ok(out)
+    }
+
+    /// `value` with its variables filled in. A string that is just one
+    /// variable becomes that variable's value, list or table as it is.
+    pub fn expand(&self, value: &Value) -> Result<Value, String> {
+        Ok(match value {
+            Value::String(text) => {
+                let whole = text
+                    .strip_prefix("${")
+                    .and_then(|t| t.strip_suffix('}'))
+                    .filter(|name| !name.contains(['$', '{', '}']));
+                match whole {
+                    Some(name) => self.get(name)?,
+                    None => Value::String(self.expand_str(text)?),
+                }
+            }
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|item| self.expand(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), self.expand(value)?)))
+                    .collect::<Result<_, String>>()?,
+            ),
+            other => other.clone(),
+        })
+    }
+}
+
+/// The plugins debuggers ask language server `server` to load, that are
+/// installed.
+pub fn lsp_bundles(server: &str) -> Vec<PathBuf> {
+    let vars = Vars::new(&std::env::temp_dir());
+    registry()
+        .debuggers
+        .iter()
+        .filter(|d| d.lsp.as_deref() == Some(server))
+        .flat_map(|d| d.lsp_bundles.iter())
+        .filter_map(|pattern| vars.expand_str(pattern).ok())
+        .flat_map(|pattern| glob(&pattern))
+        .collect()
+}
+
+/// The files matching `pattern`, whose last part may have one `*`.
+fn glob(pattern: &str) -> Vec<PathBuf> {
+    let path = PathBuf::from(pattern);
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    let Some((before, after)) = name.split_once('*') else {
+        return path.is_file().then_some(path.clone()).into_iter().collect();
+    };
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.len() >= before.len() + after.len()
+                && name.starts_with(before)
+                && name.ends_with(after)
+        })
+        .map(|entry| entry.path())
+        .collect();
+    found.sort();
+    found
+}
+
+/// What's missing for a debugger that lives in a language server.
+fn lsp_missing(debugger: &Debugger, server: &str) -> Option<String> {
+    if !crate::lsp::is_installed(server) {
+        return Some(format!("{server} isn't installed."));
+    }
+    let vars = Vars::new(&std::env::temp_dir());
+    let missing_plugin = debugger.lsp_bundles.iter().any(|pattern| {
+        vars.expand_str(pattern)
+            .map_or(true, |pattern| glob(&pattern).is_empty())
+    });
+    missing_plugin.then(|| {
+        format!(
+            "{}'s debugger plugin for {server} isn't installed.",
+            debugger.name
+        )
+    })
+}
+
+/// Why `debugger` can't start, or `None` when it can.
+pub fn missing(debugger: &Debugger, cwd: &Path) -> Option<String> {
+    if let Some((server, _)) = debugger.lsp() {
+        return lsp_missing(debugger, server);
+    }
+    let mut vars = Vars::new(cwd);
+    vars.set("port", json!("0"));
+    match debugger.adapter_command(&vars) {
+        Err(what) => Some(what),
+        Ok(_) if !debugger.passes_check(&vars) => {
+            Some(format!("{}'s debugger isn't installed.", debugger.name))
+        }
+        Ok(_) => None,
     }
 }
 
 /// What Settings says about `debugger`: where its adapter is, or what's
-/// missing and how to get it.
-pub fn status(debugger: &Debugger, path: Option<&str>) -> String {
-    match find(debugger.kind, path) {
-        Ok(adapter) => format!("Using {}", home_relative(&adapter.describe())),
-        Err(missing) if debugger.installable() => {
-            format!("{missing} Install it below, or give its folder under Debugger locations.")
-        }
-        Err(missing) => format!("{missing} {}", debugger.install_help()),
+/// missing, and whether it's ready.
+pub fn status(debugger: &Debugger) -> (String, bool) {
+    let cwd = std::env::temp_dir();
+    if let Some(what) = missing(debugger, &cwd) {
+        let how = if debugger.installable() {
+            "Install it below.".to_string()
+        } else {
+            debugger.help()
+        };
+        return (format!("{what} {how}"), false);
     }
+    if let Some((server, _)) = debugger.lsp() {
+        let plugin = lsp_bundles(server)
+            .into_iter()
+            .next()
+            .map(|path| home_relative(&path))
+            .unwrap_or_default();
+        return (format!("Using {server} with {plugin}"), true);
+    }
+    let mut vars = Vars::new(&cwd);
+    vars.set("port", json!("0"));
+    let shown = debugger
+        .adapter_command(&vars)
+        .map(|adapter| home_relative(&adapter.shown))
+        .unwrap_or_default();
+    (format!("Using {shown}"), true)
 }
 
-/// `kind`'s adapter: at `path` when the user gave one, otherwise where it
-/// usually is. Otherwise, what's missing.
-pub fn find(kind: Kind, path: Option<&str>) -> Result<Adapter, String> {
-    let given = path
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(expand_home);
-    match kind {
-        Kind::Lldb => match given {
-            Some(path) if path.is_file() => Ok(Adapter::Stdio(path)),
-            Some(path) => Err(format!("Nothing at {}.", path.display())),
-            None => lldb_dap()
-                .map(Adapter::Stdio)
-                .ok_or_else(|| "lldb-dap isn't installed.".into()),
-        },
-        Kind::JsDebug => {
-            let script = match given {
-                Some(path) => js_debug_script(&path)
-                    .ok_or_else(|| format!("No js-debug at {}.", path.display()))?,
-                None => default_js_debug().ok_or("js-debug isn't installed.")?,
-            };
-            let node = program_on_path("node").ok_or("Node isn't installed.")?;
-            Ok(Adapter::NodeServer { node, script })
-        }
+/// Run `debugger`'s install command. Blocks, so run it off the main thread.
+pub fn install(debugger: &Debugger) -> Result<()> {
+    let dir = debuggers_dir().context("No home folder to install into")?;
+    install_into(debugger, &dir)
+}
+
+fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
+    let script = debugger.install.as_deref().context("Nothing to install")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("Couldn't create {}", dir.display()))?;
+    let mut vars = Vars::new(dir);
+    vars.set("debuggers", json!(dir));
+    let script = vars.expand_str(script).map_err(anyhow::Error::msg)?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(dir)
+        .env("PATH", crate::lsp::search_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Couldn't run the installer")?;
+    *CHECKS.lock().unwrap() = None;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let last: Vec<&str> = stderr.trim().lines().rev().take(3).collect();
+        let last: Vec<&str> = last.into_iter().rev().collect();
+        bail!("Installing failed: {}", last.join(" "));
     }
+    Ok(())
+}
+
+/// A program by name: on the `PATH`, or in `${debuggers}/bin`. A path must
+/// exist.
+fn resolve_program(word: &str) -> Result<PathBuf, String> {
+    if word.contains('/') {
+        let path = PathBuf::from(word);
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!("Nothing at {word}."))
+        };
+    }
+    program_on_path(word)
+        .or_else(|| {
+            debuggers_dir()
+                .map(|dir| dir.join("bin").join(word))
+                .filter(|path| path.is_file())
+        })
+        .ok_or_else(|| format!("{word} isn't installed."))
 }
 
 /// `lldb-dap` on the `PATH`, under any of the names distributions give it,
@@ -193,8 +659,11 @@ fn versioned_lldb_dap() -> Option<PathBuf> {
 }
 
 /// Where Jig keeps debuggers it installs: Application Support on macOS,
-/// the XDG data folder elsewhere.
+/// the XDG data folder elsewhere. `JIG_DEBUGGERS_DIR` says otherwise.
 pub fn debuggers_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("JIG_DEBUGGERS_DIR") {
+        return Some(PathBuf::from(dir));
+    }
     data_dir().map(|dir| {
         dir.join(if cfg!(target_os = "macos") {
             "Jig"
@@ -218,27 +687,14 @@ fn data_dir() -> Option<PathBuf> {
     )
 }
 
-/// js-debug's server script, given the script itself, the unpacked
-/// `js-debug` folder, or the folder it was unpacked into.
-fn js_debug_script(path: &Path) -> Option<PathBuf> {
-    [
-        path.to_path_buf(),
-        path.join("src/dapDebugServer.js"),
-        path.join("js-debug/src/dapDebugServer.js"),
-    ]
-    .into_iter()
-    .find(|candidate| {
-        candidate.is_file()
-            && candidate
-                .file_name()
-                .is_some_and(|name| name == "dapDebugServer.js")
-    })
-}
-
-/// js-debug where Jig keeps debuggers, or where Zed keeps its copy.
-fn default_js_debug() -> Option<PathBuf> {
-    if let Some(script) = debuggers_dir().and_then(|dir| js_debug_script(&dir)) {
-        return Some(script);
+/// The unpacked `js-debug` folder: where Jig keeps debuggers, or Zed's.
+fn js_debug() -> Option<PathBuf> {
+    let is_js_debug = |dir: &Path| dir.join("src/dapDebugServer.js").is_file();
+    if let Some(dir) = debuggers_dir()
+        .map(|dir| dir.join("js-debug"))
+        .filter(|dir| is_js_debug(dir))
+    {
+        return Some(dir);
     }
     let zed = data_dir()?
         .join(if cfg!(target_os = "macos") {
@@ -249,75 +705,42 @@ fn default_js_debug() -> Option<PathBuf> {
         .join("debug_adapters/JavaScript");
     let mut versions: Vec<PathBuf> = std::fs::read_dir(zed)
         .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path().join("js-debug")))
+        .filter(|dir| is_js_debug(dir))
         .collect();
     versions.sort();
-    versions.iter().rev().find_map(|dir| js_debug_script(dir))
+    versions.pop()
 }
 
-/// Download js-debug and unpack it where Jig keeps debuggers, replacing
-/// any copy there. Blocks for the download, so run it off the main thread.
-pub fn install_js_debug() -> Result<PathBuf> {
-    let dir = debuggers_dir().context("No home folder to install into")?;
-    let url = format!(
-        "https://github.com/microsoft/vscode-js-debug/releases/download/\
-         v{JS_DEBUG_VERSION}/js-debug-dap-v{JS_DEBUG_VERSION}.tar.gz"
-    );
-    install_js_debug_from(&url, &dir)
-}
-
-/// Unpack the js-debug archive at `url` into `dir`. A failure leaves any
-/// copy already there as it was.
-fn install_js_debug_from(url: &str, dir: &Path) -> Result<PathBuf> {
-    let staging = dir.join(".js-debug-download");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging)
-        .with_context(|| format!("Couldn't create {}", staging.display()))?;
-    let result = (|| {
-        let archive = staging.join("js-debug.tar.gz");
-        run(Command::new("curl")
-            .args([
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--output",
-            ])
-            .arg(&archive)
-            .arg(url))
-        .context("Couldn't download js-debug")?;
-        run(Command::new("tar")
-            .arg("-xzf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&staging))
-        .context("Couldn't unpack js-debug")?;
-        let unpacked = staging.join("js-debug");
-        if js_debug_script(&unpacked).is_none() {
-            bail!("The download wasn't js-debug");
-        }
-        let target = dir.join("js-debug");
-        let _ = std::fs::remove_dir_all(&target);
-        std::fs::rename(&unpacked, &target)
-            .with_context(|| format!("Couldn't move js-debug into {}", dir.display()))?;
-        js_debug_script(&target).context("js-debug went missing")
-    })();
-    let _ = std::fs::remove_dir_all(&staging);
-    result
-}
-
-/// Run `command`, failing with what it printed to stderr.
-fn run(command: &mut Command) -> Result<()> {
-    let output = command
+/// LLDB commands that load Rust's pretty-printers, so a `Vec` or `String`
+/// shows its contents. Empty when there's no Rust toolchain.
+fn rust_init_commands(cwd: &Path) -> Vec<String> {
+    let Some(sysroot) = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .current_dir(cwd)
+        .env("PATH", crate::lsp::search_path())
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .output()
-        .context("Couldn't run it")?;
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+    else {
+        return Vec::new();
+    };
+    // Recent toolchains register everything from `lldb_lookup.py`; older
+    // ones also have a commands file to source.
+    let etc = sysroot.join("lib/rustlib/etc");
+    let lookup = etc.join("lldb_lookup.py");
+    if !lookup.is_file() {
+        return Vec::new();
     }
-    Ok(())
+    let mut commands = vec![format!("command script import \"{}\"", lookup.display())];
+    let extra = etc.join("lldb_commands");
+    if extra.is_file() {
+        commands.push(format!("command source -s 0 \"{}\"", extra.display()));
+    }
+    commands
 }
 
 fn program_on_path(name: &str) -> Option<PathBuf> {
@@ -326,20 +749,14 @@ fn program_on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
-        _ => PathBuf::from(path),
-    }
-}
-
 /// `path` with the home folder as `~`, as people write it.
-fn home_relative(path: &str) -> String {
+fn home_relative(path: &Path) -> String {
+    let path = path.display().to_string();
     match std::env::var("HOME") {
         Ok(home) if !home.is_empty() && path.starts_with(&home) => {
             format!("~{}", &path[home.len()..])
         }
-        _ => path.to_string(),
+        _ => path,
     }
 }
 
@@ -350,83 +767,160 @@ mod tests {
     use super::*;
 
     #[test]
-    fn js_debug_is_found_from_any_of_its_folders() {
+    fn the_built_ins_parse_and_cover_five_languages() {
+        let registry = load(None);
+        assert!(registry.error.is_none());
+        let keys: Vec<&str> = registry.debuggers.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, ["rust", "typescript", "python", "go", "java"]);
+        assert_eq!(
+            registry.get("java").unwrap().lsp(),
+            Some(("jdtls", "vscode.java.startDebugSession"))
+        );
+        assert_eq!(registry.for_language("tsx").unwrap().key, "typescript");
+        assert!(registry.for_language("toml").is_none());
+    }
+
+    #[test]
+    fn the_users_file_replaces_and_adds() {
         let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("js-debug/src/dapDebugServer.js");
-        fs::create_dir_all(script.parent().unwrap()).unwrap();
-        fs::write(&script, "").unwrap();
-        for given in [
-            dir.path().to_path_buf(),
-            dir.path().join("js-debug"),
-            script.clone(),
-        ] {
-            assert_eq!(js_debug_script(&given), Some(script.clone()), "{given:?}");
+        let path = dir.path().join("debuggers.toml");
+        fs::write(
+            &path,
+            r#"
+[[debugger]]
+key = "python"
+name = "My Python"
+adapter = ["mypy-dap"]
+[debugger.launch]
+request = "launch"
+
+[[debugger]]
+key = "ruby"
+name = "Ruby"
+languages = ["ruby"]
+server = ["rdbg", "--port", "${port}"]
+[debugger.launch]
+request = "launch"
+"#,
+        )
+        .unwrap();
+        let registry = load(Some(&path));
+        assert!(registry.error.is_none(), "{:?}", registry.error);
+        assert_eq!(registry.get("python").unwrap().name, "My Python");
+        assert_eq!(registry.get("ruby").unwrap().adapter_id(), "ruby");
+        assert_eq!(registry.debuggers.len(), 6);
+
+        fs::write(
+            &path,
+            "[[debugger]]\nkey = \"x\"\nname = \"X\"\n[debugger.launch]\n",
+        )
+        .unwrap();
+        let broken = load(Some(&path));
+        assert!(broken.error.unwrap().contains("adapter"));
+        assert_eq!(broken.debuggers.len(), 5, "the built-ins stay");
+    }
+
+    #[test]
+    fn variables_fill_in_text_and_keep_their_type_when_whole() {
+        let mut vars = Vars::new(Path::new("/p"));
+        vars.set("program", json!("/p/app.py"))
+            .set("args", json!(["-v", "two words"]))
+            .set("env", json!({"PORT": "8080"}));
+        let template = json!({
+            "program": "${program}",
+            "args": "${args}",
+            "env": "${env}",
+            "title": "debugging ${program} now",
+            "nested": ["${program}", {"a": "${args}"}],
+            "plain": 3,
+        });
+        assert_eq!(
+            vars.expand(&template).unwrap(),
+            json!({
+                "program": "/p/app.py",
+                "args": ["-v", "two words"],
+                "env": {"PORT": "8080"},
+                "title": "debugging /p/app.py now",
+                "nested": ["/p/app.py", {"a": ["-v", "two words"]}],
+                "plain": 3,
+            })
+        );
+        assert!(
+            vars.expand(&json!("${nonsense}"))
+                .unwrap_err()
+                .contains("${nonsense}")
+        );
+    }
+
+    #[test]
+    fn bundles_match_by_file_name() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["plugin-0.53.1.jar", "plugin-0.52.0.jar", "other.jar"] {
+            fs::write(dir.path().join(name), "").unwrap();
         }
-        assert_eq!(js_debug_script(&dir.path().join("elsewhere")), None);
-    }
-
-    #[test]
-    fn a_given_path_that_is_wrong_says_so() {
+        let pattern = format!("{}/plugin-*.jar", dir.path().display());
         assert_eq!(
-            find(Kind::Lldb, Some("/nowhere/lldb-dap")),
-            Err("Nothing at /nowhere/lldb-dap.".into())
+            glob(&pattern),
+            [
+                dir.path().join("plugin-0.52.0.jar"),
+                dir.path().join("plugin-0.53.1.jar")
+            ]
         );
-        assert_eq!(
-            find(Kind::JsDebug, Some("/nowhere")),
-            Err("No js-debug at /nowhere.".into())
-        );
+        assert!(glob(&format!("{}/missing-*.jar", dir.path().display())).is_empty());
     }
 
     #[test]
-    fn languages_map_to_their_debugger() {
-        assert_eq!(for_language("tsx").map(|d| d.kind), Some(Kind::JsDebug));
-        assert_eq!(for_language("rust").map(|d| d.kind), Some(Kind::Lldb));
-        assert!(for_language("toml").is_none());
+    fn help_follows_the_system() {
+        let rust = load(None).get("rust").unwrap();
+        let expected = if cfg!(target_os = "macos") {
+            "xcode-select"
+        } else {
+            "package manager"
+        };
+        assert!(rust.help().contains(expected), "{}", rust.help());
     }
 
     #[test]
-    fn installs_js_debug_from_its_archive_and_keeps_the_old_copy_on_failure() {
+    fn install_runs_the_command_in_the_debuggers_folder() {
         let dir = tempfile::tempdir().unwrap();
-        // An archive laid out like js-debug-dap's.
-        let source = dir.path().join("source");
-        fs::create_dir_all(source.join("js-debug/src")).unwrap();
-        fs::write(source.join("js-debug/src/dapDebugServer.js"), "// new").unwrap();
-        let archive = dir.path().join("js-debug.tar.gz");
-        let packed = Command::new("tar")
-            .arg("-czf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&source)
-            .arg("js-debug")
-            .status()
-            .unwrap();
-        assert!(packed.success());
-        let debuggers = dir.path().join("debuggers");
-        fs::create_dir_all(debuggers.join("js-debug/src")).unwrap();
-        fs::write(debuggers.join("js-debug/src/dapDebugServer.js"), "// old").unwrap();
+        let mut debugger = load(None).get("go").unwrap().as_ref().clone();
+        debugger.install =
+            Some(r#"mkdir -p "${debuggers}/bin" && touch "${debuggers}/bin/made""#.into());
+        install_into(&debugger, dir.path()).unwrap();
+        assert!(dir.path().join("bin/made").is_file());
 
-        let missing = format!("file://{}", dir.path().join("missing.tar.gz").display());
-        assert!(install_js_debug_from(&missing, &debuggers).is_err());
-        let script = debuggers.join("js-debug/src/dapDebugServer.js");
-        assert_eq!(fs::read_to_string(&script).unwrap(), "// old");
-
-        let url = format!("file://{}", archive.display());
-        assert_eq!(install_js_debug_from(&url, &debuggers).unwrap(), script);
-        assert_eq!(fs::read_to_string(&script).unwrap(), "// new");
-        assert!(!debuggers.join(".js-debug-download").exists());
+        debugger.install = Some("echo nope >&2; exit 3".into());
+        let error = install_into(&debugger, dir.path()).unwrap_err().to_string();
+        assert!(error.contains("nope"), "{error}");
     }
 
-    /// Downloads the real js-debug release into a temporary folder.
+    /// Runs every built-in install command into a temporary folder, as
+    /// Settings' Install button would. Downloads js-debug, debugpy, Delve,
+    /// java-debug and, unless it's installed, jdtls; Go's module cache goes
+    /// to the temporary folder too.
     #[test]
     #[ignore]
-    fn install_js_debug_live() {
+    fn built_in_installers_live() {
         let dir = tempfile::tempdir().unwrap();
-        let url = format!(
-            "https://github.com/microsoft/vscode-js-debug/releases/download/\
-             v{JS_DEBUG_VERSION}/js-debug-dap-v{JS_DEBUG_VERSION}.tar.gz"
-        );
-        let script = install_js_debug_from(&url, dir.path()).unwrap();
-        assert!(script.ends_with("js-debug/src/dapDebugServer.js"));
-        assert!(script.is_file());
+        // SAFETY: run on its own; nothing else reads these meanwhile.
+        unsafe {
+            std::env::set_var("GOPATH", dir.path().join("gopath"));
+            std::env::set_var("GOFLAGS", "-modcacherw");
+        }
+        let debuggers = dir.path().join("debuggers");
+        let registry = load(None);
+        for (key, made) in [
+            ("typescript", "js-debug/src/dapDebugServer.js"),
+            ("python", "debugpy/debugpy/__init__.py"),
+            ("go", "bin/dlv"),
+            (
+                "java",
+                "java-debug/com.microsoft.java.debug.plugin-0.53.1.jar",
+            ),
+        ] {
+            install_into(&registry.get(key).unwrap(), &debuggers)
+                .unwrap_or_else(|e| panic!("{key}: {e:#}"));
+            assert!(debuggers.join(made).is_file(), "{key} made no {made}");
+        }
     }
 }

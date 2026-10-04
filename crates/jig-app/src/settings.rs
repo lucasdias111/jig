@@ -164,13 +164,12 @@ impl LanguageSettings {
     }
 }
 
-/// Which debuggers are on, by key (`rust`, `typescript`), and where to find
-/// their adapters when Jig doesn't on its own.
+/// Which debuggers are on, by key (`rust`, `typescript`, or one of the
+/// user's in `debuggers.toml`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DebugSettings {
     pub enabled: Vec<String>,
-    pub paths: BTreeMap<String, String>,
 }
 
 impl Default for DebugSettings {
@@ -178,7 +177,6 @@ impl Default for DebugSettings {
     fn default() -> Self {
         Self {
             enabled: vec!["rust".into()],
-            paths: BTreeMap::new(),
         }
     }
 }
@@ -192,20 +190,6 @@ impl DebugSettings {
         self.enabled.retain(|other| other != key);
         if on {
             self.enabled.push(key.to_string());
-        }
-    }
-
-    pub fn path(&self, key: &str) -> Option<&str> {
-        self.paths.get(key).map(String::as_str)
-    }
-
-    /// An empty path clears it, so Jig looks on its own again.
-    pub fn set_path(&mut self, key: &str, path: &str) {
-        let path = path.trim();
-        if path.is_empty() {
-            self.paths.remove(key);
-        } else {
-            self.paths.insert(key.to_string(), path.to_string());
         }
     }
 }

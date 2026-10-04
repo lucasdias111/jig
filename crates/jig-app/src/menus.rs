@@ -6,10 +6,10 @@ use gpui_kit::*;
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, EditAgentsFile,
-    EditCommands, EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile, NewFile, NextTab,
-    Open, OpenCommand, PreviousTab, Quit, Resume, RunSelected, Save, SaveAs, StepInto, StepOut,
-    StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleRunPanel,
-    ToggleSidebar,
+    EditCommands, EditDebuggers, EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile,
+    NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, Resume, RunSelected, Save, SaveAs,
+    StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel,
+    ToggleRunPanel, ToggleSidebar,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -116,6 +116,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Step Out", StepOut),
                 MenuItem::separator(),
                 MenuItem::action("Edit Configurations", EditRunConfigurations),
+                MenuItem::action("Edit Debuggers", EditDebuggers),
             ],
         ),
         menu(

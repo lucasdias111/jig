@@ -156,25 +156,50 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     if let Some(client) = registry.clients.get(&key) {
         return (!client.is_dead()).then(|| client.clone());
     }
-    // Tests use fake servers, never what happens to be installed.
-    if cfg!(test) {
+    // Tests use fake servers, never what happens to be installed, unless
+    // a live test asks for the real ones.
+    if cfg!(test) && std::env::var_os("JIG_LIVE_LSP").is_none() {
         return None;
     }
     // One that isn't installed is kept too, dead, so it isn't looked for
     // again.
     let command_root = root.clone();
-    let client = Client::start(server.name, root, move || {
+    let init_options = init_options(server);
+    let client = Client::start(server.name, root, init_options, move || {
         command_for(server, &command_root)
     });
     registry.clients.insert(key, client.clone());
     (!client.is_dead()).then_some(client)
 }
 
+/// Whether `server`, by name, is installed.
+pub fn is_installed(server: &str) -> bool {
+    SERVERS
+        .iter()
+        .find(|s| s.name == server)
+        .is_some_and(|s| command_for(s, Path::new("/")).is_some())
+}
+
+/// What `server` is told in `initialize`: for jdtls, the plugins debuggers
+/// ask it to load, such as java-debug.
+fn init_options(server: &Server) -> serde_json::Value {
+    let bundles = crate::debuggers::lsp_bundles(server.name);
+    if bundles.is_empty() {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({"bundles": bundles})
+}
+
 /// The command to run `server` with, if one of its commands is installed.
 fn command_for(server: &Server, root: &Path) -> Option<Command> {
     let path = search_path();
     server.commands.iter().find_map(|argv| {
-        let program = find_program(argv[0], path)?;
+        // Debuggers' installers may have put it with them.
+        let program = find_program(argv[0], path).or_else(|| {
+            crate::debuggers::debuggers_dir()
+                .map(|dir| dir.join("bin").join(argv[0]))
+                .filter(|program| program.is_file())
+        })?;
         let mut command = Command::new(program);
         command.args(&argv[1..]).env("PATH", path);
         if server.name == "jdtls" {
@@ -201,6 +226,10 @@ fn cache_dir() -> PathBuf {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
+    // Live tests keep their indexes out of the real caches.
+    if let Some(dir) = var("JIG_CACHE_DIR") {
+        return dir;
+    }
     let dir = if cfg!(target_os = "macos") {
         var("HOME").map(|home| home.join("Library/Caches"))
     } else if cfg!(windows) {
@@ -495,9 +524,12 @@ mod tests {
 
         let server = server_for("rust").unwrap();
         let command_root = root.clone();
-        let client = Client::start(server.name, root.clone(), move || {
-            command_for(server, &command_root)
-        });
+        let client = Client::start(
+            server.name,
+            root.clone(),
+            serde_json::Value::Null,
+            move || command_for(server, &command_root),
+        );
         let lib_uri = file_uri(&root.join("src/lib.rs"));
         client.open(&lib_uri, "rust", lib);
         let call = lib.find("helper").unwrap();

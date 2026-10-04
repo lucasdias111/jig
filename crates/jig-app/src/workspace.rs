@@ -66,6 +66,7 @@ actions!(
         StopRun,
         ToggleRunPanel,
         EditRunConfigurations,
+        EditDebuggers,
         DebugSelected,
         ToggleBreakpoint,
         Resume,
@@ -565,6 +566,7 @@ impl Render for Workspace {
         let sidebar = self.render_sidebar(cx);
         let sidebar_top = self.render_sidebar_top(cx);
         let title = self.render_title(cx);
+        let tab_bar = self.render_tab_bar(cx);
         let root = v_flex();
         self.run_panel_drag_handlers(self.sidebar_drag_handlers(root, cx), cx)
             .key_context(CONTEXT)
@@ -596,6 +598,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::stop_run))
             .on_action(cx.listener(Self::toggle_run_panel))
             .on_action(cx.listener(Self::edit_run_configurations))
+            .on_action(cx.listener(Self::edit_debuggers))
             .on_action(cx.listener(Self::debug_selected))
             .on_action(cx.listener(Self::toggle_breakpoint))
             .on_action(cx.listener(Self::resume))
@@ -614,7 +617,8 @@ impl Render for Workspace {
             .on_drag_move(cx.listener(Self::resize_agent_chat))
             .child(
                 // One unified bar across the window: the sidebar's top runs
-                // up under the traffic lights, the rest holds the title or tabs.
+                // up under the traffic lights, the rest holds the title and the
+                // git, command and run controls. The tabs sit in a row below.
                 TitleBar::new()
                     .h(px(TITLE_BAR_HEIGHT))
                     .pl_0()
@@ -652,6 +656,7 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .bg(theme::editor_surface(cx))
+                            .children(tab_bar)
                             .when(self.home, |this| {
                                 this.child(div().flex_1().min_h_0().child(self.render_start(cx)))
                             })
@@ -2441,6 +2446,27 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_file_from_elsewhere_keeps_the_project(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("debuggers.toml"), "").unwrap();
+        let root = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).project_root(cx));
+        let project = Some(dir.path().canonicalize().unwrap());
+
+        open_file(
+            cx,
+            window,
+            &workspace,
+            &elsewhere.path().join("debuggers.toml"),
+        );
+        assert_eq!(active_title(cx, &workspace), "debuggers.toml");
+        assert_eq!(root(cx), project);
+
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        assert_eq!(root(cx), project);
+    }
+
+    #[gpui_kit::test]
     fn closing_tabs(cx: &mut TestAppContext) {
         let (dir, window, workspace) = three_files(cx);
         open_file(cx, window, &workspace, &dir.path().join("b.rs"));
@@ -3625,29 +3651,35 @@ env = { GREETING = "there" }
         assert!(cx.update(|cx| workspace.read(cx).run_output()).is_none());
     }
 
-    /// Debugs a TypeScript file on Node with the real js-debug, through its
-    /// child session: stops at a breakpoint, reads a variable, resumes.
-    /// Needs Node 23.6+ and js-debug, unpacked where `JIG_JS_DEBUG` says.
-    #[gpui_kit::test]
-    #[ignore]
-    fn debug_typescript_live(cx: &mut TestAppContext) {
-        let js_debug = std::env::var("JIG_JS_DEBUG").expect("JIG_JS_DEBUG: where js-debug is");
+    /// Debugs `source` in a fresh project with a real debugger, found in
+    /// `JIG_DEBUGGERS_DIR`: run `command` under ⌃D with a breakpoint on
+    /// `line` (0-based), check `variable` shows `value`, resume, and check
+    /// the program printed `printed`.
+    #[allow(clippy::too_many_arguments)]
+    fn debug_project_live(
+        cx: &mut TestAppContext,
+        debugger: &'static str,
+        files: &[(&str, &str)],
+        source: &str,
+        command: &str,
+        line: u32,
+        variable: &str,
+        value: &str,
+        printed: &str,
+    ) {
+        assert!(
+            std::env::var_os("JIG_DEBUGGERS_DIR").is_some(),
+            "JIG_DEBUGGERS_DIR: where the debuggers are installed"
+        );
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join(".jig")).unwrap();
-        let source = root.join("main.ts");
-        std::fs::write(
-            &source,
-            "function total(numbers: number[]): number {\n  return numbers.reduce((a, b) => a + b, 0);\n}\nconst numbers: number[] = [1, 2, 3];\nconst sum: number = total(numbers);\nconsole.log(`total ${sum}`);\n",
-        )
-        .unwrap();
-        // `JIG_TS_COMMAND="npm start"` tries the way package.json scripts run.
-        let command = std::env::var("JIG_TS_COMMAND").unwrap_or_else(|_| "node main.ts".into());
-        std::fs::write(
-            root.join("package.json"),
-            r#"{"name": "sample", "scripts": {"start": "node main.ts"}}"#,
-        )
-        .unwrap();
+        for (name, text) in files {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let source = root.join(source);
         std::fs::write(
             root.join(".jig/run.toml"),
             format!("[[run]]\nname = \"App\"\ncommand = \"{command}\"\n"),
@@ -3655,19 +3687,22 @@ env = { GREETING = "there" }
         .unwrap();
         let (window, workspace) = open(cx, &root);
         step(cx, window, move |_, cx| {
-            crate::settings::update(cx, |s| {
-                s.debugging.set_enabled("typescript", true);
-                s.debugging.set_path("typescript", &js_debug);
-            })
+            crate::settings::update(cx, |s| s.debugging.set_enabled(debugger, true))
         });
         open_file(cx, window, &workspace, &source);
         let ws = workspace.clone();
         step(cx, window, move |window, cx| {
             window.render_frame(cx);
             ws.update(cx, |this, cx| {
+                let text = this.editor().text(cx);
+                let offset: usize = text
+                    .split_inclusive('\n')
+                    .take(line as usize)
+                    .map(str::len)
+                    .sum();
                 this.editor()
                     .state()
-                    .update(cx, |s, cx| s.set_selected_range(50..50, cx))
+                    .update(cx, |s, cx| s.set_selected_range(offset..offset, cx))
             });
             window.press("secondary-f8", cx);
         });
@@ -3690,17 +3725,24 @@ env = { GREETING = "there" }
                 .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
         });
         step(cx, window, |window, cx| window.press("enter", cx));
+        let variable = variable.to_string();
         wait(cx, &|this, _| {
             this.debug_variable_rows()
                 .iter()
-                .any(|(_, name, _)| name == "numbers")
+                .any(|(_, name, _)| *name == variable)
         });
         cx.update(|cx| {
             let this = workspace.read(cx);
-            assert_eq!(this.execution_line(cx), Some((source.clone(), 1)));
+            assert_eq!(this.execution_line(cx), Some((source.clone(), line)));
             let rows = this.debug_variable_rows();
             eprintln!("{rows:#?}");
-            assert!(rows.contains(&(1, "numbers".into(), "(3) [1, 2, 3]".into())));
+            // Some values carry an id that changes, as Java's `int[3]@8`.
+            assert!(
+                rows.iter().any(|(depth, name, shown)| {
+                    *depth == 1 && *name == variable && shown.starts_with(value)
+                }),
+                "{rows:#?}"
+            );
         });
         step(cx, window, |window, cx| window.press("f9", cx));
         wait(cx, &|this, _| {
@@ -3710,7 +3752,111 @@ env = { GREETING = "there" }
         let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
         let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
         eprintln!("{texts:#?}");
-        assert!(texts.contains(&"total 6".to_string()));
+        assert!(texts.contains(&printed.to_string()), "{texts:#?}");
+    }
+
+    /// TypeScript on Node with js-debug, through its child session. Needs
+    /// Node 23.6+. `JIG_TS_COMMAND="npm start"` tries the way package.json
+    /// scripts run.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_typescript_live(cx: &mut TestAppContext) {
+        let command = std::env::var("JIG_TS_COMMAND").unwrap_or_else(|_| "node main.ts".into());
+        debug_project_live(
+            cx,
+            "typescript",
+            &[
+                (
+                    "main.ts",
+                    "function total(numbers: number[]): number {\n  return numbers.reduce((a, b) => a + b, 0);\n}\nconst numbers: number[] = [1, 2, 3];\nconst sum: number = total(numbers);\nconsole.log(`total ${sum}`);\n",
+                ),
+                (
+                    "package.json",
+                    r#"{"name": "sample", "scripts": {"start": "node main.ts"}}"#,
+                ),
+            ],
+            "main.ts",
+            &command,
+            1,
+            "numbers",
+            "(3) [1, 2, 3]",
+            "total 6",
+        );
+    }
+
+    /// Python with debugpy.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_python_live(cx: &mut TestAppContext) {
+        debug_project_live(
+            cx,
+            "python",
+            &[(
+                "main.py",
+                "def total(numbers):\n    return sum(numbers)\n\nnumbers = [1, 2, 3]\nresult = total(numbers)\nprint(f\"total {result}\")\n",
+            )],
+            "main.py",
+            "python3 main.py",
+            1,
+            "numbers",
+            "[1, 2, 3]",
+            "total 6",
+        );
+    }
+
+    /// Java with java-debug in jdtls, which finds the main class and builds
+    /// the project itself. Needs a JDK, Maven, and `JIG_LIVE_LSP=1` so the
+    /// real jdtls runs; `JIG_CACHE_DIR` keeps its index elsewhere.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_java_live(cx: &mut TestAppContext) {
+        assert!(
+            std::env::var_os("JIG_LIVE_LSP").is_some(),
+            "JIG_LIVE_LSP=1: Java's debugger lives in jdtls"
+        );
+        debug_project_live(
+            cx,
+            "java",
+            &[
+                (
+                    "pom.xml",
+                    "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>sample</groupId>\n  <artifactId>sample</artifactId>\n  <version>1.0</version>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
+                ),
+                (
+                    "src/main/java/sample/Main.java",
+                    "package sample;\n\npublic class Main {\n    static int total(int[] numbers) {\n        int sum = 0;\n        for (int n : numbers) sum += n;\n        return sum;\n    }\n\n    public static void main(String[] args) {\n        int[] numbers = {1, 2, 3};\n        System.out.println(\"total \" + total(numbers));\n    }\n}\n",
+                ),
+            ],
+            "src/main/java/sample/Main.java",
+            "mvn -q compile exec:java -Dexec.mainClass=sample.Main",
+            4,
+            "numbers",
+            "int[3]",
+            "total 6",
+        );
+    }
+
+    /// Go with Delve, which builds the program itself.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_go_live(cx: &mut TestAppContext) {
+        debug_project_live(
+            cx,
+            "go",
+            &[
+                (
+                    "main.go",
+                    "package main\n\nimport \"fmt\"\n\nfunc total(numbers []int) int {\n\tsum := 0\n\tfor _, n := range numbers {\n\t\tsum += n\n\t}\n\treturn sum\n}\n\nfunc main() {\n\tnumbers := []int{1, 2, 3}\n\tfmt.Printf(\"total %d\\n\", total(numbers))\n}\n",
+                ),
+                ("go.mod", "module sample\n\ngo 1.22\n"),
+            ],
+            "main.go",
+            "go run .",
+            6,
+            "numbers",
+            "[]int len: 3, cap: 3, [1,2,3]",
+            "total 6",
+        );
     }
 
     /// A repository with `a.rs` committed as three lines, open in a window.

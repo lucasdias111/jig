@@ -11,6 +11,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, mpsc};
@@ -19,6 +21,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
+
+use crate::debuggers::AdapterCommand;
 
 /// Where a client's messages go: `(connection id, message)`.
 pub type Inbox = UnboundedSender<(usize, Message)>;
@@ -46,6 +50,8 @@ pub enum Message {
         seq: i64,
         configuration: Value,
     },
+    /// The adapter couldn't be reached, and why.
+    Failed(String),
     /// The adapter exited or hung up.
     Closed,
 }
@@ -57,15 +63,18 @@ pub struct Client {
 }
 
 impl Client {
-    /// Start the adapter at `program`, talking over its stdin and stdout.
-    pub fn start(id: usize, program: &Path, inbox: Inbox) -> Result<Self> {
-        let mut child = Command::new(program)
+    /// Start `adapter` in `cwd`, talking over its stdin and stdout.
+    pub fn start(id: usize, adapter: &AdapterCommand, cwd: &Path, inbox: Inbox) -> Result<Self> {
+        let mut child = Command::new(&adapter.program)
+            .args(&adapter.args)
+            .current_dir(cwd)
             .env("PATH", crate::lsp::search_path())
+            .envs(adapter.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .with_context(|| format!("Couldn't start {}", program.display()))?;
+            .with_context(|| format!("Couldn't start {}", adapter.program.display()))?;
         let stdin = child.stdin.take().context("no stdin")?;
         let stdout = child.stdout.take().context("no stdout")?;
         let client = Self::connect(id, stdout, stdin, inbox);
@@ -76,9 +85,32 @@ impl Client {
     /// Connect to an adapter server on `port`, retrying while it starts.
     /// Requests sent meanwhile wait, so the caller can carry on at once.
     pub fn connect_tcp(id: usize, port: u16, inbox: Inbox) -> Self {
+        let (port_tx, port_rx) = mpsc::channel();
+        let _ = port_tx.send(Ok(port));
+        Self::connect_when(id, port_rx, inbox)
+    }
+
+    /// Connect once `port` says where, as when a language server starts
+    /// the adapter; an error there ends the session with it.
+    pub fn connect_when(
+        id: usize,
+        port: mpsc::Receiver<Result<u16, String>>,
+        inbox: Inbox,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let replies = tx.clone();
         std::thread::spawn(move || {
+            let port = match port.recv() {
+                Ok(Ok(port)) => port,
+                Ok(Err(why)) => {
+                    let _ = inbox.unbounded_send((id, Message::Failed(why)));
+                    return;
+                }
+                Err(_) => {
+                    let _ = inbox.unbounded_send((id, Message::Closed));
+                    return;
+                }
+            };
             let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             let started = Instant::now();
             let stream = loop {
@@ -159,27 +191,26 @@ impl Drop for Client {
     }
 }
 
-/// An adapter that serves DAP on a TCP port, such as js-debug's
-/// `dapDebugServer.js`. Dropping it stops it.
+/// An adapter that serves DAP on a TCP port, such as js-debug or Delve.
+/// Dropping it stops it.
 pub struct Server {
     child: Option<Child>,
     pub port: u16,
 }
 
 impl Server {
-    /// Run `program args… <port> 127.0.0.1` on a free port.
-    pub fn start(program: &Path, args: &[&Path]) -> Result<Self> {
-        let port = free_port()?;
-        let child = Command::new(program)
-            .args(args)
-            .arg(port.to_string())
-            .arg("127.0.0.1")
+    /// Start `adapter`, whose arguments already name `port`, in `cwd`.
+    pub fn start(adapter: &AdapterCommand, cwd: &Path, port: u16) -> Result<Self> {
+        let child = Command::new(&adapter.program)
+            .args(&adapter.args)
+            .current_dir(cwd)
             .env("PATH", crate::lsp::search_path())
+            .envs(adapter.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .with_context(|| format!("Couldn't start {}", program.display()))?;
+            .with_context(|| format!("Couldn't start {}", adapter.program.display()))?;
         Ok(Self {
             child: Some(child),
             port,
@@ -202,7 +233,7 @@ fn kill(mut child: Child) {
 }
 
 /// A port nothing listens on just now.
-fn free_port() -> Result<u16> {
+pub fn free_port() -> Result<u16> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("No free port")?;
     Ok(listener.local_addr()?.port())
 }
@@ -376,9 +407,15 @@ mod tests {
             .unwrap();
         assert!(built.success());
 
-        let adapter = crate::debuggers::lldb_dap().expect("lldb-dap");
+        let adapter = AdapterCommand {
+            program: crate::debuggers::lldb_dap().expect("lldb-dap"),
+            args: Vec::new(),
+            env: Vec::new(),
+            server: false,
+            shown: PathBuf::new(),
+        };
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        let client = Client::start(0, &adapter, tx).unwrap();
+        let client = Client::start(0, &adapter, dir.path(), tx).unwrap();
         let mut rx = futures::executor::block_on_stream(rx).map(|(_, message)| message);
         let mut log = Vec::new();
         let mut next = |log: &mut Vec<String>| {
@@ -405,17 +442,18 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             env: Vec::new(),
             source: crate::run_configs::Source::File,
-            debug: None,
-        };
-        let launch = client.request(
-            "launch",
-            crate::debug_target::DebugTarget::Program {
-                build: None,
+            debug: Some(crate::run_configs::DebugProgram {
                 program: program.clone(),
                 args: Vec::new(),
-            }
-            .launch_arguments(&config, &program),
-        );
+                build: None,
+            }),
+            debugger: None,
+        };
+        let arguments = crate::debug_target::plan_for(&config, &crate::debuggers::registry())
+            .unwrap()
+            .launch_arguments(&config, dir.path(), None, &[])
+            .unwrap();
+        let launch = client.request("launch", arguments);
         let mut stopped_thread = None;
         while stopped_thread.is_none() {
             match next(&mut log) {

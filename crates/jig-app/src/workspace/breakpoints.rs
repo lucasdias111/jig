@@ -123,8 +123,9 @@ impl Workspace {
     /// Whether `document`'s language has its debugger turned on.
     fn takes_breakpoints(&self, document: &Document) -> bool {
         let language = document.language(&self.settings.languages);
-        crate::debuggers::for_language(language)
-            .is_some_and(|debugger| self.settings.debugging.is_enabled(debugger.key))
+        crate::debuggers::registry()
+            .for_language(language)
+            .is_some_and(|debugger| self.settings.debugging.is_enabled(&debugger.key))
     }
 
     fn remembered_decorations(
@@ -262,18 +263,17 @@ impl Workspace {
             .collect()
     }
 
-    /// Every breakpoint in files `kind` debugs.
-    pub(super) fn breakpoints_for(
-        &mut self,
-        kind: crate::debuggers::Kind,
-        cx: &App,
-    ) -> Vec<(PathBuf, Vec<u32>)> {
+    /// Every breakpoint in files the debugger `key` debugs.
+    pub(super) fn breakpoints_for(&mut self, key: &str, cx: &App) -> Vec<(PathBuf, Vec<u32>)> {
         let languages = self.settings.languages.clone();
+        let registry = crate::debuggers::registry();
         self.all_breakpoints(cx)
             .into_iter()
             .filter(|(path, _)| {
                 let language = crate::languages::language_for(path, &languages);
-                crate::debuggers::for_language(language).map(|d| d.kind) == Some(kind)
+                registry
+                    .for_language(language)
+                    .is_some_and(|debugger| debugger.key == key)
             })
             .collect()
     }

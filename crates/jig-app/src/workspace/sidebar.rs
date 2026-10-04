@@ -30,8 +30,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Highlight `file` in the tree. A file outside the current project
-    /// switches the tree to that file's project.
+    /// Highlight `file` in the tree. The first file opened picks the project;
+    /// after that the tree stays put, and a file from elsewhere (a settings
+    /// file, say) just leaves nothing highlighted.
     pub(super) fn show_in_tree(
         &mut self,
         file: &Path,
@@ -39,16 +40,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let file = canonical(file);
-        let inside = self
-            .tree
-            .as_ref()
-            .is_some_and(|tree| file.starts_with(tree.view.read(cx).root()));
-        if !inside {
+        if self.tree.is_none() {
             self.set_tree_root(&crate::project::root_for(&file), window, cx);
         }
         if let Some(tree) = &self.tree {
-            tree.view
-                .update(cx, |tree, cx| tree.set_active(Some(&file), cx));
+            tree.view.update(cx, |tree, cx| {
+                let inside = file.starts_with(tree.root());
+                tree.set_active(inside.then_some(file.as_path()), cx)
+            });
         }
     }
 
