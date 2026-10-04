@@ -63,6 +63,7 @@ impl Workspace {
             view,
             _events: events,
         });
+        self.refresh_git(cx);
     }
 
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {

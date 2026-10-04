@@ -139,8 +139,7 @@ pub fn from_server(
                 }
             }
             let item = CompletionItem {
-                // The editor highlights this much of the label; only what
-                // was typed should be.
+                // Set by `merge` to what the menu should highlight.
                 filter_text: None,
                 text_edit: None,
                 insert_text: None,
@@ -296,7 +295,22 @@ pub fn merge(
     let rest: Vec<Completion> = rest.into_iter().filter(|c| !shadowed(c)).collect();
     let mut all: Vec<Completion> = exact.into_iter().chain(rest).chain(other).collect();
     all.truncate(MAX_ITEMS);
+    for completion in &mut all {
+        completion.item.filter_text = Some(highlighted(&completion.item.label, typed).into());
+    }
     all
+}
+
+/// How much of `label` the menu highlights: as much as was typed, ending on
+/// a whole character. Without it the menu highlights from where the
+/// completion starts, which can be before a dot and end inside a label's
+/// `…`, and drawing that aborts.
+fn highlighted<'a>(label: &'a str, typed: &str) -> &'a str {
+    let mut end = typed.len().min(label.len());
+    while !label.is_char_boundary(end) {
+        end -= 1;
+    }
+    &label[..end]
 }
 
 /// The indentation of the line `offset` is on.
@@ -535,5 +549,26 @@ mod tests {
             request_context("v.pu", 4, &triggers),
             json!({"triggerKind": 1})
         );
+    }
+
+    #[test]
+    fn the_highlight_never_ends_inside_a_character() {
+        assert_eq!(highlighted("push(…)", "pu"), "pu");
+        assert_eq!(highlighted("push(…)", "push(x"), "push(");
+        assert_eq!(highlighted("len", "length"), "len");
+
+        let text = "fn f(v: Vec<u8>) { v.pu }";
+        let offset = text.find(" }").unwrap();
+        let rest = vec![Completion {
+            item: CompletionItem {
+                label: "push(…)".into(),
+                ..Default::default()
+            },
+            replace: offset - 2..offset,
+            new_text: "push()".into(),
+            stops: Vec::new(),
+        }];
+        let found = merge(text, offset, Vec::new(), rest);
+        assert_eq!(found[0].item.filter_text.as_deref(), Some("pu"));
     }
 }

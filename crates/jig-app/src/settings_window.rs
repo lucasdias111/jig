@@ -1,6 +1,7 @@
 //! The Settings window (⌘,): Appearance, Colors, Languages, Commands and
 //! Model.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -18,6 +19,7 @@ use gpui_kit::*;
 use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named};
 use jig_commands::{Preset, presets};
 
+use crate::debuggers::{self, Debugger};
 use crate::languages::{self, Language};
 use crate::providers::{self, ModelList};
 use crate::settings::{
@@ -181,6 +183,8 @@ pub struct SettingsWindow {
     /// A masked key field per provider that takes a key, in `TEMPLATES`
     /// order. A key is saved as it's typed and never read back in.
     key_inputs: Vec<(&'static ProviderTemplate, Entity<InputState>)>,
+    /// From Install, per debugger key.
+    installs: HashMap<&'static str, Fetch<()>>,
     /// From Test: how long the quick model took to answer.
     check: Option<Fetch<SharedString>>,
     /// Why the last change to the providers didn't work.
@@ -252,6 +256,7 @@ impl SettingsWindow {
             built_in_commands: Vec::new(),
             commands_error: None,
             key_inputs,
+            installs: HashMap::new(),
             check: None,
             providers_error: None,
             color_pickers,
@@ -525,7 +530,8 @@ impl SettingsWindow {
             )
     }
 
-    fn languages_page(&self) -> SettingPage {
+    fn languages_page(&self, cx: &Context<Self>) -> SettingPage {
+        let debugging = settings::get(cx).debugging;
         let highlight_item = |language: &'static Language| {
             SettingItem::new(
                 language.label,
@@ -563,6 +569,47 @@ impl SettingsWindow {
             .keywords([language.name])
         };
 
+        let debug_item = |debugger: &'static Debugger| {
+            let status = debuggers::status(debugger, debugging.path(debugger.key));
+            SettingItem::new(
+                debugger.label,
+                SettingField::switch(
+                    |cx| settings::get(cx).debugging.is_enabled(debugger.key),
+                    |on, cx| settings::update(cx, |s| s.debugging.set_enabled(debugger.key, on)),
+                )
+                .default_value(debugger.key == "rust"),
+            )
+            .description(status)
+            .keywords(["debug", "debugger", "breakpoint", debugger.key])
+        };
+        let debug_items = |debugger: &'static Debugger| {
+            let mut items = vec![debug_item(debugger)];
+            if debugger.installable() {
+                items.push(self.install_item(debugger, cx));
+            }
+            items
+        };
+        let debug_path_item = |debugger: &'static Debugger| {
+            SettingItem::new(
+                format!("{} debugger", debugger.label),
+                SettingField::input(
+                    |cx| {
+                        settings::get(cx)
+                            .debugging
+                            .path(debugger.key)
+                            .unwrap_or_default()
+                            .to_string()
+                            .into()
+                    },
+                    |text: SharedString, cx| {
+                        settings::update(cx, |s| s.debugging.set_path(debugger.key, &text))
+                    },
+                )
+                .default_value(SharedString::default()),
+            )
+            .keywords(["debug", "debugger", "path", debugger.key])
+        };
+
         SettingPage::new("Languages")
             .icon(Icon::default().data(CODE))
             .group(
@@ -579,6 +626,24 @@ impl SettingsWindow {
                          Where two languages share one, the higher wins.",
                     )
                     .items(languages::BUNDLED.iter().map(extensions_item)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Debugging")
+                    .description(
+                        "Languages turned on take breakpoints and debug with ⌃D. Each \
+                         says where Jig found its debugger, or how to get it.",
+                    )
+                    .items(debuggers::ALL.iter().flat_map(debug_items)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Debugger locations")
+                    .description(
+                        "Only needed when Jig doesn't find a debugger on its own: the \
+                         lldb-dap program, or the folder js-debug was unpacked into.",
+                    )
+                    .items(debuggers::ALL.iter().map(debug_path_item)),
             )
     }
 
@@ -894,6 +959,102 @@ impl SettingsWindow {
         }
         group
     }
+
+    /// Install (or reinstall) a debugger Jig can download, and how that went.
+    fn install_item(&self, debugger: &'static Debugger, cx: &Context<Self>) -> SettingItem {
+        let this = cx.entity().downgrade();
+        let fetch = self.installs.get(debugger.key);
+        let installing = matches!(fetch, Some(Fetch::Running));
+        let installed = debuggers::debuggers_dir().is_some_and(|dir| dir.join("js-debug").is_dir());
+        let report = fetch.map(|fetch| match fetch {
+            Fetch::Running => (
+                SharedString::from(format!(
+                    "Downloading js-debug {}…",
+                    debuggers::JS_DEBUG_VERSION
+                )),
+                true,
+            ),
+            Fetch::Done(()) => ("Installed.".into(), true),
+            Fetch::Failed(error) => (error.clone(), false),
+        });
+        let label = if installed {
+            "Reinstall js-debug"
+        } else {
+            "Install js-debug"
+        };
+        SettingItem::render(move |_, _, cx| {
+            let this = this.clone();
+            v_flex()
+                .gap_1()
+                .child(
+                    h_flex().gap_2().items_center().child(
+                        Button::new("install-js-debug")
+                            .label(label)
+                            .small()
+                            .outline()
+                            .disabled(installing)
+                            .on_click(move |_, _, cx| {
+                                this.update(cx, |this, cx| this.install(debugger, cx)).ok();
+                            }),
+                    ),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "Downloads js-debug {} from Microsoft's releases on GitHub \
+                             into {}.",
+                            debuggers::JS_DEBUG_VERSION,
+                            debuggers::debuggers_dir()
+                                .map(|dir| dir.display().to_string())
+                                .unwrap_or_default()
+                        )),
+                )
+                .when_some(report.clone(), |this, (text, ok)| {
+                    this.child(
+                        div()
+                            .text_sm()
+                            .text_color(if ok {
+                                cx.theme().muted_foreground
+                            } else {
+                                cx.theme().danger
+                            })
+                            .child(text),
+                    )
+                })
+        })
+        .keywords(["install", "download", "debug", "js-debug", debugger.key])
+    }
+
+    /// Download and unpack the debugger in the background; turn it on once
+    /// it's there.
+    fn install(&mut self, debugger: &'static Debugger, cx: &mut Context<Self>) {
+        if matches!(self.installs.get(debugger.key), Some(Fetch::Running)) {
+            return;
+        }
+        self.installs.insert(debugger.key, Fetch::Running);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { debuggers::install_js_debug() })
+                .await;
+            this.update(cx, |this, cx| {
+                let fetch = match result {
+                    Ok(_) => {
+                        settings::update(cx, |s| s.debugging.set_enabled(debugger.key, true));
+                        Fetch::Done(())
+                    }
+                    Err(error) => Fetch::Failed(format!("{error:#}").into()),
+                };
+                this.installs.insert(debugger.key, fetch);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
 }
 
 /// Marks an agent model OpenCode knows by itself, from an older file's
@@ -1104,6 +1265,7 @@ impl Render for SettingsWindow {
         self.sync_color_pickers(window, cx);
         let colors_page = self.colors_page(cx);
         let model_page = self.model_page(cx);
+        let languages_page = self.languages_page(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1129,7 +1291,7 @@ impl Render for SettingsWindow {
                     .pages([
                         self.appearance_page(),
                         colors_page,
-                        self.languages_page(),
+                        languages_page,
                         self.commands_page(),
                         model_page,
                     ]);

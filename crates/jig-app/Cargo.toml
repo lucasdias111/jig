@@ -25,6 +25,8 @@ libc = "0.2"
 futures = "0.3"
 # The LSP types GPUI Kit's editor speaks, for go-to-definition.
 lsp-types = "0.97"
+# Line diffs against git for the gutter's change bars.
+similar = "2"
 
 [dev-dependencies]
 tempfile = "3"

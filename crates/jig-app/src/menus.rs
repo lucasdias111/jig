@@ -1,13 +1,14 @@
-//! The macOS menu bar: Jig, File, Edit, View and Run.
+//! The macOS menu bar: Jig, File, Edit, View, Run and Git.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
-    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, EditAgentsFile, EditCommands,
-    EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile, NewFile, NextTab, Open,
-    OpenCommand, PreviousTab, Quit, RunSelected, Save, SaveAs, StopRun, ToggleRunPanel,
+    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, EditAgentsFile,
+    EditCommands, EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile, NewFile, NextTab,
+    Open, OpenCommand, PreviousTab, Quit, Resume, RunSelected, Save, SaveAs, StepInto, StepOut,
+    StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleRunPanel,
     ToggleSidebar,
 };
 
@@ -105,9 +106,23 @@ pub fn init(cx: &mut App) {
             vec![
                 MenuItem::action("Run", RunSelected),
                 MenuItem::action("Run…", ChooseRunConfiguration),
+                MenuItem::action("Debug", DebugSelected),
                 MenuItem::action("Stop", StopRun),
                 MenuItem::separator(),
+                MenuItem::action("Toggle Breakpoint", ToggleBreakpoint),
+                MenuItem::action("Resume", Resume),
+                MenuItem::action("Step Over", StepOver),
+                MenuItem::action("Step Into", StepInto),
+                MenuItem::action("Step Out", StepOut),
+                MenuItem::separator(),
                 MenuItem::action("Edit Configurations", EditRunConfigurations),
+            ],
+        ),
+        menu(
+            "Git",
+            vec![
+                MenuItem::action("Show Changes", ToggleGitPanel),
+                MenuItem::action("Switch Branch…", SwitchBranch),
             ],
         ),
     ]);

@@ -121,6 +121,26 @@ pub trait InputExtras: Default + 'static {
     fn context_menu_capabilities(&self) -> (bool, bool) {
         (false, false)
     }
+
+    /// Jig patch: gutter dots, as (byte offset of their line, color).
+    fn gutter_markers(&self) -> Vec<(usize, gpui::Hsla)> {
+        Vec::new()
+    }
+
+    /// Jig patch: who handles clicks in the gutter.
+    fn gutter_click_handler(&self) -> Option<crate::input::GutterClickHandler> {
+        None
+    }
+
+    /// Jig patch: change bars to paint at the gutter's edge.
+    fn line_changes(&self) -> &[crate::input::LineChange] {
+        &[]
+    }
+
+    /// Jig patch: who handles clicks on change bars.
+    fn line_change_click_handler(&self) -> Option<crate::input::GutterClickHandler> {
+        None
+    }
 }
 
 /// A mode with nothing extra to render.
@@ -354,6 +374,12 @@ pub struct EditorExtras {
     pub(crate) lsp: Lsp,
     pub(crate) decorations: DecorationCollections,
     pub(crate) range_decorations: DecorationCollections<RangeDecoration>,
+    /// Jig patch: see `on_gutter_click`.
+    pub(crate) gutter_click: Option<crate::input::GutterClickHandler>,
+    /// Jig patch: see `set_line_changes`.
+    pub(crate) line_changes: Vec<crate::input::LineChange>,
+    /// Jig patch: see `on_line_change_click`.
+    pub(crate) line_change_click: Option<crate::input::GutterClickHandler>,
     pub(crate) inline_completion: InlineCompletion,
     pub(crate) context_menu_content: ContextMenuContent,
     pub(crate) hover_popover: Option<HoverPopoverState>,
@@ -367,6 +393,9 @@ impl Default for EditorExtras {
             lsp: Lsp::default(),
             decorations: DecorationCollections::default(),
             range_decorations: DecorationCollections::default(),
+            gutter_click: None,
+            line_changes: Vec::new(),
+            line_change_click: None,
             inline_completion: InlineCompletion::default(),
             context_menu_content: ContextMenuContent::default(),
             hover_popover: None,

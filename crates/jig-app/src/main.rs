@@ -1,7 +1,11 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
 mod agent;
+mod branch_picker;
 mod completions;
+mod dap;
+mod debug_target;
+mod debuggers;
 mod definitions;
 mod diff;
 mod document;
@@ -9,6 +13,8 @@ mod file_icons;
 mod file_tree;
 mod find_in_files;
 mod fuzzy;
+mod git;
+mod git_panel;
 mod indentation;
 mod languages;
 mod lsp;

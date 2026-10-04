@@ -21,6 +21,7 @@ pub struct Settings {
     pub editor: EditorSettings,
     pub commands: CommandSettings,
     pub languages: LanguageSettings,
+    pub debugging: DebugSettings,
     pub colors: ColorSettings,
 }
 
@@ -157,6 +158,52 @@ impl LanguageSettings {
             Some(text) => self.extensions.insert(name.to_string(), text),
             None => self.extensions.remove(name),
         };
+    }
+}
+
+/// Which debuggers are on, by key (`rust`, `typescript`), and where to find
+/// their adapters when Jig doesn't on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DebugSettings {
+    pub enabled: Vec<String>,
+    pub paths: BTreeMap<String, String>,
+}
+
+impl Default for DebugSettings {
+    /// Rust's debugger comes with Xcode, so it's on to begin with.
+    fn default() -> Self {
+        Self {
+            enabled: vec!["rust".into()],
+            paths: BTreeMap::new(),
+        }
+    }
+}
+
+impl DebugSettings {
+    pub fn is_enabled(&self, key: &str) -> bool {
+        self.enabled.iter().any(|on| on == key)
+    }
+
+    pub fn set_enabled(&mut self, key: &str, on: bool) {
+        self.enabled.retain(|other| other != key);
+        if on {
+            self.enabled.push(key.to_string());
+        }
+    }
+
+    pub fn path(&self, key: &str) -> Option<&str> {
+        self.paths.get(key).map(String::as_str)
+    }
+
+    /// An empty path clears it, so Jig looks on its own again.
+    pub fn set_path(&mut self, key: &str, path: &str) {
+        let path = path.trim();
+        if path.is_empty() {
+            self.paths.remove(key);
+        } else {
+            self.paths.insert(key.to_string(), path.to_string());
+        }
     }
 }
 

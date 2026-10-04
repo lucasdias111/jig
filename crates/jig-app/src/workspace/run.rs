@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use futures::channel::mpsc::TryRecvError;
+use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -47,10 +47,12 @@ pub(super) struct RunState {
     configs_root: Option<PathBuf>,
     _loading: Option<Task<()>>,
     /// What ⌃R runs.
-    selected: Option<RunConfig>,
-    session: Option<RunSession>,
+    pub(super) selected: Option<RunConfig>,
+    pub(super) session: Option<RunSession>,
     picker: Option<OpenRunPicker>,
-    panel_open: bool,
+    /// The picker was opened to debug what's chosen, not run it.
+    picker_debug: bool,
+    pub(super) panel_open: bool,
     panel_height: Pixels,
     /// Set while the panel's top edge is being dragged.
     resizing: bool,
@@ -66,6 +68,7 @@ impl Default for RunState {
             selected: None,
             session: None,
             picker: None,
+            picker_debug: false,
             panel_open: false,
             panel_height: px(220.),
             resizing: false,
@@ -74,22 +77,28 @@ impl Default for RunState {
     }
 }
 
-/// One run of a configuration, and what it printed.
-struct RunSession {
+/// One run of a configuration, and what it printed. Debugging is a run
+/// with a debugger attached.
+pub(super) struct RunSession {
     id: u64,
-    config: RunConfig,
-    process: Option<Process>,
-    lines: Vec<OutputLine>,
+    pub(super) config: RunConfig,
+    /// The program, or for a debug session, its build.
+    pub(super) process: Option<Process>,
+    events: UnboundedReceiver<RunEvent>,
+    pub(super) lines: Vec<OutputLine>,
     /// How it ended, once it has.
-    ending: Option<String>,
-    started: Instant,
+    pub(super) ending: Option<String>,
+    pub(super) started: Instant,
     scroll: UniformListScrollHandle,
-    _events: Task<()>,
+    pub(super) debug: Option<super::debug::DebugSession>,
+    _poll: Task<()>,
 }
 
 impl RunSession {
     fn is_running(&self) -> bool {
-        self.ending.is_none() && self.process.as_ref().is_some_and(Process::is_running)
+        self.ending.is_none()
+            && (self.process.as_ref().is_some_and(Process::is_running)
+                || self.debug.as_ref().is_some_and(|debug| debug.is_live()))
     }
 }
 
@@ -136,7 +145,10 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn stop_process(&self) {
+    pub(super) fn stop_process(&mut self) {
+        if self.stop_debugging() {
+            return;
+        }
         if let Some(process) = self
             .runs
             .session
@@ -215,6 +227,16 @@ impl Workspace {
     }
 
     fn open_run_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_run_picker_for(false, window, cx);
+    }
+
+    /// The picker, to run what's chosen or with `debug`, to debug it.
+    pub(super) fn open_run_picker_for(
+        &mut self,
+        debug: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.runs.picker.is_some() {
             return;
         }
@@ -242,7 +264,11 @@ impl Workspace {
                 this.close_run_picker(window, cx, true);
                 if let Some(config) = config {
                     this.runs.selected = Some(config.clone());
-                    this.start_run(config, window, cx);
+                    if this.runs.picker_debug {
+                        this.start_debug(config, window, cx);
+                    } else {
+                        this.start_run(config, window, cx);
+                    }
                 }
             }
             RunPickerEvent::Edit => {
@@ -256,6 +282,7 @@ impl Workspace {
             view,
             _events: events,
         });
+        self.runs.picker_debug = debug;
         self.load_run_configs(root, window, cx);
         cx.notify();
     }
@@ -306,54 +333,60 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_session(config.clone(), Some(config), false, None, window, cx);
+    }
+
+    /// Start a session for `config`, running `process` (the program, or a
+    /// debug session's build) if given. With `json_stdout`, the process's
+    /// JSON lines are read as data.
+    pub(super) fn start_session(
+        &mut self,
+        config: RunConfig,
+        process: Option<RunConfig>,
+        json_stdout: bool,
+        debug: Option<super::debug::DebugSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.save_all_for_run(window, cx);
         // Stopped by being dropped.
         self.runs.session = None;
+        self.clear_execution_line(cx);
         self.runs.next_id += 1;
         let id = self.runs.next_id;
         let root = self.run_root(cx).unwrap_or_else(|| config.cwd.clone());
 
-        let (sender, mut events) = futures::channel::mpsc::unbounded();
-        let mut lines = vec![OutputLine::meta(format!("$ {}", config.command))];
+        let (sender, events) = futures::channel::mpsc::unbounded();
+        let mut lines = Vec::new();
         let mut ending = None;
-        let process = match Process::spawn(&config, &root, sender) {
-            Ok(process) => Some(process),
-            Err(error) => {
-                let message = format!("{error:#}");
-                lines.push(OutputLine::meta(message.clone()));
-                ending = Some(message);
-                None
+        let process = process.and_then(|process| {
+            lines.push(OutputLine::meta(format!("$ {}", process.command)));
+            match Process::spawn(&process, &root, json_stdout, sender) {
+                Ok(process) => Some(process),
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    lines.push(OutputLine::meta(message.clone()));
+                    ending = Some(message);
+                    None
+                }
             }
-        };
-        // Polled rather than awaited: output comes from the process's own
-        // threads, and a timer batches a flood of it into fewer repaints.
-        let task = cx.spawn(async move |this, cx| {
+        });
+        let mut debug = debug;
+        if ending.is_some()
+            && let Some(debug) = debug.as_mut()
+        {
+            debug.phase = super::debug::Phase::Ended;
+        }
+        // Polled rather than awaited: output comes from the process's and
+        // the debugger's own threads, and a timer batches a flood of it
+        // into fewer repaints.
+        let poll = cx.spawn_in(window, async move |this, cx| {
             loop {
-                let mut batch = Vec::new();
-                let mut closed = false;
-                while batch.len() < MAX_BATCH {
-                    match events.try_recv() {
-                        Ok(event) => batch.push(event),
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Closed) => {
-                            closed = true;
-                            break;
-                        }
-                    }
-                }
-                let full = batch.len() == MAX_BATCH;
-                if !batch.is_empty()
-                    && this
-                        .update(cx, |this, cx| this.on_run_events(id, batch, cx))
-                        .is_err()
-                {
-                    break;
-                }
-                if closed {
-                    break;
-                }
-                if !full {
-                    cx.background_executor().timer(POLL_INTERVAL).await;
+                let busy = this.update_in(cx, |this, window, cx| this.poll_session(id, window, cx));
+                match busy {
+                    Ok(Some(true)) => {}
+                    Ok(Some(false)) => cx.background_executor().timer(POLL_INTERVAL).await,
+                    Ok(None) | Err(_) => break,
                 }
             }
         });
@@ -361,44 +394,90 @@ impl Workspace {
             id,
             config,
             process,
+            events,
             lines,
             ending,
             started: Instant::now(),
             scroll: UniformListScrollHandle::new(),
-            _events: task,
+            debug,
+            _poll: poll,
         });
         self.runs.panel_open = true;
         cx.notify();
     }
 
-    fn on_run_events(&mut self, id: u64, events: Vec<RunEvent>, cx: &mut Context<Self>) {
-        let Some(session) = self.runs.session.as_mut().filter(|s| s.id == id) else {
-            return;
-        };
-        let follow = scrolled_to_end(&session.scroll);
-        for event in events {
-            match event {
-                RunEvent::Line(line) => session.lines.push(line),
-                RunEvent::Exited(ending) => {
-                    let elapsed = session.started.elapsed().as_secs_f32();
-                    session
-                        .lines
-                        .push(OutputLine::meta(format!("{ending} ({elapsed:.1}s)")));
-                    session.ending = Some(ending);
-                }
+    /// Take in what the process and the debugger said. `None` once session
+    /// `id` is over; `Some(true)` when there was more than one batch's worth.
+    fn poll_session(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        let session = self.runs.session.as_mut().filter(|s| s.id == id)?;
+        let mut events = Vec::new();
+        while events.len() < MAX_BATCH {
+            match session.events.try_recv() {
+                Ok(event) => events.push(event),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
         }
+        let full = events.len() == MAX_BATCH;
+        let follow = scrolled_to_end(&session.scroll);
+        let before = session.lines.len();
+        for event in events {
+            self.on_run_event(event, window, cx);
+        }
+        let messages = self.take_dap_messages();
+        let any = !messages.is_empty();
+        for (id, message) in messages {
+            self.on_dap_message(id, message, window, cx);
+        }
+        let session = self.runs.session.as_mut().filter(|s| s.id == id)?;
         if session.lines.len() > MAX_LINES {
             let excess = session.lines.len() - MAX_LINES + MAX_LINES / 10;
             session.lines.drain(..excess);
         }
-        if follow {
-            session.scroll.scroll_to_item(
-                session.lines.len().saturating_sub(1),
-                ScrollStrategy::Bottom,
-            );
+        if session.lines.len() != before || any {
+            if follow {
+                session.scroll.scroll_to_item(
+                    session.lines.len().saturating_sub(1),
+                    ScrollStrategy::Bottom,
+                );
+            }
+            cx.notify();
         }
-        cx.notify();
+        // Done when it has ended and nothing is left to read.
+        let live = session.ending.is_none() || session.process.is_some();
+        live.then_some(full)
+    }
+
+    fn on_run_event(&mut self, event: RunEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.runs.session.as_mut() else {
+            return;
+        };
+        match event {
+            RunEvent::Line(line) => session.lines.push(line),
+            RunEvent::Data(json) => self.on_build_data(&json),
+            RunEvent::Exited { message, success } => {
+                if session.debug.is_some() {
+                    let stopped = message == "Process stopped";
+                    if success {
+                        session.lines.push(OutputLine::meta("Build finished"));
+                    } else if !stopped {
+                        session.lines.push(OutputLine::meta(message));
+                    }
+                    self.on_build_exit(success, stopped, window, cx);
+                    return;
+                }
+                session.process = None;
+                let elapsed = session.started.elapsed().as_secs_f32();
+                session
+                    .lines
+                    .push(OutputLine::meta(format!("{message} ({elapsed:.1}s)")));
+                session.ending = Some(message);
+            }
+        }
     }
 
     /// Save every changed file that has somewhere to go.
@@ -497,6 +576,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
+                .debug_selector(move || id.into())
                 .hover(|s| s.bg(theme.foreground.opacity(0.08)))
                 // Otherwise the title bar takes the press as a window drag.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -551,6 +631,13 @@ impl Workspace {
                         this.run_selected(&RunSelected, window, cx)
                     })),
                 )
+                .child(
+                    button("debug-selected", super::debug::BUG, theme.success).on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.debug_selected(&super::DebugSelected, window, cx)
+                        }),
+                    ),
+                )
                 .when(running, |this| {
                     this.child(button("stop-run", STOP, theme.danger).on_click(
                         cx.listener(|this, _, window, cx| this.stop_run(&StopRun, window, cx)),
@@ -569,11 +656,18 @@ impl Workspace {
             .filter(|_| self.runs.panel_open)?;
         let theme = cx.theme();
         let running = session.is_running();
-        let status = match &session.ending {
-            Some(ending) => ending.clone(),
-            None => "Running…".into(),
+        let debug_status = session.debug.as_ref().and_then(|debug| debug.status());
+        let paused = session
+            .debug
+            .as_ref()
+            .is_some_and(|debug| debug.phase == super::debug::Phase::Paused);
+        let status = match (&session.ending, debug_status) {
+            (Some(ending), _) => ending.clone(),
+            (None, Some(status)) => status,
+            (None, None) => "Running…".into(),
         };
         let status_color = match &session.ending {
+            None if paused => theme.blue,
             None => theme.success,
             Some(ending) if ending.ends_with("exit code 0") => theme.muted_foreground,
             Some(_) => theme.danger,
@@ -612,10 +706,17 @@ impl Workspace {
                     .text_color(status_color)
                     .child(status),
             )
+            .children(self.render_debug_buttons(cx))
             .child(
                 button("panel-rerun", RERUN, theme.success).on_click(cx.listener(
                     |this, _, window, cx| {
-                        if let Some(config) = this.runs.session.as_ref().map(|s| s.config.clone()) {
+                        let Some(session) = this.runs.session.as_ref() else {
+                            return;
+                        };
+                        let config = session.config.clone();
+                        if session.debug.is_some() {
+                            this.start_debug(config, window, cx);
+                        } else {
                             this.start_run(config, window, cx);
                         }
                     },
@@ -667,7 +768,10 @@ impl Workspace {
                 .border_t_1()
                 .border_color(theme.title_bar_border)
                 .child(header)
-                .child(list)
+                .map(|this| match self.render_debugger(cx) {
+                    Some(debugger) => this.child(debugger),
+                    None => this.child(list),
+                })
                 .child(
                     // The draggable top edge.
                     div()

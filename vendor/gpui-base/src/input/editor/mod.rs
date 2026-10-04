@@ -241,6 +241,22 @@ impl crate::input::InputExtras for super::EditorExtras {
         self.range_decorations.intersecting(ranges)
     }
 
+    fn gutter_markers(&self) -> Vec<(usize, gpui::Hsla)> {
+        self.range_decorations.gutter_markers()
+    }
+
+    fn gutter_click_handler(&self) -> Option<crate::input::GutterClickHandler> {
+        self.gutter_click.clone()
+    }
+
+    fn line_changes(&self) -> &[crate::input::LineChange] {
+        &self.line_changes
+    }
+
+    fn line_change_click_handler(&self) -> Option<crate::input::GutterClickHandler> {
+        self.line_change_click.clone()
+    }
+
     fn semantic_token_styles(
         &self,
         text: &ropey::Rope,

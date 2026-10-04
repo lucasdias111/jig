@@ -55,6 +55,9 @@ impl Workspace {
         if new.commands != old.commands {
             self.reload_presets(window, cx);
         }
+        if new.debugging != old.debugging || new.languages != old.languages {
+            self.refresh_breakpoint_gutters(cx);
+        }
         cx.notify();
     }
 

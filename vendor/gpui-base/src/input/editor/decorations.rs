@@ -24,6 +24,31 @@ pub struct RangeDecoration {
     range: Range<usize>,
     style: RangeDecorationStyle,
     color: Option<Hsla>,
+    // Jig patch: a dot in the gutter beside the range's first line, for
+    // breakpoints.
+    gutter_marker: Option<Hsla>,
+}
+
+/// Jig patch: called with the buffer line clicked in the gutter.
+pub type GutterClickHandler = std::rc::Rc<dyn Fn(usize, &mut gpui::Window, &mut App)>;
+
+/// Jig patch: how a run of lines differs from another version of the file,
+/// e.g. the last commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineChangeKind {
+    Added,
+    Modified,
+    /// Lines were removed just above `rows.start`; `rows` is empty.
+    Deleted,
+}
+
+/// Jig patch: a bar in the gutter beside `rows` (0-based buffer lines), or
+/// for a deletion, a wedge between two lines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineChange {
+    pub rows: Range<usize>,
+    pub kind: LineChangeKind,
+    pub color: Hsla,
 }
 
 impl RangeDecoration {
@@ -33,7 +58,20 @@ impl RangeDecoration {
             range,
             style: RangeDecorationStyle::default(),
             color: None,
+            gutter_marker: None,
         }
+    }
+
+    /// Jig patch: also paint a dot of `color` in the gutter beside the
+    /// range's first line.
+    pub fn with_gutter_marker(mut self, color: Hsla) -> Self {
+        self.gutter_marker = Some(color);
+        self
+    }
+
+    /// Jig patch: the gutter dot's color, if it has one.
+    pub fn gutter_marker(&self) -> Option<Hsla> {
+        self.gutter_marker
     }
 
     /// The half-open UTF-8 byte range supplied to this decoration.
@@ -493,7 +531,52 @@ fn normalize<T: TrackedDecoration>(text: &Rope, decorations: Vec<T>) -> Vec<T> {
         .collect()
 }
 
+impl DecorationCollections<RangeDecoration> {
+    /// Jig patch: where gutter dots go, as (range start, color).
+    pub(crate) fn gutter_markers(&self) -> Vec<(usize, Hsla)> {
+        self.iter()
+            .flatten()
+            .filter_map(|d| d.gutter_marker.map(|color| (d.range.start, color)))
+            .collect()
+    }
+}
+
 impl InputBaseState<EditorMode> {
+    /// Jig patch: call `handler` with the buffer line when the line-number
+    /// gutter is clicked, instead of moving the cursor. The fold icons keep
+    /// their clicks.
+    pub fn on_gutter_click(
+        &mut self,
+        handler: impl Fn(usize, &mut gpui::Window, &mut App) + 'static,
+    ) {
+        self.extras.gutter_click = Some(std::rc::Rc::new(handler));
+    }
+
+    /// Jig patch: stop handling gutter clicks, and give back the column the
+    /// gutter dots took.
+    pub fn clear_gutter_click(&mut self, cx: &mut Context<Self>) {
+        if self.extras.gutter_click.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Jig patch: show `changes` as bars at the gutter's edge by the text.
+    /// They're by line, so whoever sets them sets them again after edits.
+    pub fn set_line_changes(&mut self, changes: Vec<LineChange>, cx: &mut Context<Self>) {
+        if self.extras.line_changes != changes {
+            self.extras.line_changes = changes;
+            cx.notify();
+        }
+    }
+
+    /// Jig patch: call `handler` with the first line of the change clicked.
+    pub fn on_line_change_click(
+        &mut self,
+        handler: impl Fn(usize, &mut gpui::Window, &mut App) + 'static,
+    ) {
+        self.extras.line_change_click = Some(std::rc::Rc::new(handler));
+    }
+
     /// Create an independently owned collection of geometric range decorations.
     ///
     /// Ranges use UTF-8 byte offsets and the same tracking as text decorations:

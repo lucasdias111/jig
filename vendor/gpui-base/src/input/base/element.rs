@@ -51,6 +51,18 @@ pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
+/// Jig patch: a column left of the line numbers for gutter dots, in an
+/// editor that takes gutter clicks, so the dots don't cover the numbers.
+const GUTTER_MARK_WIDTH: Pixels = px(16.);
+
+/// Jig patch: how far gutter dots push the line numbers right.
+fn gutter_mark_width<M: InputModeKind>(state: &InputBaseState<M>) -> Pixels {
+    if state.extras.gutter_click_handler().is_some() {
+        GUTTER_MARK_WIDTH
+    } else {
+        px(0.)
+    }
+}
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 const MIN_LINE_NUMBER_DIGITS: usize = 3;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
@@ -413,10 +425,30 @@ fn empty_bottom_height(
     }
 }
 
+/// Jig patch: one piece of a change mark in the gutter.
+enum LineChangeMark {
+    Bar(Bounds<Pixels>, Hsla),
+    /// A deletion, pointing at the text between two lines.
+    Wedge(Point<Pixels>, Pixels, Hsla),
+}
+
 /// Layout information for fold icons.
 struct FoldIconLayout {
     /// Hitbox for the line number area (used for hover detection)
     line_number_hitbox: Hitbox,
+    /// Jig patch: each visible line's part of the line-number column, for
+    /// gutter dots and clicks.
+    gutter_rows: Vec<(usize, Bounds<Pixels>)>,
+    /// Jig patch: gutter dots to paint.
+    gutter_markers: Vec<(Bounds<Pixels>, Hsla)>,
+    /// Jig patch: who handles gutter clicks, if anyone.
+    gutter_click: Option<crate::input::GutterClickHandler>,
+    /// Jig patch: change bars and wedges to paint.
+    line_change_marks: Vec<LineChangeMark>,
+    /// Jig patch: where clicking opens a change, as (its first line, area).
+    line_change_rows: Vec<(usize, Bounds<Pixels>, Hitbox)>,
+    /// Jig patch: who handles clicks on changes, if anyone.
+    line_change_click: Option<crate::input::GutterClickHandler>,
     /// List of (display_row, is_folded, icon_element) pairs for each fold candidate
     icons: Vec<(usize, bool, gpui::AnyElement)>,
 }
@@ -1109,6 +1141,7 @@ impl<M: InputModeKind> TextElement<M> {
             // Add extra space for fold icons
             line_number_width += FOLD_ICON_HITBOX_WIDTH
         }
+        line_number_width += gutter_mark_width(state);
 
         (line_number_width, line_number_len)
     }
@@ -1284,8 +1317,16 @@ impl<M: InputModeKind> TextElement<M> {
 
         let mut icon_layout = FoldIconLayout {
             line_number_hitbox,
+            gutter_rows: vec![],
+            gutter_markers: vec![],
+            gutter_click: None,
+            line_change_marks: vec![],
+            line_change_rows: vec![],
+            line_change_click: None,
             icons: vec![],
         };
+        self.layout_gutter_marks(&mut icon_layout, origin_x, bounds, last_layout, cx);
+        self.layout_line_changes(&mut icon_layout, origin_x, bounds, last_layout, window, cx);
 
         let fold_infos: Vec<FoldInfo> = {
             let state = self.state.read(cx);
@@ -1399,6 +1440,212 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         icon_layout
+    }
+
+    /// Jig patch: where each visible line sits in the line-number column,
+    /// and the dots to paint there.
+    fn layout_gutter_marks(
+        &self,
+        layout: &mut FoldIconLayout,
+        origin_x: Pixels,
+        bounds: &Bounds<Pixels>,
+        last_layout: &LastLayout,
+        cx: &App,
+    ) {
+        let state = self.state.read(cx);
+        layout.gutter_click = state.extras.gutter_click_handler();
+        let markers = state.extras.gutter_markers();
+        if layout.gutter_click.is_none() && markers.is_empty() {
+            return;
+        }
+        let mut column = last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN;
+        if state.mode.is_folding() {
+            column -= FOLD_ICON_HITBOX_WIDTH;
+        }
+        let line_height = last_layout.line_height;
+        let column = column.max(line_height);
+        let mut offset_y = last_layout.visible_top;
+        for (line, &buffer_line) in last_layout
+            .lines
+            .iter()
+            .zip(last_layout.visible_buffer_lines.iter())
+        {
+            let height = line_height * line.wrapped_lines.len().max(1) as f32;
+            layout.gutter_rows.push((
+                buffer_line,
+                Bounds::new(
+                    point(origin_x, bounds.origin.y + offset_y),
+                    size(column, height),
+                ),
+            ));
+            offset_y += height;
+        }
+        let marked: Vec<(usize, Hsla)> = markers
+            .into_iter()
+            .filter(|(offset, _)| *offset <= state.text.len())
+            .map(|(offset, color)| (state.text.offset_to_point(offset).row, color))
+            .collect();
+        let diameter = (line_height * 0.6).min(px(12.));
+        let mark_column = gutter_mark_width(state).max(diameter);
+        for (buffer_line, row) in &layout.gutter_rows {
+            for (_, color) in marked.iter().filter(|(line, _)| line == buffer_line) {
+                let center = point(
+                    row.origin.x + mark_column.half(),
+                    row.origin.y + line_height.half(),
+                );
+                layout.gutter_markers.push((
+                    Bounds::new(
+                        point(center.x - diameter.half(), center.y - diameter.half()),
+                        size(diameter, diameter),
+                    ),
+                    *color,
+                ));
+            }
+        }
+    }
+
+    /// Jig patch: the change bars at the gutter's edge by the text, one
+    /// piece per visible line, and where clicking each one lands.
+    fn layout_line_changes(
+        &self,
+        layout: &mut FoldIconLayout,
+        origin_x: Pixels,
+        bounds: &Bounds<Pixels>,
+        last_layout: &LastLayout,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        use crate::input::LineChangeKind;
+        let state = self.state.read(cx);
+        let changes = state.extras.line_changes();
+        if changes.is_empty() {
+            return;
+        }
+        layout.line_change_click = state.extras.line_change_click_handler();
+        let line_height = last_layout.line_height;
+        let total_lines = state.text.lines_len();
+        let edge = origin_x + last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN;
+        let bar_width = px(3.);
+        let bar_x = edge + (LINE_NUMBER_RIGHT_MARGIN - bar_width).half();
+        let hit_width = LINE_NUMBER_RIGHT_MARGIN + px(2.);
+        // Each visible line's top and height.
+        let mut rows = Vec::with_capacity(last_layout.visible_buffer_lines.len());
+        let mut offset_y = last_layout.visible_top;
+        for (line, &buffer_line) in last_layout
+            .lines
+            .iter()
+            .zip(last_layout.visible_buffer_lines.iter())
+        {
+            let height = line_height * line.wrapped_lines.len().max(1) as f32;
+            rows.push((buffer_line, bounds.origin.y + offset_y, height));
+            offset_y += height;
+        }
+        let mut hit = |area: Bounds<Pixels>, line: usize, window: &mut Window| {
+            let hitbox = window.insert_hitbox(area, HitboxBehavior::Normal);
+            layout.line_change_rows.push((line, area, hitbox));
+        };
+        for change in changes {
+            if change.kind == LineChangeKind::Deleted {
+                // Above its line, or below the last line when that's gone.
+                let at = rows.iter().find_map(|&(line, top, height)| {
+                    if line == change.rows.start {
+                        Some(top)
+                    } else if change.rows.start >= total_lines && line + 1 == total_lines {
+                        Some(top + height)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(y) = at {
+                    let size = (line_height * 0.3).min(px(5.));
+                    layout.line_change_marks.push(LineChangeMark::Wedge(
+                        point(edge, y),
+                        size,
+                        change.color,
+                    ));
+                    let area = Bounds::new(
+                        point(edge, y - line_height.half()),
+                        gpui::size(hit_width, line_height),
+                    );
+                    hit(area, change.rows.start, window);
+                }
+                continue;
+            }
+            for &(_, top, height) in rows.iter().filter(|(line, ..)| change.rows.contains(line)) {
+                layout.line_change_marks.push(LineChangeMark::Bar(
+                    Bounds::new(point(bar_x, top), gpui::size(bar_width, height)),
+                    change.color,
+                ));
+                let area = Bounds::new(point(edge, top), gpui::size(hit_width, height));
+                hit(area, change.rows.start, window);
+            }
+        }
+    }
+
+    /// Jig patch: paint the change bars, and send clicks on them to the
+    /// handler.
+    fn paint_line_changes(&self, layout: &FoldIconLayout, window: &mut Window) {
+        for mark in &layout.line_change_marks {
+            match mark {
+                LineChangeMark::Bar(bounds, color) => {
+                    window.paint_quad(fill(*bounds, *color).corner_radii(px(1.)));
+                }
+                LineChangeMark::Wedge(at, size, color) => {
+                    let mut path = gpui::PathBuilder::fill();
+                    path.move_to(point(at.x, at.y - *size));
+                    path.line_to(point(at.x + *size, at.y));
+                    path.line_to(point(at.x, at.y + *size));
+                    path.close();
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, *color);
+                    }
+                }
+            }
+        }
+        let Some(handler) = layout.line_change_click.clone() else {
+            return;
+        };
+        for (_, _, hitbox) in &layout.line_change_rows {
+            window.set_cursor_style(gpui::CursorStyle::PointingHand, hitbox);
+        }
+        let rows = layout.line_change_rows.clone();
+        window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
+            if !phase.capture() || event.button != MouseButton::Left {
+                return;
+            }
+            let Some((line, ..)) = rows.iter().find(|(_, area, hitbox)| {
+                area.contains(&event.position) && hitbox.is_hovered(window)
+            }) else {
+                return;
+            };
+            window.prevent_default();
+            cx.stop_propagation();
+            handler(*line, window, cx);
+        });
+    }
+
+    /// Jig patch: paint the gutter dots, and send clicks in the line-number
+    /// column to the handler instead of the text.
+    fn paint_gutter_marks(&self, layout: &FoldIconLayout, window: &mut Window) {
+        for (bounds, color) in &layout.gutter_markers {
+            window.paint_quad(fill(*bounds, *color).corner_radii(bounds.size.width.half()));
+        }
+        let Some(handler) = layout.gutter_click.clone() else {
+            return;
+        };
+        let rows = layout.gutter_rows.clone();
+        let hitbox = layout.line_number_hitbox.clone();
+        window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
+            if !phase.capture() || event.button != MouseButton::Left || !hitbox.is_hovered(window) {
+                return;
+            }
+            let Some((line, _)) = rows.iter().find(|(_, row)| row.contains(&event.position)) else {
+                return;
+            };
+            window.prevent_default();
+            cx.stop_propagation();
+            handler(*line, window, cx);
+        });
     }
 
     /// Paint fold icons using prepaint hitboxes.
@@ -3116,6 +3363,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         // Paint line numbers
         let mut offset_y = px(0.);
+        let mark_column = gutter_mark_width(self.state.read(cx));
         if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
             offset_y += invisible_top_padding;
 
@@ -3157,7 +3405,15 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 }
 
                 for line in lines {
-                    _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
+                    let number_origin = point(p.x + mark_column, p.y);
+                    _ = line.paint(
+                        number_origin,
+                        line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                     offset_y += line_height;
                 }
 
@@ -3167,6 +3423,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 }
             }
         }
+
+        self.paint_gutter_marks(&prepaint.fold_icon_layout, window);
+        self.paint_line_changes(&prepaint.fold_icon_layout, window);
 
         // Paint fold icons (only visible on hover or for current line)
         self.paint_fold_icons(

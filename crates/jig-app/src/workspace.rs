@@ -2,10 +2,13 @@
 //! sidebar.
 
 mod agent;
+mod breakpoints;
 mod commands;
 mod completions;
+mod debug;
 mod definitions;
 mod find;
+mod git;
 mod go_to_file;
 mod home;
 mod lsp;
@@ -61,7 +64,15 @@ actions!(
         ChooseRunConfiguration,
         StopRun,
         ToggleRunPanel,
-        EditRunConfigurations
+        EditRunConfigurations,
+        DebugSelected,
+        ToggleBreakpoint,
+        Resume,
+        StepOver,
+        StepInto,
+        StepOut,
+        ToggleGitPanel,
+        SwitchBranch
     ]
 );
 
@@ -119,6 +130,8 @@ pub struct Workspace {
     next_run_id: u64,
     /// Run configurations, and the one running.
     runs: run::RunState,
+    breakpoints: breakpoints::Breakpoints,
+    git: git::GitState,
 }
 
 struct ProjectTree {
@@ -182,6 +195,8 @@ impl Workspace {
             run: None,
             next_run_id: 0,
             runs: Default::default(),
+            breakpoints: breakpoints::Breakpoints::load(),
+            git: Default::default(),
         };
         let tab = this.new_tab(document, window, cx);
         if this.home {
@@ -213,6 +228,7 @@ impl Workspace {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_tree(cx);
+                this.refresh_git(cx);
             }
         })
         .detach();
@@ -468,6 +484,8 @@ impl Workspace {
             crate::providers::reload(cx);
         }
         self.run_file_saved(path, window, cx);
+        self.git_saved(window, cx);
+        self.remember_breakpoints(self.active, cx);
         // Save As may have added a file.
         self.refresh_tree(cx);
         cx.notify();
@@ -506,6 +524,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-alt-r", ChooseRunConfiguration, None),
         KeyBinding::new("secondary-f2", StopRun, None),
         KeyBinding::new("secondary-j", ToggleRunPanel, None),
+        KeyBinding::new("ctrl-d", DebugSelected, None),
+        KeyBinding::new("secondary-f8", ToggleBreakpoint, None),
+        KeyBinding::new("f9", Resume, None),
+        KeyBinding::new("alt-secondary-r", Resume, None),
+        KeyBinding::new("f8", StepOver, None),
+        KeyBinding::new("f7", StepInto, None),
+        KeyBinding::new("shift-f8", StepOut, None),
+        // As in VS Code.
+        KeyBinding::new("ctrl-shift-g", ToggleGitPanel, None),
         // In the editor too, where GPUI Kit binds ⇧⌘F to Replace; Replace
         // moves to ⌘R, as in IntelliJ.
         KeyBinding::new("secondary-shift-f", FindInFiles, Some("Input")),
@@ -563,6 +590,14 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::stop_run))
             .on_action(cx.listener(Self::toggle_run_panel))
             .on_action(cx.listener(Self::edit_run_configurations))
+            .on_action(cx.listener(Self::debug_selected))
+            .on_action(cx.listener(Self::toggle_breakpoint))
+            .on_action(cx.listener(Self::resume))
+            .on_action(cx.listener(Self::step_over))
+            .on_action(cx.listener(Self::step_into))
+            .on_action(cx.listener(Self::step_out))
+            .on_action(cx.listener(Self::toggle_git_panel))
+            .on_action(cx.listener(Self::switch_branch))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -594,6 +629,7 @@ impl Render for Workspace {
                                 .border_b_1()
                                 .border_color(theme.title_bar_border)
                                 .child(title)
+                                .children(self.render_branch_button(cx))
                                 .children(self.render_command_button(cx))
                                 .children(self.render_run_controls(cx)),
                         ),
@@ -654,6 +690,9 @@ impl Render for Workspace {
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
             .children(self.render_run_picker(window))
+            .children(self.render_git_panel(window))
+            .children(self.render_branch_picker(window))
+            .children(self.render_hunk_popup(cx))
             .when_some(self.run.as_ref(), |this, run| {
                 let floating = self
                     .render_agent_chat(cx)
@@ -3124,5 +3163,662 @@ env = { GREETING = "there" }
             cx.update(|cx| workspace.read(cx).run_output())
                 .is_some_and(|(id, _, ending)| id != first && ending.is_some())
         });
+    }
+
+    /// Plays `lldb-dap`'s part, as it answered for a real program: stops at
+    /// the breakpoint, shows `numbers` and `total`, and finishes on resume.
+    /// Records the breakpoint lines it was given.
+    fn fake_adapter(
+        source: std::path::PathBuf,
+        breakpoints: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+    ) {
+        use crate::dap::{Client, frame, read_message};
+        use serde_json::json;
+        super::debug::FAKE_ADAPTER.with(|fake| {
+            *fake.borrow_mut() = Some(Box::new(move |messages| {
+                let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+                let source = source.clone();
+                let breakpoints = breakpoints.clone();
+                std::thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(theirs.try_clone().unwrap());
+                    let mut out = theirs;
+                    let mut send = |message: serde_json::Value| {
+                        use std::io::Write as _;
+                        out.write_all(&frame(&message)).unwrap();
+                    };
+                    while let Some(request) = read_message(&mut reader) {
+                        let command = request["command"].as_str().unwrap_or_default().to_string();
+                        let respond = |body: serde_json::Value| {
+                            json!({"type": "response", "request_seq": request["seq"],
+                                   "command": command, "success": true, "body": body})
+                        };
+                        match command.as_str() {
+                            "initialize" => {
+                                send(respond(json!({})));
+                                send(json!({"type": "event", "event": "initialized"}));
+                            }
+                            "setBreakpoints" => {
+                                for bp in request["arguments"]["breakpoints"].as_array().unwrap() {
+                                    breakpoints.lock().unwrap().push(bp["line"].as_u64().unwrap());
+                                }
+                                send(respond(json!({"breakpoints": []})));
+                            }
+                            "configurationDone" => {
+                                send(respond(json!({})));
+                                send(json!({"type": "event", "event": "stopped",
+                                            "body": {"reason": "breakpoint", "threadId": 1}}));
+                            }
+                            "stackTrace" => send(respond(json!({"stackFrames": [
+                                {"id": 10, "name": "app::main", "line": 3, "column": 5,
+                                 "source": {"path": source}},
+                                {"id": 11, "name": "std::rt::lang_start", "line": 1, "column": 1},
+                            ]}))),
+                            "scopes" => send(respond(json!({"scopes": [
+                                {"name": "Locals", "variablesReference": 100, "expensive": false},
+                                {"name": "Registers", "variablesReference": 200, "expensive": true},
+                            ]}))),
+                            "variables" => {
+                                let variables = match request["arguments"]["variablesReference"].as_i64() {
+                                    Some(100) => json!([
+                                        {"name": "numbers", "value": "size=3", "type": "Vec<i32>",
+                                         "variablesReference": 101},
+                                        {"name": "total", "value": "6", "type": "i32",
+                                         "variablesReference": 0},
+                                    ]),
+                                    _ => json!([
+                                        {"name": "[0]", "value": "1", "variablesReference": 0},
+                                        {"name": "[1]", "value": "2", "variablesReference": 0},
+                                    ]),
+                                };
+                                send(respond(json!({"variables": variables})));
+                            }
+                            "continue" => {
+                                send(respond(json!({"allThreadsContinued": true})));
+                                send(json!({"type": "event", "event": "output",
+                                            "body": {"category": "stdout", "output": "total 6\n"}}));
+                                send(json!({"type": "event", "event": "exited",
+                                            "body": {"exitCode": 0}}));
+                                send(json!({"type": "event", "event": "terminated"}));
+                            }
+                            "disconnect" => {
+                                send(respond(json!({})));
+                                return;
+                            }
+                            _ => send(respond(json!({}))),
+                        }
+                    }
+                });
+                Client::connect(0, ours.try_clone().unwrap(), ours, messages)
+            }));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn debugs_to_a_breakpoint_shows_variables_and_resumes(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src/main.rs");
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".jig")).unwrap();
+        std::fs::write(
+            &source,
+            "fn main() {\n    let numbers = vec![1, 2, 3];\n    let total: i32 = numbers.iter().sum();\n    println!(\"total {total}\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".jig/run.toml"),
+            "[[run]]\nname = \"App\"\ncommand = \"./app\"\nprogram = \"app\"\n",
+        )
+        .unwrap();
+        let source = source.canonicalize().unwrap();
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        fake_adapter(source.clone(), sent.clone());
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &source);
+
+        // ⌘F8 on the third line.
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            ws.update(cx, |this, cx| {
+                this.editor()
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(50..50, cx))
+            });
+            window.press("secondary-f8", cx);
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(this.breakpoint_lines(this.active, cx), [2].into());
+        });
+
+        step(cx, window, |window, cx| window.press("ctrl-d", cx));
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_picker_rows(cx))
+                .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
+        });
+        step(cx, window, |window, cx| window.press("enter", cx));
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).debug_variable_rows().len() >= 3)
+        });
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [3],
+            "1-based lines go to the adapter"
+        );
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(this.debug_phase(), Some(super::debug::Phase::Paused));
+            assert_eq!(this.debug_frames(), ["app::main", "std::rt::lang_start"]);
+            assert_eq!(this.execution_line(cx), Some((source.clone(), 2)));
+            assert_eq!(
+                this.debug_variable_rows(),
+                [
+                    (0, "Locals".into(), "".into()),
+                    (1, "numbers".into(), "size=3".into()),
+                    (1, "total".into(), "6".into()),
+                    (0, "Registers".into(), "".into()),
+                ]
+            );
+        });
+
+        let ws = workspace.clone();
+        step(cx, window, move |_, cx| {
+            ws.update(cx, |this, cx| this.expand_variable("numbers", cx))
+        });
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).debug_variable_rows().len() == 6)
+        });
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).debug_variable_rows())[2],
+            (2, "[0]".to_string(), "1".to_string())
+        );
+
+        step(cx, window, |window, cx| window.press("f9", cx));
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_output())
+                .is_some_and(|(_, _, ending)| ending.is_some())
+        });
+        let (_, lines, ending) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+        assert_eq!(ending.as_deref(), Some("Debugging finished"));
+        let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+        assert!(texts.contains(&"total 6".to_string()), "{texts:?}");
+        assert!(texts.contains(&"Process finished with exit code 0".to_string()));
+        cx.update(|cx| assert_eq!(workspace.read(cx).execution_line(cx), None));
+    }
+
+    #[gpui_kit::test]
+    fn clicking_the_gutter_toggles_a_breakpoint(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                let editor = this.editor().clone();
+                editor.apply_edit(0..0, "one\ntwo\nthree\nfour\n", window, cx);
+            });
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let (bounds, line_height) = vcx.update(|_, cx| {
+            let state = workspace.read(cx).editor().state().read(cx);
+            (state.input_bounds(), state.line_height().unwrap())
+        });
+        // The line numbers start at the editor's left edge.
+        let third_line = gpui_kit::point(
+            bounds.origin.x + gpui_kit::px(6.),
+            bounds.origin.y + line_height * 2.5,
+        );
+        let lines = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.update(|_, cx| {
+                let this = workspace.read(cx);
+                this.breakpoint_lines(this.active, cx)
+            })
+        };
+        let selection = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.update(|_, cx| workspace.read(cx).editor().selection(cx))
+        };
+        let before = selection(&mut vcx);
+        vcx.simulate_click(third_line, gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert_eq!(lines(&mut vcx), [2].into());
+        assert_eq!(
+            selection(&mut vcx),
+            before,
+            "the click doesn't move the cursor"
+        );
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.simulate_click(third_line, gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert!(lines(&mut vcx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn the_title_bar_debug_button_opens_the_picker(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx
+            .debug_bounds("debug-selected")
+            .expect("the button is in the title bar");
+        vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert!(vcx.update(|_, cx| workspace.read(cx).run_picker_rows(cx).is_some()));
+    }
+
+    /// Debugs a real Cargo project with the real `lldb-dap`: builds it,
+    /// stops at a breakpoint, reads a variable, resumes. Needs Xcode's tools
+    /// and Cargo, and macOS may ask once for permission to debug.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let source = root.join("src/main.rs");
+        std::fs::write(
+            &source,
+            "fn main() {\n    let numbers = vec![1, 2, 3];\n    let total: i32 = numbers.iter().sum();\n    println!(\"total {total}\");\n}\n",
+        )
+        .unwrap();
+        let (window, workspace) = open(cx, &root);
+        open_file(cx, window, &workspace, &source);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            ws.update(cx, |this, cx| {
+                this.editor()
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(100..100, cx))
+            });
+            window.press("secondary-f8", cx);
+        });
+        step(cx, window, |window, cx| window.press("ctrl-d", cx));
+        let wait = |cx: &mut TestAppContext, done: &dyn Fn(&Workspace, &gpui_kit::App) -> bool| {
+            for _ in 0..1200 {
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(50));
+                cx.run_until_parked();
+                if cx.update(|cx| done(workspace.read(cx), cx)) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let output = cx.update(|cx| workspace.read(cx).run_output());
+            panic!("timed out: {output:#?}");
+        };
+        wait(cx, &|this, cx| {
+            this.run_picker_rows(cx)
+                .is_some_and(|rows| rows.iter().any(|row| row == "sample"))
+        });
+        step(cx, window, |window, cx| window.input("sample", cx));
+        step(cx, window, |window, cx| window.press("enter", cx));
+        wait(cx, &|this, _| {
+            this.debug_variable_rows()
+                .iter()
+                .any(|(_, name, _)| name == "total")
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(this.execution_line(cx), Some((source.clone(), 3)));
+            let rows = this.debug_variable_rows();
+            eprintln!("{rows:#?}");
+            assert!(rows.contains(&(1, "total".into(), "6".into())));
+            assert!(rows.contains(&(1, "numbers".into(), "size=3".into())));
+        });
+        // A `println!` line can have more than one breakpoint location, so
+        // resume until it ends.
+        for _ in 0..5 {
+            step(cx, window, |window, cx| window.press("f9", cx));
+            wait(cx, &|this, _| {
+                this.run_output()
+                    .is_some_and(|(_, _, ending)| ending.is_some())
+                    || this.debug_phase() == Some(super::debug::Phase::Paused)
+            });
+            if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(super::debug::Phase::Ended)
+            {
+                break;
+            }
+        }
+        let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+        let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+        eprintln!("{texts:#?}");
+        assert!(texts.contains(&"total 6".to_string()));
+    }
+
+    #[gpui_kit::test]
+    fn breakpoints_follow_the_debugging_setting(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.ts");
+        std::fs::write(&path, "const a = 1;\nconst b = 2;\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        let lines = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let this = workspace.read(cx);
+                this.breakpoint_lines(this.active, cx)
+            })
+        };
+        let toggle = |cx: &mut TestAppContext| {
+            step(cx, window, |window, cx| {
+                window.render_frame(cx);
+                window.press("secondary-f8", cx);
+            })
+        };
+
+        // TypeScript's debugger is off to begin with: no breakpoints.
+        toggle(cx);
+        assert!(lines(cx).is_empty());
+
+        step(cx, window, |_, cx| {
+            crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+        });
+        toggle(cx);
+        assert_eq!(lines(cx), [0].into());
+
+        // Off again hides it, and on again brings it back.
+        step(cx, window, |_, cx| {
+            crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", false))
+        });
+        assert!(lines(cx).is_empty());
+        step(cx, window, |_, cx| {
+            crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+        });
+        assert_eq!(lines(cx), [0].into());
+    }
+
+    #[gpui_kit::test]
+    fn debugging_a_language_that_is_off_starts_nothing(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".jig")).unwrap();
+        std::fs::write(dir.path().join("app.ts"), "console.log(1);\n").unwrap();
+        std::fs::write(
+            dir.path().join(".jig/run.toml"),
+            "[[run]]\nname = \"App\"\ncommand = \"node app.ts\"\n",
+        )
+        .unwrap();
+        let (window, workspace) = open(cx, dir.path());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("ctrl-d", cx);
+        });
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_picker_rows(cx))
+                .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
+        });
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert!(cx.update(|cx| workspace.read(cx).run_output()).is_none());
+    }
+
+    /// Debugs a TypeScript file on Node with the real js-debug, through its
+    /// child session: stops at a breakpoint, reads a variable, resumes.
+    /// Needs Node 23.6+ and js-debug, unpacked where `JIG_JS_DEBUG` says.
+    #[gpui_kit::test]
+    #[ignore]
+    fn debug_typescript_live(cx: &mut TestAppContext) {
+        let js_debug = std::env::var("JIG_JS_DEBUG").expect("JIG_JS_DEBUG: where js-debug is");
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join(".jig")).unwrap();
+        let source = root.join("main.ts");
+        std::fs::write(
+            &source,
+            "function total(numbers: number[]): number {\n  return numbers.reduce((a, b) => a + b, 0);\n}\nconst numbers: number[] = [1, 2, 3];\nconst sum: number = total(numbers);\nconsole.log(`total ${sum}`);\n",
+        )
+        .unwrap();
+        // `JIG_TS_COMMAND="npm start"` tries the way package.json scripts run.
+        let command = std::env::var("JIG_TS_COMMAND").unwrap_or_else(|_| "node main.ts".into());
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name": "sample", "scripts": {"start": "node main.ts"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".jig/run.toml"),
+            format!("[[run]]\nname = \"App\"\ncommand = \"{command}\"\n"),
+        )
+        .unwrap();
+        let (window, workspace) = open(cx, &root);
+        step(cx, window, move |_, cx| {
+            crate::settings::update(cx, |s| {
+                s.debugging.set_enabled("typescript", true);
+                s.debugging.set_path("typescript", &js_debug);
+            })
+        });
+        open_file(cx, window, &workspace, &source);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            ws.update(cx, |this, cx| {
+                this.editor()
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(50..50, cx))
+            });
+            window.press("secondary-f8", cx);
+        });
+        step(cx, window, |window, cx| window.press("ctrl-d", cx));
+        let wait = |cx: &mut TestAppContext, done: &dyn Fn(&Workspace, &gpui_kit::App) -> bool| {
+            for _ in 0..600 {
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(50));
+                cx.run_until_parked();
+                if cx.update(|cx| done(workspace.read(cx), cx)) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let output = cx.update(|cx| workspace.read(cx).run_output());
+            panic!("timed out: {output:#?}");
+        };
+        wait(cx, &|this, cx| {
+            this.run_picker_rows(cx)
+                .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
+        });
+        step(cx, window, |window, cx| window.press("enter", cx));
+        wait(cx, &|this, _| {
+            this.debug_variable_rows()
+                .iter()
+                .any(|(_, name, _)| name == "numbers")
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(this.execution_line(cx), Some((source.clone(), 1)));
+            let rows = this.debug_variable_rows();
+            eprintln!("{rows:#?}");
+            assert!(rows.contains(&(1, "numbers".into(), "(3) [1, 2, 3]".into())));
+        });
+        step(cx, window, |window, cx| window.press("f9", cx));
+        wait(cx, &|this, _| {
+            this.run_output()
+                .is_some_and(|(_, _, ending)| ending.is_some())
+        });
+        let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+        let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+        eprintln!("{texts:#?}");
+        assert!(texts.contains(&"total 6".to_string()));
+    }
+
+    /// A repository with `a.rs` committed as three lines, open in a window.
+    fn committed_repo(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, AnyWindowHandle, Entity<Workspace>) {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+        };
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("a.rs"), "one\ntwo\nthree\n").unwrap();
+        git(&["add", "a.rs"]);
+        git(&["commit", "--quiet", "-m", "First"]);
+        let (window, workspace) = open(cx, &dir.path().join("a.rs"));
+        (dir, window, workspace)
+    }
+
+    #[gpui_kit::test]
+    fn changed_lines_are_marked_and_a_change_can_be_reverted(cx: &mut TestAppContext) {
+        use gpui_kit::base::input::LineChangeKind;
+        let (_dir, window, workspace) = committed_repo(cx);
+        let rows =
+            |cx: &mut TestAppContext| workspace.read_with(cx, |this, cx| this.line_change_rows(cx));
+        assert_eq!(rows(cx), vec![]);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                let editor = this.editor().clone();
+                editor.apply_edit(4..7, "TWO", window, cx);
+                let end = editor.text(cx).len();
+                editor.apply_edit(end..end, "four\n", window, cx);
+            });
+        });
+        assert_eq!(
+            rows(cx),
+            vec![
+                (1..2, LineChangeKind::Modified),
+                (3..4, LineChangeKind::Added)
+            ]
+        );
+
+        // Click the bar beside the changed line.
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let second_line = vcx.update(|_, cx| {
+            let state = workspace.read(cx).editor().state().read(cx);
+            state.range_to_bounds(&(4..4)).unwrap()
+        });
+        // The bar sits just left of the text.
+        let bar = gpui_kit::point(
+            second_line.left() - gpui_kit::px(3.),
+            second_line.center().y,
+        );
+        vcx.simulate_click(bar, gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert!(vcx.update(|_, cx| workspace.read(cx).hunk_popup_open()));
+        vcx.update(|window, cx| window.render_frame(cx));
+        let revert = vcx.debug_bounds("git-revert").expect("the popup shows");
+        vcx.simulate_click(revert.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert_eq!(text_of(&mut vcx, &workspace), "one\ntwo\nthree\nfour\n");
+        assert!(!vcx.update(|_, cx| workspace.read(cx).hunk_popup_open()));
+        assert_eq!(
+            vcx.update(|_, cx| workspace.read(cx).line_change_rows(cx)),
+            vec![(3..4, LineChangeKind::Added)]
+        );
+    }
+
+    fn text_of(vcx: &mut gpui_kit::VisualTestContext, workspace: &Entity<Workspace>) -> String {
+        vcx.update(|_, cx| workspace.read(cx).editor().text(cx))
+    }
+
+    #[gpui_kit::test]
+    fn the_git_panel_commits_the_checked_files_and_the_marks_follow(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = committed_repo(cx);
+        std::fs::write(dir.path().join("b.rs"), "new\n").unwrap();
+        std::fs::write(dir.path().join("c.rs"), "also new\n").unwrap();
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                let editor = this.editor().clone();
+                editor.apply_edit(0..3, "ONE", window, cx);
+                this.save(&super::Save, window, cx);
+            });
+        });
+        assert_eq!(
+            workspace.read_with(cx, |this, cx| this.line_change_rows(cx).len()),
+            1
+        );
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::ToggleGitPanel), cx)
+        });
+        let panel = workspace
+            .read_with(cx, |this, _| this.git_panel())
+            .expect("the panel opens");
+        let files = |cx: &mut TestAppContext| {
+            panel.read_with(cx, |panel, _| {
+                panel
+                    .status()
+                    .map(|status| status.files.iter().map(|f| f.path.clone()).collect())
+                    .unwrap_or_else(Vec::new)
+            })
+        };
+        assert_eq!(files(cx), vec!["a.rs", "b.rs", "c.rs"]);
+        // Changes to tracked files start checked, new files don't.
+        let checked =
+            |cx: &mut TestAppContext| panel.read_with(cx, |panel, _| panel.checked_files());
+        assert_eq!(checked(cx), vec!["a.rs"]);
+        let p = panel.clone();
+        step(cx, window, move |_, cx| {
+            p.update(cx, |panel, cx| panel.toggle_file("b.rs", cx))
+        });
+        assert_eq!(checked(cx), vec!["a.rs", "b.rs"]);
+        let p = panel.clone();
+        step(cx, window, move |window, cx| {
+            p.update(cx, |panel, cx| {
+                panel.set_message("Shout", window, cx);
+                panel.commit(window, cx);
+            })
+        });
+        assert!(!panel.read_with(cx, |panel, _| panel.is_busy()));
+        assert_eq!(files(cx), vec!["c.rs"], "the unchecked file stays out");
+        assert_eq!(checked(cx), Vec::<String>::new());
+        let log = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["log", "--format=%s"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout), "Shout\nFirst\n");
+        // The commit is the new base: nothing differs from it.
+        assert_eq!(
+            workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
+            vec![]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn switching_branches_reloads_open_files(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = committed_repo(cx);
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+        };
+        git(&["switch", "--quiet", "--create", "other"]);
+        std::fs::write(dir.path().join("a.rs"), "other\n").unwrap();
+        git(&["commit", "--quiet", "-am", "Other"]);
+        git(&["switch", "--quiet", "main"]);
+
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::SwitchBranch), cx)
+        });
+        let picker = workspace
+            .read_with(cx, |this, _| this.branch_picker())
+            .expect("the picker opens");
+        // Most recent first, but both commits are in the same second.
+        let mut names = picker.read_with(cx, |picker, _| picker.row_names());
+        names.sort();
+        assert_eq!(names, vec!["main".to_string(), "other".to_string()]);
+        cx.simulate_input(window, "oth");
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        assert!(workspace.read_with(cx, |this, _| this.branch_picker().is_none()));
+        assert_eq!(text(cx, &workspace), "other\n");
+        assert_eq!(
+            workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
+            vec![]
+        );
     }
 }

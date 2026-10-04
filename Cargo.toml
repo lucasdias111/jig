@@ -29,9 +29,13 @@ jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }
 anyhow = "1"
 
-# GPUI Kit's editor stops seeing the mouse once it has scrolled more than a
-# screen, which breaks Cmd+click below the first page. Patched copy of
-# gpui-base 0.7.0 until a release fixes it; the change is marked "Jig patch"
-# in vendor/gpui-base/src/input/base/state.rs.
+# A patched copy of gpui-base 0.7.0; every change is marked "Jig patch".
+# - GPUI Kit's editor stops seeing the mouse once it has scrolled more than a
+#   screen, which breaks Cmd+click below the first page (input/base/state.rs).
+# - Gutter dots on range decorations, in a column of their own, and a gutter
+#   click handler that can be turned off again, for breakpoints
+#   (input/editor/decorations.rs, input/base/element.rs, kind.rs).
+# - Change bars at the gutter's edge, with clicks, for git
+#   (`set_line_changes`, `on_line_change_click`; the same files).
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }

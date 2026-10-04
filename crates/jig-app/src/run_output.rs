@@ -40,7 +40,14 @@ const COLOR_ENV: &[(&str, &str)] = &[
 
 pub enum RunEvent {
     Line(OutputLine),
-    Exited(String),
+    /// A line of JSON on stdout, kept raw for the caller to read, when the
+    /// process was started for its data (`cargo build --message-format`).
+    Data(String),
+    /// How it ended, in words, and whether it succeeded.
+    Exited {
+        message: String,
+        success: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,10 +113,12 @@ pub struct Process {
 
 impl Process {
     /// Start `config`, sending its output and then its end to `events`.
-    /// File references resolve against its folder, then `root`.
+    /// File references resolve against its folder, then `root`. With
+    /// `json_stdout`, lines of JSON on stdout come as data, not output.
     pub fn spawn(
         config: &RunConfig,
         root: &Path,
+        json_stdout: bool,
         events: UnboundedSender<RunEvent>,
     ) -> Result<Self> {
         let mut child = Command::new("/bin/sh")
@@ -145,7 +154,8 @@ impl Process {
             let bases = bases.clone();
             let done = done.clone();
             std::thread::spawn(move || {
-                read_lines(reader, stream, &bases[..], &events);
+                let json = json_stdout && stream == Stream::Stdout;
+                read_lines(reader, stream, json, &bases[..], &events);
                 let _ = done.send(());
             });
         }
@@ -160,11 +170,11 @@ impl Process {
                     break;
                 }
             }
-            let ending = match status {
-                Ok(status) => describe_exit(status),
-                Err(error) => format!("Lost track of the process: {error}"),
+            let (message, success) = match status {
+                Ok(status) => (describe_exit(status), status.success()),
+                Err(error) => (format!("Lost track of the process: {error}"), false),
             };
-            let _ = events.unbounded_send(RunEvent::Exited(ending));
+            let _ = events.unbounded_send(RunEvent::Exited { message, success });
         });
         Ok(Self { pid, exited })
     }
@@ -215,6 +225,7 @@ fn describe_exit(status: ExitStatus) -> String {
 fn read_lines(
     reader: impl Read,
     stream: Stream,
+    json: bool,
     bases: &[PathBuf],
     events: &UnboundedSender<RunEvent>,
 ) {
@@ -228,8 +239,12 @@ fn read_lines(
             Ok(_) => {}
         }
         let raw = String::from_utf8_lossy(&buf);
-        let line = parse_line(&raw, stream, &mut style, bases);
-        if events.unbounded_send(RunEvent::Line(line)).is_err() {
+        let event = if json && raw.starts_with('{') {
+            RunEvent::Data(raw.trim_end().to_string())
+        } else {
+            RunEvent::Line(parse_line(&raw, stream, &mut style, bases))
+        };
+        if events.unbounded_send(event).is_err() {
             return;
         }
     }
@@ -528,15 +543,16 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             env: Vec::new(),
             source: crate::run_configs::Source::File,
+            debug: None,
         };
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        let process = Process::spawn(&config, dir.path(), tx).unwrap();
+        let process = Process::spawn(&config, dir.path(), false, tx).unwrap();
         let events: Vec<RunEvent> = futures::executor::block_on_stream(rx).collect();
         let mut lines: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
                 RunEvent::Line(line) => Some((line.text.to_string(), line.stream)),
-                RunEvent::Exited(_) => None,
+                _ => None,
             })
             .collect();
         lines.sort_by(|a, b| a.0.cmp(&b.0));
@@ -549,7 +565,8 @@ mod tests {
         );
         assert!(matches!(
             events.last(),
-            Some(RunEvent::Exited(ending)) if ending == "Process finished with exit code 3"
+            Some(RunEvent::Exited { message, success: false })
+                if message == "Process finished with exit code 3"
         ));
         assert!(!process.is_running());
 
@@ -558,11 +575,11 @@ mod tests {
             ..config
         };
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        let process = Process::spawn(&config, dir.path(), tx).unwrap();
+        let process = Process::spawn(&config, dir.path(), false, tx).unwrap();
         process.stop();
         let ending = futures::executor::block_on_stream(rx).find_map(|e| match e {
-            RunEvent::Exited(ending) => Some(ending),
-            RunEvent::Line(_) => None,
+            RunEvent::Exited { message, .. } => Some(message),
+            _ => None,
         });
         assert_eq!(ending.as_deref(), Some("Process stopped"));
     }

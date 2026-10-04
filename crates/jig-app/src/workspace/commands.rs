@@ -528,7 +528,10 @@ impl Workspace {
             cx.notify();
         } else if self.modal_open() {
             cx.propagate();
-        } else if self.reject_preview(window, cx) || self.stop_agent_turn(window, cx) {
+        } else if self.reject_preview(window, cx)
+            || self.stop_agent_turn(window, cx)
+            || self.close_hunk_popup(cx)
+        {
             cx.stop_propagation();
         } else if self.run.take().is_some() {
             self.editor().clear_highlights(cx);

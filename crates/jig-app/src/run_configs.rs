@@ -24,12 +24,21 @@ pub const TEMPLATE: &str = r#"# Run configurations for this project. Pick one wi
 # command  runs through /bin/sh, from the project root unless `cwd` says
 #          otherwise (relative to the root).
 # env      is added to the environment.
+#
+# Debugging (⌃D) works on its own for `cargo run` commands. For anything
+# else, say what to debug:
+# program  the executable, relative to the root;
+# args     its arguments;
+# build    a shell command that builds it first.
 
 [[run]]
 name = "Run"
 command = ""
 # cwd = "."
 # env = { RUST_LOG = "debug" }
+# program = "target/debug/app"
+# args = ["--verbose"]
+# build = "make"
 "#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +50,18 @@ pub struct RunConfig {
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
     pub source: Source,
+    /// What to debug, when the file says.
+    pub debug: Option<DebugProgram>,
+}
+
+/// An executable to debug, from `program`, `args` and `build` in the file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugProgram {
+    /// Absolute.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// A shell command to build it with first.
+    pub build: Option<String>,
 }
 
 /// Where a configuration came from, shown beside it.
@@ -78,6 +99,10 @@ struct FileEntry {
     cwd: Option<PathBuf>,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    program: Option<PathBuf>,
+    #[serde(default)]
+    args: Vec<String>,
+    build: Option<String>,
 }
 
 /// Every configuration for the project at `root`: its file's first, then
@@ -119,6 +144,11 @@ pub fn from_file(root: &Path) -> Result<Vec<RunConfig>> {
                 .map_or_else(|| root.to_path_buf(), |cwd| root.join(cwd)),
             env: entry.env.into_iter().collect(),
             source: Source::File,
+            debug: entry.program.map(|program| DebugProgram {
+                program: root.join(program),
+                args: entry.args,
+                build: entry.build.filter(|build| !build.trim().is_empty()),
+            }),
         })
         .collect())
 }
@@ -146,6 +176,7 @@ fn config(root: &Path, name: String, command: String, source: Source) -> RunConf
         cwd: root.to_path_buf(),
         env: Vec::new(),
         source,
+        debug: None,
     }
 }
 
@@ -333,6 +364,7 @@ command = "  "
                 cwd: root.join("site"),
                 env: vec![("PORT".into(), "8000".into())],
                 source: Source::File,
+                debug: None,
             }]
         );
     }

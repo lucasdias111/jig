@@ -33,6 +33,8 @@ pub(super) struct Tab {
     pub(super) offers: super::snippets::Offers,
     /// The snippet being filled in, if any.
     pub(super) snippet: Option<super::snippets::Session>,
+    /// Breakpoints, and the line the debugger is paused on.
+    pub(super) marks: super::breakpoints::Marks,
     _events: Subscription,
 }
 
@@ -103,6 +105,7 @@ impl Workspace {
                     this.refresh_dirty(ix, window, cx);
                     this.lsp_changed(ix, cx);
                     this.snippet_changed(ix, cx);
+                    this.git_buffer_changed(ix, cx);
                     if ix == this.active {
                         this.on_buffer_changed(cx);
                     }
@@ -111,6 +114,8 @@ impl Workspace {
             },
         );
         let cursor = cx.new(|cx| CursorPosition::new(state.clone(), cx));
+        let marks = self.install_marks(&state, &document, cx);
+        self.install_git(&state, &document, cx);
         let lsp = document.path.as_deref().and_then(|path| {
             let language = document.language(&self.settings.languages);
             super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
@@ -124,6 +129,7 @@ impl Workspace {
             lsp,
             offers,
             snippet: None,
+            marks,
             _events: events,
         }
     }
@@ -175,6 +181,7 @@ impl Workspace {
     pub(super) fn reload_tab(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         match Document::open(path) {
             Ok(document) => {
+                self.remember_breakpoints(self.active, cx);
                 let tab = self.new_tab(document, window, cx);
                 self.leave_tab(cx);
                 self.tabs[self.active] = tab;
@@ -256,6 +263,7 @@ impl Workspace {
         if ix == self.active {
             self.leave_tab(cx);
         }
+        self.remember_breakpoints(ix, cx);
         self.tabs.remove(ix);
         if self.tabs.is_empty() {
             let tab = self.new_tab(Document::default(), window, cx);
