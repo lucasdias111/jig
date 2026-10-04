@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, OutdentInline, Undo};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
 use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
@@ -13,6 +13,9 @@ use jig_editor::EditorHandle;
 
 use super::agent::AgentRun;
 use super::{OpenCommand, OpenPalette, Workspace};
+
+/// The title bar's button for the command input (Lucide "sparkles").
+const COMMAND_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>"#;
 
 /// How long an error stays up before it fades on its own.
 const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
@@ -65,6 +68,56 @@ impl Workspace {
             .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
             // The cursor is scrolled out of view: open near the top instead.
             .unwrap_or(gpui_kit::point(px(48.), px(48.)))
+    }
+
+    /// A button in the title bar that opens the command input, for those
+    /// who reach for the mouse or don't know ⌘K yet. Only with a file open.
+    pub(super) fn render_command_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.home {
+            return None;
+        }
+        let theme = cx.theme();
+        let accent = jig_commands::surface::lane_accent(false, cx);
+        let shortcut = if cfg!(target_os = "macos") {
+            "⌘K"
+        } else {
+            "Ctrl K"
+        };
+        Some(
+            h_flex()
+                .id("open-command")
+                .debug_selector(|| "open-command".into())
+                .flex_none()
+                .ml_2()
+                .h(px(26.))
+                .px_2()
+                .gap_1p5()
+                .rounded(px(6.))
+                .text_size(px(12.5))
+                .text_color(theme.foreground.opacity(0.85))
+                .hover(|s| s.bg(theme.foreground.opacity(0.08)))
+                .child(
+                    Icon::default()
+                        .data(COMMAND_ICON)
+                        .size(px(13.))
+                        .flex_none()
+                        .text_color(accent),
+                )
+                .child(div().flex_none().whitespace_nowrap().child("Command"))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(theme.muted_foreground)
+                        .child(shortcut),
+                )
+                // Otherwise the title bar takes the press as a window drag.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.open_command(&OpenCommand, window, cx)),
+                )
+                .into_any_element(),
+        )
     }
 
     pub(super) fn open_command(
@@ -172,8 +225,7 @@ impl Workspace {
                 agent: None,
                 _task: None,
             });
-            let label = invocation.name.unwrap_or_else(|| "Agent".into());
-            self.run_agent(id, label, request, window, cx);
+            self.run_agent(id, invocation.name, request, window, cx);
             return;
         }
         let provider = match &self.provider {
@@ -469,8 +521,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc rejects a pending change, cancels a running command or dismisses
-    /// its bubble. With the palette open, the palette handles Esc itself.
+    /// Esc rejects a pending change, stops the agent's turn, cancels a
+    /// running command or dismisses its bubble or the agent conversation.
+    /// With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
             // Focus went back to the code (e.g. a click outside the form or
@@ -483,8 +536,12 @@ impl Workspace {
             cx.notify();
         } else if self.modal_open() {
             cx.propagate();
-        } else if self.reject_preview(window, cx) || self.run.take().is_some() {
+        } else if self.reject_preview(window, cx) || self.stop_agent_turn(window, cx) {
+            cx.stop_propagation();
+        } else if self.run.take().is_some() {
             self.editor().clear_highlights(cx);
+            // The agent's reply box may have had the keyboard.
+            self.editor().focus(window, cx);
             cx.stop_propagation();
             cx.notify();
         } else {
@@ -503,7 +560,10 @@ impl Workspace {
         if self
             .run
             .as_ref()
-            .is_some_and(|run| !run.bubble.is_running() && run.preview.is_none())
+            // The agent's conversation stays until it's closed.
+            .is_some_and(|run| {
+                !run.bubble.is_running() && run.preview.is_none() && run.agent.is_none()
+            })
         {
             self.run = None;
             cx.notify();
@@ -511,7 +571,7 @@ impl Workspace {
     }
 }
 
-fn shorten(error: &str) -> String {
+pub(super) fn shorten(error: &str) -> String {
     let error = error.trim();
     if error.chars().count() <= MAX_ERROR_CHARS {
         error.to_string()

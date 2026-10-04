@@ -1,17 +1,19 @@
 //! Agent commands: the command goes to a coding agent (OpenCode), which may
 //! read and edit the whole project. Every edit it wants to make opens in the
 //! editor as a normal preview, in its file's tab, and only goes through when
-//! the user accepts it.
+//! the user accepts it. The run is a conversation: once the agent answers,
+//! the user can reply, and the agent carries on in the same session.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures::StreamExt as _;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use jig_ai::PromptRequest;
 use jig_ai::agent::{AgentEvent, AgentRequest, AgentSession, EditRequest};
-use jig_commands::{Bubble, LiveStep};
+use jig_commands::{Bubble, ChatBounds, ChatDrag, ChatEntry, ChatStatus, Conversation, LiveStep};
 use jig_editor::EditorHandle;
 
 use super::Workspace;
@@ -40,7 +42,25 @@ pub(super) struct AgentRun {
     label: String,
     started: std::time::Instant,
     context: Vec<String>,
+    /// The current turn is over (or stopped), so dropping the run leaves
+    /// the agent alone.
     finished: bool,
+    /// The project folder the agent works in.
+    directory: PathBuf,
+    /// Where the conversation started, for its header.
+    file: String,
+    entries: Vec<ChatEntry>,
+    /// The reply box, shown between turns.
+    pub(super) input: Entity<InputState>,
+    scroll: ScrollHandle,
+    /// Where the conversation is on screen, and while it's dragged, where
+    /// the mouse holds it from its corner.
+    bounds: ChatBounds,
+    grab: Option<Point<Pixels>>,
+    /// Dragged somewhere by the user: it stays there rather than following
+    /// the agent's edits.
+    moved: bool,
+    _input_events: Subscription,
 }
 
 struct PendingEdit {
@@ -65,7 +85,7 @@ impl Workspace {
     pub(super) fn run_agent(
         &mut self,
         id: u64,
-        label: String,
+        name: Option<String>,
         request: PromptRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -78,14 +98,102 @@ impl Workspace {
                 cx,
             );
         };
+        // What the user asked, as the conversation's first line.
+        let asked = match (&name, &request.comment) {
+            (Some(name), Some(note)) => format!("{name}: {note}"),
+            (Some(name), None) => name.clone(),
+            (None, Some(note)) => format!("{}: {note}", request.instruction.trim()),
+            (None, None) => request.instruction.trim().to_string(),
+        };
+        let agent = self.new_agent_run(name, asked, &path, window, cx);
+        let run = self.run.as_mut().expect("run_command set up the run");
+        run.agent = Some(agent);
+        self.start_turn(id, jig_ai::agent::prompt(&request), window, cx);
+    }
+
+    /// A conversation that starts with the user asking `asked`, in the
+    /// project around `path`. The agent isn't contacted yet.
+    fn new_agent_run(
+        &mut self,
+        name: Option<String>,
+        asked: String,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AgentRun {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Reply to the agent…"));
+        let input_events =
+            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.reply_to_agent(window, cx);
+                }
+            });
+        let context = self.context_names();
+        let file = self.relative(path);
+        AgentRun {
+            session: None,
+            pending: None,
+            queue: VecDeque::new(),
+            touched: Vec::new(),
+            step: LiveStep::default(),
+            label: name.unwrap_or_else(|| "Agent".into()),
+            started: std::time::Instant::now(),
+            context,
+            finished: true,
+            directory: crate::project::root_for(path),
+            file,
+            entries: vec![ChatEntry::User(asked)],
+            input,
+            scroll: ScrollHandle::new(),
+            bounds: Default::default(),
+            grab: None,
+            moved: false,
+            _input_events: input_events,
+        }
+    }
+
+    /// An agent conversation between turns, without OpenCode behind it.
+    #[cfg(test)]
+    pub(super) fn open_test_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = self.document().path.clone().expect("a saved file");
+        self.show_note(String::new(), window, cx);
+        let agent = self.new_agent_run(None, "Hello".into(), &path, window, cx);
+        if let Some(run) = self.run.as_mut() {
+            run._task = None;
+            run.agent = Some(agent);
+        }
+        cx.notify();
+    }
+
+    /// Send `prompt` to the agent, in the run's session once there is one,
+    /// and follow what it does until it's done.
+    fn start_turn(&mut self, id: u64, prompt: String, window: &mut Window, cx: &mut Context<Self>) {
         // The agent reads the disk, so it must see what's on screen.
-        if self.tab().dirty {
+        if self.tab().dirty
+            && let Some(path) = self.document().path.clone()
+        {
             self.save_to(&path, window, cx);
         }
-        let directory = crate::project::root_for(&path);
-        let prompt = jig_ai::agent::prompt(&request);
-        let step = LiveStep::default();
-        step.set("Starting the agent".into());
+        let Some(agent) = self.agent_run(id) else {
+            return;
+        };
+        let session = agent.session.clone();
+        let directory = agent.directory.clone();
+        agent.step = LiveStep::default();
+        agent.step.set(if session.is_some() {
+            "Thinking".into()
+        } else {
+            "Starting the agent".into()
+        });
+        agent.started = std::time::Instant::now();
+        agent.finished = false;
+        let bubble = Bubble::Running {
+            label: agent.label.clone(),
+            agent: true,
+            started: agent.started,
+            context: agent.context.clone(),
+            step: Some(agent.step.clone()),
+        };
 
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
@@ -93,9 +201,15 @@ impl Workspace {
                 let _ = sender.unbounded_send(message);
             };
             let result = (|| {
-                let server = crate::agent::server()?;
-                let session = AgentSession::create(server, &directory)?;
-                send(Message::Started(session.clone()));
+                let session = match session {
+                    Some(session) => session,
+                    None => {
+                        let server = crate::agent::server()?;
+                        let session = AgentSession::create(server, &directory)?;
+                        send(Message::Started(session.clone()));
+                        session
+                    }
+                };
                 let request = AgentRequest {
                     directory,
                     prompt,
@@ -119,30 +233,136 @@ impl Workspace {
                 }
             }
         });
-
-        let started = std::time::Instant::now();
-        let context = self.context_names();
-        let run = self.run.as_mut().expect("run_command set up the run");
-        run.bubble = Bubble::Running {
-            label: label.clone(),
-            agent: true,
-            started,
-            context: context.clone(),
-            step: Some(step.clone()),
-        };
-        run.agent = Some(AgentRun {
-            session: None,
-            pending: None,
-            queue: VecDeque::new(),
-            touched: Vec::new(),
-            step,
-            label,
-            started,
-            context,
-            finished: false,
-        });
-        run._task = Some(task);
+        if let Some(run) = self.run.as_mut() {
+            run.bubble = bubble;
+            run._task = Some(task);
+        }
         cx.notify();
+    }
+
+    /// Enter in the reply box: the agent takes the reply as its next turn.
+    fn reply_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let id = run.id;
+        let Some(agent) = run.agent.as_mut().filter(|agent| agent.finished) else {
+            return;
+        };
+        let text = agent.input.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        agent
+            .input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        agent.entries.push(ChatEntry::User(text.clone()));
+        agent.scroll.scroll_to_bottom();
+        // Back to the code, where the agent's edits are reviewed.
+        self.editor().focus(window, cx);
+        self.start_turn(id, text, window, cx);
+    }
+
+    /// Esc while the agent works: stop the turn but keep the conversation,
+    /// so the user can say what to do instead. Returns false when there is
+    /// no turn to stop.
+    pub(super) fn stop_agent_turn(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(run) = self.run.as_mut() else {
+            return false;
+        };
+        let Some(agent) = run.agent.as_mut().filter(|agent| !agent.finished) else {
+            return false;
+        };
+        agent.finished = true;
+        agent.queue.clear();
+        if let Some(session) = agent.session.clone() {
+            std::thread::spawn(move || session.abort());
+        }
+        // Whatever the agent still sends is for a turn that's over.
+        run._task = None;
+        self.end_turn(ChatEntry::Note("Stopped.".into()), window, cx);
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn agent_entries(&self) -> Vec<ChatEntry> {
+        self.run
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .map(|agent| agent.entries.clone())
+            .unwrap_or_default()
+    }
+
+    /// Pressed on the conversation's header: a drag may follow.
+    fn grab_agent_chat(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let Some(agent) = run.agent.as_mut() else {
+            return;
+        };
+        // From where it's drawn, which may differ from the anchor when it
+        // was pushed in to fit the window.
+        let origin = agent.bounds.get().origin;
+        agent.grab = Some(event.position - origin);
+        run.anchor = origin;
+        cx.stop_propagation();
+    }
+
+    /// The conversation follows the mouse while its header is dragged.
+    pub(super) fn drag_agent_chat(
+        &mut self,
+        event: &DragMoveEvent<ChatDrag>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let Some(agent) = run.agent.as_mut() else {
+            return;
+        };
+        let Some(grab) = agent.grab else {
+            return;
+        };
+        run.anchor = event.event.position - grab;
+        agent.moved = true;
+        cx.notify();
+    }
+
+    /// The conversation, while the run is an agent's.
+    pub(super) fn render_agent_chat(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let run = self.run.as_ref()?;
+        let agent = run.agent.as_ref()?;
+        let status = match &run.bubble {
+            Bubble::Running {
+                started,
+                step: Some(step),
+                ..
+            } => ChatStatus::Working {
+                started: *started,
+                step: step.clone(),
+            },
+            Bubble::Preview {
+                message, removed, ..
+            } => ChatStatus::Reviewing {
+                path: message.clone(),
+                removed: removed.clone(),
+            },
+            _ => ChatStatus::Waiting,
+        };
+        Some(
+            Conversation::new(
+                format!("{} · in {}", agent.label, agent.file),
+                agent.entries.clone(),
+                status,
+                agent.input.clone(),
+                agent.scroll.clone(),
+                agent.bounds.clone(),
+            )
+            .on_grab(cx.listener(|this, event, _, cx| this.grab_agent_chat(event, cx)))
+            .into_any_element(),
+        )
     }
 
     fn agent_run(&mut self, id: u64) -> Option<&mut AgentRun> {
@@ -175,7 +395,8 @@ impl Workspace {
             }
             Message::Failed(error) => {
                 agent.finished = true;
-                self.fail(id, error, window, cx);
+                let error = super::commands::shorten(&error);
+                self.end_turn(ChatEntry::Error(error), window, cx);
                 return false;
             }
         }
@@ -276,7 +497,11 @@ impl Workspace {
         // The bubble follows the change once it's scrolled into view.
         cx.on_next_frame(window, |this, _, cx| {
             let anchor = this.floating_anchor(cx);
-            if let Some(run) = this.run.as_mut() {
+            if let Some(run) = this
+                .run
+                .as_mut()
+                .filter(|run| !run.agent.as_ref().is_some_and(|agent| agent.moved))
+            {
                 run.anchor = anchor;
                 cx.notify();
             }
@@ -301,6 +526,15 @@ impl Workspace {
         };
         run.preview = None;
         if let Some(agent) = run.agent.as_mut() {
+            let path = match &run.bubble {
+                Bubble::Preview { message, .. } => message.clone(),
+                _ => pending.path.to_string_lossy().into_owned(),
+            };
+            agent.entries.push(ChatEntry::Edit {
+                path,
+                accepted: accept,
+            });
+            agent.scroll.scroll_to_bottom();
             run.bubble = Bubble::Running {
                 label: agent.label.clone(),
                 agent: true,
@@ -354,12 +588,31 @@ impl Workspace {
     }
 
     fn finish_agent(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        let touched = self
-            .run
-            .as_mut()
-            .and_then(|run| run.agent.take())
-            .map(|mut agent| std::mem::take(&mut agent.touched))
-            .unwrap_or_default();
+        let text = if text.is_empty() {
+            "Done.".to_string()
+        } else {
+            text
+        };
+        if let Some(run) = self.run.as_mut() {
+            run.bubble = Bubble::AgentDone(text.clone());
+        }
+        self.end_turn(ChatEntry::Agent(text), window, cx);
+    }
+
+    /// Close the agent's turn with `entry` and open the reply box.
+    fn end_turn(&mut self, entry: ChatEntry, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(agent) = self.run.as_mut().and_then(|run| run.agent.as_mut()) else {
+            return;
+        };
+        let touched = std::mem::take(&mut agent.touched);
+        agent.entries.push(entry);
+        agent.scroll.scroll_to_bottom();
+        let input = agent.input.clone();
+        if let Some(run) = self.run.as_mut()
+            && run.bubble.is_running()
+        {
+            run.bubble = Bubble::Message(String::new());
+        }
         // Give OpenCode a moment to finish writing, then sync open tabs.
         cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
@@ -378,13 +631,7 @@ impl Workspace {
         .detach();
 
         self.editor().clear_highlights(cx);
-        if let Some(run) = self.run.as_mut() {
-            run.bubble = Bubble::AgentDone(if text.is_empty() {
-                "Done.".into()
-            } else {
-                text
-            });
-        }
+        input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 

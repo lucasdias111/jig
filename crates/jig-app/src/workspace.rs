@@ -567,6 +567,7 @@ impl Render for Workspace {
             .capture_action(cx.listener(Self::on_shift_tab))
             .capture_action(cx.listener(Self::on_accept_indent))
             .capture_action(cx.listener(Self::on_undo))
+            .on_drag_move(cx.listener(Self::drag_agent_chat))
             .child(
                 // One unified bar across the window: the sidebar's top runs
                 // up under the traffic lights, the rest holds the title or tabs.
@@ -590,6 +591,7 @@ impl Render for Workspace {
                                 .border_b_1()
                                 .border_color(theme.title_bar_border)
                                 .child(title)
+                                .children(self.render_command_button(cx))
                                 .children(self.render_run_controls(cx)),
                         ),
                     ),
@@ -651,7 +653,7 @@ impl Render for Workspace {
             .children(self.render_run_picker(window))
             .when_some(self.run.as_ref(), |this, run| {
                 let floating = self
-                    .render_agent_chat()
+                    .render_agent_chat(cx)
                     .unwrap_or_else(|| run.bubble.clone().into_any_element());
                 this.child(deferred(
                     anchored()
@@ -675,7 +677,7 @@ mod tests {
     use std::sync::Arc;
 
     use jig_ai::Provider;
-    use jig_commands::Bubble;
+    use jig_commands::{Bubble, ChatEntry};
     use jig_editor::EditorHandle;
 
     use super::{Workspace, key_bindings};
@@ -1474,6 +1476,93 @@ mod tests {
         });
         assert!(cx.update(|cx| workspace.read(cx).new_command.is_none()));
         assert!(!commands.exists());
+    }
+
+    #[gpui_kit::test]
+    fn the_title_bar_button_opens_the_command_input(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx
+            .debug_bounds("open-command")
+            .expect("the button is in the title bar");
+        vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        assert!(vcx.update(|_, cx| workspace.read(cx).palette.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn the_agent_conversation_moves_by_its_header(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let header = vcx
+            .debug_bounds("agent-chat-header")
+            .expect("the conversation is open");
+        let before = vcx.update(|_, cx| workspace.read(cx).run.as_ref().unwrap().anchor);
+
+        let (from, by) = (header.center(), gpui_kit::point(px(60.), px(90.)));
+        let none = gpui_kit::Modifiers::none();
+        vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, none);
+        for i in 1..=5 {
+            let at = from + by * (i as f32 / 5.);
+            vcx.simulate_mouse_move(at, Some(gpui_kit::MouseButton::Left), none);
+        }
+        vcx.simulate_mouse_up(from + by, gpui_kit::MouseButton::Left, none);
+        vcx.run_until_parked();
+
+        let after = vcx.update(|_, cx| workspace.read(cx).run.as_ref().unwrap().anchor);
+        // Within a pixel: positions are snapped to whole pixels when drawn.
+        let near = |a: gpui_kit::Point<gpui_kit::Pixels>, b: gpui_kit::Point<gpui_kit::Pixels>| {
+            (a.x - b.x).abs() <= px(1.) && (a.y - b.y).abs() <= px(1.)
+        };
+        assert!(
+            near(after, before + by),
+            "it moved with the mouse: {after:?}"
+        );
+        vcx.update(|window, cx| window.render_frame(cx));
+        let moved = vcx.debug_bounds("agent-chat-header").unwrap();
+        // The panel may still be settling into place from its slide-in.
+        let offset = moved.origin - header.origin;
+        assert!(
+            (offset.x - by.x).abs() <= px(1.) && (offset.y - by.y).abs() <= px(7.),
+            "drawn where it was dropped: {offset:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn clicking_anywhere_in_the_reply_box_focuses_it(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let reply = vcx
+            .debug_bounds("agent-reply-box")
+            .expect("the reply box is shown between turns");
+        // In the box's padding, well clear of the text.
+        let edge = gpui_kit::point(reply.right() - px(3.), reply.center().y);
+        vcx.simulate_click(edge, gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let this = workspace.read(cx);
+            let input = this
+                .run
+                .as_ref()
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .input
+                .clone();
+            assert!(input.focus_handle(cx).is_focused(window));
+        });
     }
 
     #[gpui_kit::test]
@@ -2372,6 +2461,36 @@ mod tests {
         assert_eq!(text(cx, &workspace), disk);
         assert!(!cx.update(|cx| workspace.read(cx).tab().dirty));
         eprintln!("agent said: {done:?}");
+
+        // The reply box has the keyboard; a reply continues the session.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("Which function did you document? Answer, don't edit.", cx);
+            window.press("enter", cx);
+        });
+        assert!(matches!(
+            bubble(cx, &workspace),
+            Some(Bubble::Running { .. })
+        ));
+        let answer = wait_for_agent(cx, &workspace, "the reply", |b| {
+            matches!(b, Some(Bubble::AgentDone(_) | Bubble::Error(_)))
+        });
+        assert!(matches!(answer, Some(Bubble::AgentDone(_))), "{answer:?}");
+        let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+        assert!(
+            matches!(
+                entries.as_slice(),
+                [
+                    ChatEntry::User(_),
+                    ChatEntry::Edit { accepted: true, .. },
+                    ChatEntry::Agent(_),
+                    ChatEntry::User(_),
+                    ChatEntry::Agent(_),
+                ]
+            ),
+            "{entries:?}"
+        );
+        eprintln!("agent answered: {answer:?}");
         cx.update(|_| {
             if let Ok(server) = crate::agent::server() {
                 server.stop();

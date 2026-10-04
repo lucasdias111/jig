@@ -179,14 +179,6 @@ impl RenderOnce for Bubble {
                 removed,
                 agent,
             } => {
-                let lines: Vec<&str> = removed.lines().collect();
-                let shown = lines
-                    .iter()
-                    .take(REMOVED_LINES)
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let hidden = lines.len().saturating_sub(REMOVED_LINES);
                 let accent = crate::surface::lane_accent(agent, cx);
                 container
                     .when(agent, |this| {
@@ -210,20 +202,7 @@ impl RenderOnce for Bubble {
                     })
                     .when(!agent && !message.is_empty(), |this| this.child(message))
                     .when(!removed.trim().is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .px_2p5()
-                                .py_2()
-                                .rounded(px(7.))
-                                .bg(theme.danger.opacity(0.08))
-                                .font_family(theme.mono_font_family.clone())
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(div().line_through().child(shown))
-                                .when(hidden > 0, |this| {
-                                    this.child(format!("… {hidden} more lines removed"))
-                                }),
-                        )
+                        this.child(removed_lines(&removed, cx))
                     })
                     .child(hint(if agent {
                         "tab or enter to accept · esc to reject · the agent then carries on"
@@ -236,8 +215,33 @@ impl RenderOnce for Bubble {
     }
 }
 
+/// The code a change removes, struck through, cut after a few lines.
+pub(crate) fn removed_lines(removed: &str, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let lines: Vec<&str> = removed.lines().collect();
+    let shown = lines
+        .iter()
+        .take(REMOVED_LINES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let hidden = lines.len().saturating_sub(REMOVED_LINES);
+    v_flex()
+        .px_2p5()
+        .py_2()
+        .rounded(px(7.))
+        .bg(theme.danger.opacity(0.08))
+        .font_family(theme.mono_font_family.clone())
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(div().line_through().child(shown))
+        .when(hidden > 0, |this| {
+            this.child(format!("… {hidden} more lines removed"))
+        })
+}
+
 /// An indeterminate progress bar: a segment sliding across a track.
-fn progress_bar(color: Hsla, track: Hsla) -> impl IntoElement {
+pub(crate) fn progress_bar(color: Hsla, track: Hsla) -> impl IntoElement {
     div()
         .relative()
         .w_full()

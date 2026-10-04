@@ -22,7 +22,7 @@ use crate::PromptRequest;
 pub const DEFAULT_MODEL: &str = "opencode-go/qwen3.8-flash";
 
 /// How the agent should behave inside Jig, added to its own system prompt.
-const SYSTEM: &str = "You are running inside Jig, a code editor. The user gave you this task from the code itself; the message says which file they are in and what they selected. Make the change with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Change only what the task needs. When you are done, reply with one plain sentence of at most 20 words saying what you did. No markdown, no lists, no follow-up questions.";
+const SYSTEM: &str = "You are running inside Jig, a code editor. The user gave you this task from the code itself; the message says which file they are in and what they selected. Make the change with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Change only what the task needs. When you are done, reply with one plain sentence of at most 20 words saying what you did. If the task is unclear, ask one short question instead; the user can reply, and later messages continue the same task. No markdown, no lists.";
 
 /// A running `opencode serve`, private to this Jig process. It is stopped
 /// when dropped.
