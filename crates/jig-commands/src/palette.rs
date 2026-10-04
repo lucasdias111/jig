@@ -116,8 +116,8 @@ impl CommandPalette {
 
     fn list_placeholder(has_selection: bool, agent: bool) -> &'static str {
         match (agent, has_selection) {
-            (false, true) => "Command for selection…",
-            (false, false) => "Command…",
+            (false, true) => "Jig or prompt for the selection…",
+            (false, false) => "Jig or prompt…",
             (true, true) => "Ask the agent about the selection…",
             (true, false) => "Ask the agent…",
         }
@@ -378,7 +378,7 @@ impl CommandPalette {
                 )
         };
         let right = if self.agent_by_command() && !self.agent {
-            crate::surface::hint("set by this command", cx)
+            crate::surface::hint("set by this jig", cx)
         } else {
             crate::surface::hint("⇥ switch", cx)
         };
@@ -441,7 +441,7 @@ impl CommandPalette {
             Row::Custom(text) => (
                 format!("“{text}”").into(),
                 if selected {
-                    "⌘↩ save as command".into()
+                    "⌘↩ save as jig".into()
                 } else {
                     "".into()
                 },
@@ -578,7 +578,7 @@ impl Render for CommandPalette {
                         Row::Preset(_)
                             if index == 0 || matches!(self.rows[index - 1], Row::Custom(_)) =>
                         {
-                            Some("Commands")
+                            Some("Jigs")
                         }
                         Row::Preset(_) => None,
                     };
@@ -842,19 +842,19 @@ mod tests {
     fn note_presets() -> Vec<presets::Preset> {
         presets::parse(
             r#"
-            [[command]]
+            [[jig]]
             name = "Create controller"
             scope = "cursor"
             prompt = "Insert a controller."
             comment = "required"
             comment_hint = "Entity name"
 
-            [[command]]
+            [[jig]]
             name = "Rename"
             prompt = "Rename this."
             comment = "optional"
 
-            [[command]]
+            [[jig]]
             name = "Simplify"
             prompt = "Simplify this."
             "#,
@@ -1060,8 +1060,7 @@ mod tests {
     #[gpui_kit::test]
     fn an_agent_command_shows_the_agent_lane(cx: &mut TestAppContext) {
         let presets =
-            presets::parse("[[command]]\nname = \"Refactor\"\nprompt = \"p\"\nagent = true\n")
-                .unwrap();
+            presets::parse("[[jig]]\nname = \"Refactor\"\nprompt = \"p\"\nagent = true\n").unwrap();
         let (window, host) = open_with(cx, false, presets);
         step(cx, window, |window, cx| {
             window.render_frame(cx);

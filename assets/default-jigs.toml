@@ -1,5 +1,5 @@
-# Jig's built-in commands. Add your own in ~/.config/jig/commands.toml;
-# a command there with the same name replaces the built-in one.
+# Jig's built-in jigs. Add your own in ~/.config/jig/jigs.toml;
+# a jig there with the same name replaces the built-in one.
 #
 # scope: "selection" (falls back to the current line), "cursor" (insert at
 # the cursor) or "file" (the whole file).
@@ -9,35 +9,35 @@
 # agent = true: run on the coding agent (OpenCode), which works across the
 # project; you review every edit.
 #
-# In the command input, Tab switches between Quick and Agent, and a colon
+# In the ⌘K input, Tab switches between Quick and Agent, and a colon
 # adds a one-off note: "docs: terse" runs Add docs with the note "terse".
 
-[[command]]
+[[jig]]
 name = "Add docs"
 scope = "selection"
 prompt = "Add concise doc comments to this code. Do not change the code itself."
 
-[[command]]
+[[jig]]
 name = "Extract function"
 scope = "selection"
 prompt = "Extract this code into a well-named function and replace it with a call to that function. Return both the new function and the call site."
 
-[[command]]
+[[jig]]
 name = "Simplify"
 scope = "selection"
 prompt = "Simplify this code without changing its behaviour."
 
-[[command]]
+[[jig]]
 name = "Fix"
 scope = "selection"
 prompt = "Fix the bug or compile error in this code. Change as little as possible."
 
-[[command]]
+[[jig]]
 name = "Explain"
 scope = "selection"
 prompt = "Explain what this code does. Return the code unchanged in `replace`."
 
-[[command]]
+[[jig]]
 name = "Add tests"
 scope = "cursor"
 prompt = "Insert a unit test module at the cursor that covers the code in this file."

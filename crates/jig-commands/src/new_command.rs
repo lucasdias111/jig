@@ -74,7 +74,7 @@ impl NewCommandForm {
         let name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Name, e.g. Create controller"));
         let prompt = cx.new(|cx| {
-            let state = TextareaState::new(window, cx).placeholder("What should the command do?");
+            let state = TextareaState::new(window, cx).placeholder("What should the jig do?");
             match prompt {
                 Some(text) => state.default_value(text),
                 None => state,
@@ -106,9 +106,9 @@ impl NewCommandForm {
         let prompt = self.prompt.read(cx).value().trim().to_string();
         let hint = self.hint.read(cx).value().trim().to_string();
         if name.is_empty() {
-            self.set_error("Give the command a name.", cx);
+            self.set_error("Give the jig a name.", cx);
         } else if prompt.is_empty() {
-            self.set_error("Describe what the command should do.", cx);
+            self.set_error("Describe what the jig should do.", cx);
         } else {
             let asks = self.comment != CommentMode::None;
             cx.emit(NewCommandEvent::Save(Preset {
@@ -331,7 +331,7 @@ impl Render for NewCommandForm {
                 div()
                     .text_size(px(15.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("New Command"),
+                    .child("New Jig"),
             )
             .child(label("Name"))
             .child(Input::new(&self.name))

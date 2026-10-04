@@ -269,7 +269,7 @@ impl SettingsWindow {
     }
 
     fn reload_commands(&mut self) {
-        let path = presets::user_commands_path();
+        let path = presets::user_jigs_path();
         let user = path
             .as_deref()
             .filter(|path| path.exists())
@@ -286,7 +286,7 @@ impl SettingsWindow {
             }
             Err(error) => {
                 self.commands_error =
-                    Some(format!("Your commands file has a problem: {error:#}").into());
+                    Some(format!("Your jigs file has a problem: {error:#}").into());
                 Vec::new()
             }
         };
@@ -421,8 +421,8 @@ impl SettingsWindow {
                         |e, v| e.autocomplete = v,
                     ))
                     .item(editor_switch(
-                        "Command button on selections",
-                        "Show a button beside selected code that opens the command input.",
+                        "Jig button on selections",
+                        "Show a button beside selected code that opens the ⌘K input.",
                         |e| e.selection_button,
                         |e, v| e.selection_button = v,
                     )),
@@ -683,8 +683,8 @@ impl SettingsWindow {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(
-                            "Commands you turn off leave the command input (⌘K) but stay \
-                             defined, so you can turn them back on here.",
+                            "Jigs you turn off leave the ⌘K input but stay defined, so you \
+                             can turn them back on here.",
                         ),
                 )
                 .child(
@@ -692,14 +692,14 @@ impl SettingsWindow {
                         .gap_2()
                         .child(
                             Button::new("add-command")
-                                .label("Add Command…")
+                                .label("Add Jig…")
                                 .small()
                                 .primary()
                                 .on_click(|_, _, cx| send_to_workspace(Box::new(AddCommand), cx)),
                         )
                         .child(
                             Button::new("edit-commands")
-                                .label("Edit Commands File")
+                                .label("Edit Jigs File")
                                 .small()
                                 .outline()
                                 .on_click(|_, _, cx| send_to_workspace(Box::new(EditCommands), cx)),
@@ -708,7 +708,7 @@ impl SettingsWindow {
         })
         .keywords(["add", "new", "file", "toml"]);
 
-        let mut page = SettingPage::new("Commands")
+        let mut page = SettingPage::new("Jigs")
             .icon(Icon::default().data(COMMAND))
             .group(
                 SettingGroup::new()
@@ -728,8 +728,8 @@ impl SettingsWindow {
         if !self.user_commands.is_empty() {
             page = page.group(
                 SettingGroup::new()
-                    .title("Your commands")
-                    .description("From ~/.config/jig/commands.toml.")
+                    .title("Your jigs")
+                    .description("From ~/.config/jig/jigs.toml.")
                     .items(self.user_commands.iter().map(command_item)),
             );
         }
@@ -835,7 +835,7 @@ impl SettingsWindow {
             keep_current(&mut quick_options, &id, config);
         }
 
-        let mut agent_options = vec![(SharedString::from(""), "Same as quick commands".into())];
+        let mut agent_options = vec![(SharedString::from(""), "Same as Quick".into())];
         let agent = match (&config.agent, &config.agent_model) {
             (Some(id), _) => id.clone(),
             (None, Some(native)) => {
@@ -863,7 +863,7 @@ impl SettingsWindow {
         } else {
             let this = this.clone();
             SettingItem::new(
-                "Quick commands",
+                "Quick",
                 SettingField::scrollable_dropdown(
                     quick_options,
                     |cx| {

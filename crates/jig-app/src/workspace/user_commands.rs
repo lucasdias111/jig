@@ -136,7 +136,7 @@ impl Workspace {
                 self.presets = Rc::new(super::preferences::visible_presets(presets, &self.settings))
             }
             Err(error) => self.show_error(
-                &format!("Your commands weren't reloaded. {error:#}"),
+                &format!("Your jigs weren't reloaded. {error:#}"),
                 window,
                 cx,
             ),

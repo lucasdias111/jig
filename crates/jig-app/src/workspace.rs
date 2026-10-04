@@ -120,7 +120,7 @@ pub struct Workspace {
     /// Files shown in this window, most recent first, for Go to File.
     recent_files: Vec<PathBuf>,
     new_command: Option<user_commands::OpenForm>,
-    /// The user's commands file, `~/.config/jig/commands.toml`.
+    /// The user's jigs file, `~/.config/jig/jigs.toml`.
     commands_path: Option<PathBuf>,
     /// The configured model, or why it couldn't be set up.
     provider: Result<Arc<dyn Provider>, String>,
@@ -168,8 +168,7 @@ impl Workspace {
             None => (Document::default(), None),
         };
         let settings = settings::get(cx);
-        let (presets, presets_error) = match presets::load(presets::user_commands_path().as_deref())
-        {
+        let (presets, presets_error) = match presets::load(presets::user_jigs_path().as_deref()) {
             Ok(presets) => (presets, None),
             Err(error) => (presets::defaults(), Some(error)),
         };
@@ -195,7 +194,7 @@ impl Workspace {
             file_index: None,
             recent_files: Vec::new(),
             new_command: None,
-            commands_path: presets::user_commands_path(),
+            commands_path: presets::user_jigs_path(),
             provider: crate::providers::build(cx),
             config_path: jig_ai::Config::user_path(),
             settings,
@@ -240,11 +239,7 @@ impl Workspace {
         })
         .detach();
         if let Some(error) = presets_error {
-            this.show_error(
-                &format!("Using the built-in commands. {error:#}"),
-                window,
-                cx,
-            );
+            this.show_error(&format!("Using the built-in jigs. {error:#}"), window, cx);
         }
 
         window.on_window_should_close(cx, {
@@ -1397,7 +1392,7 @@ mod tests {
         let path = dir.path().join("lib.rs");
         std::fs::write(&path, ORIGINAL).unwrap();
         let (window, workspace) = open(cx, &path);
-        let commands = dir.path().join("config").join("commands.toml");
+        let commands = dir.path().join("config").join("jigs.toml");
         let commands_for_ws = commands.clone();
         cx.update(|cx| workspace.update(cx, |this, _| this.commands_path = Some(commands_for_ws)));
         (dir, window, workspace, commands)
@@ -1495,7 +1490,7 @@ mod tests {
     fn duplicate_name_keeps_the_form_open(cx: &mut TestAppContext) {
         let (_dir, window, workspace, commands) = open_with_commands(cx);
         std::fs::create_dir_all(commands.parent().unwrap()).unwrap();
-        std::fs::write(&commands, "[[command]]\nname = \"Mine\"\nprompt = \"p\"\n").unwrap();
+        std::fs::write(&commands, "[[jig]]\nname = \"Mine\"\nprompt = \"p\"\n").unwrap();
         step(cx, window, |window, cx| {
             window.render_frame(cx);
             window.press("secondary-shift-k", cx);
@@ -1833,7 +1828,7 @@ mod tests {
                 let end = this.editor().text(cx).len();
                 this.editor().apply_edit(
                     end..end,
-                    "\n[[command]]\nname = \"From file\"\nprompt = \"p\"\n",
+                    "\n[[jig]]\nname = \"From file\"\nprompt = \"p\"\n",
                     window,
                     cx,
                 );
@@ -1859,7 +1854,7 @@ mod tests {
         std::fs::create_dir_all(commands.parent().unwrap()).unwrap();
         std::fs::write(
             &commands,
-            "[[command]]\nname = \"Create model\"\nscope = \"cursor\"\nprompt = \"Insert a model.\"\ncomment = \"required\"\n",
+            "[[jig]]\nname = \"Create model\"\nscope = \"cursor\"\nprompt = \"Insert a model.\"\ncomment = \"required\"\n",
         )
         .unwrap();
         let provider = Arc::new(RecordingProvider(Default::default()));

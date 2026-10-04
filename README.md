@@ -2,21 +2,21 @@
 
 <img width="2384" height="1746" alt="image" src="https://github.com/user-attachments/assets/33610eb9-edec-4998-8f3a-8e747c1165ff" />
 
-A macOS-first code editor where AI works through small commands at the cursor,
-not through a chat panel.
+A macOS-first code editor where AI works through jigs, small commands at
+the cursor, not through a chat panel.
 
-Select some code, press **⌘K**, pick a command or type a prompt, and the
+Select some code, press **⌘K**, pick a jig or type a prompt, and the
 change appears inline. **Tab** accepts it, **Esc** rejects it. Nothing
 reaches the disk until you accept it.
 
 The name comes from woodworking: a jig guides precise, repeatable cuts made by
-hand. IDE refactorings are precise but fixed, and agents are open-ended but
-take you away from the code. Jig keeps the refactoring interaction and puts AI
-behind it.
+hand, and that's what each jig is for your code. IDE refactorings are precise
+but fixed, and agents are open-ended but take you away from the code. Jig
+keeps the refactoring interaction and puts AI behind it.
 
 ## Two lanes
 
-The command input has a **Quick | Agent** switch. Tab flips it.
+The ⌘K input has a **Quick | Agent** switch. Tab flips it.
 
 - **Quick** makes one model call that rewrites only the selection, the
   cursor position or the file. It sees the current file and the nearest
@@ -64,7 +64,7 @@ start it from a terminal:
 target/Jig.app/Contents/MacOS/Jig path/to/project
 ```
 
-Agent commands also need the `opencode` CLI on your `PATH`.
+The Agent lane also needs the `opencode` CLI on your `PATH`.
 
 ### Configuration
 
@@ -72,8 +72,8 @@ Everything lives in `~/.config/jig/` (or `$XDG_CONFIG_HOME/jig/`):
 
 - `config.toml`: model providers and which one to use. Jig writes a starter
   file with OpenCode Go, Anthropic and Ollama entries.
-- `commands.toml`: your own commands. A command with the same name as a
-  built-in one replaces it.
+- `jigs.toml`: your own jigs. A jig with the same name as a built-in one
+  replaces it.
 - `settings.toml`: editor settings, also editable in the Settings window.
 
 A provider looks like this:
@@ -90,23 +90,23 @@ model = "claude-sonnet-5-5"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-A command looks like this:
+A jig looks like this:
 
 ```toml
-[[command]]
+[[jig]]
 name = "Add tests"
 scope = "selection"           # "selection", "cursor" or "file"
 prompt = "Write unit tests for this code."
 comment = "optional"          # ask for a note, e.g. "edge cases only"
 ```
 
-See [`assets/default-commands.toml`](assets/default-commands.toml) for the
-built-in commands.
+See [`assets/default-jigs.toml`](assets/default-jigs.toml) for the built-in
+jigs.
 
 ### Project rules
 
-Put an `AGENTS.md` in your project and Jig sends it with every quick command.
-OpenCode reads it for agent commands. Use it for conventions the model should
+Put an `AGENTS.md` in your project and Jig sends it with every quick run.
+OpenCode reads it for agent runs. Use it for conventions the model should
 follow.
 
 ## Development

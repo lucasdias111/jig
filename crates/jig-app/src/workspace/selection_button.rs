@@ -89,7 +89,7 @@ impl Render for SelectionButton {
             .shadow_sm()
             .cursor_pointer()
             .hover(|this| this.bg(accent.opacity(0.14)))
-            .tooltip(|window, cx| Tooltip::new("Commands for the selection").build(window, cx))
+            .tooltip(|window, cx| Tooltip::new("Jigs for the selection").build(window, cx))
             .child(
                 Icon::default()
                     .data(super::commands::COMMAND_ICON)

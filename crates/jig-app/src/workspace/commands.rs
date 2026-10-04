@@ -95,7 +95,7 @@ impl Workspace {
                         .flex_none()
                         .text_color(accent),
                 )
-                .child(div().flex_none().whitespace_nowrap().child("Command"))
+                .child(div().flex_none().whitespace_nowrap().child("Jig"))
                 .child(
                     div()
                         .flex_none()

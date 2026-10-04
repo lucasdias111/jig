@@ -19,6 +19,8 @@ pub const MAX_TRANSLUCENCY: f32 = 40.;
 pub struct Settings {
     pub appearance: Appearance,
     pub editor: EditorSettings,
+    /// Written as `jigs`; files from before the rename say `commands`.
+    #[serde(rename = "jigs", alias = "commands")]
     pub commands: CommandSettings,
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,

@@ -29,7 +29,7 @@ pub fn init(cx: &mut App) {
         window
             .update(cx, |_, window, cx| {
                 let detail = format!(
-                    "Version {}\nAI commands at the cursor.",
+                    "Version {}\nAI jigs at the cursor.",
                     env!("CARGO_PKG_VERSION")
                 );
                 // Nothing to do with the answer.
@@ -83,9 +83,9 @@ pub fn init(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Find in Files…", FindInFiles),
                 MenuItem::separator(),
-                MenuItem::action("Run Command…", OpenCommand),
-                MenuItem::action("Add Command…", AddCommand),
-                MenuItem::action("Edit Commands File", EditCommands),
+                MenuItem::action("Run Jig…", OpenCommand),
+                MenuItem::action("Add Jig…", AddCommand),
+                MenuItem::action("Edit Jigs File", EditCommands),
                 MenuItem::action("Edit AGENTS.md", EditAgentsFile),
             ],
         ),
