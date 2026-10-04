@@ -498,6 +498,8 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .hover(|s| s.bg(theme.foreground.opacity(0.08)))
+                // Otherwise the title bar takes the press as a window drag.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Icon::default().data(icon).size(px(13.)).text_color(color))
         };
         Some(
@@ -508,8 +510,8 @@ impl Workspace {
                 .child(
                     h_flex()
                         .id("run-configuration")
+                        .flex_none()
                         .h(px(26.))
-                        .max_w(px(200.))
                         .px_2()
                         .gap_1p5()
                         .rounded(px(6.))
@@ -525,7 +527,8 @@ impl Workspace {
                                     .bg(theme.success),
                             )
                         })
-                        .child(div().truncate().child(name))
+                        // Never cut: the title or tabs give way instead.
+                        .child(div().flex_none().whitespace_nowrap().child(name))
                         .child(
                             Icon::default()
                                 .data(CHEVRON)
@@ -533,9 +536,10 @@ impl Workspace {
                                 .flex_none()
                                 .text_color(theme.muted_foreground),
                         )
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ChooseRunConfiguration), cx)
-                        }),
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_run_picker(window, cx)),
+                        ),
                 )
                 .child(
                     button(
@@ -543,14 +547,14 @@ impl Workspace {
                         if running { RERUN } else { PLAY },
                         theme.success,
                     )
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(RunSelected), cx)),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_selected(&RunSelected, window, cx)
+                    })),
                 )
                 .when(running, |this| {
-                    this.child(
-                        button("stop-run", STOP, theme.danger).on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(StopRun), cx)
-                        }),
-                    )
+                    this.child(button("stop-run", STOP, theme.danger).on_click(
+                        cx.listener(|this, _, window, cx| this.stop_run(&StopRun, window, cx)),
+                    ))
                 })
                 .into_any_element(),
         )
