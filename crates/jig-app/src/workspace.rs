@@ -2381,17 +2381,30 @@ mod tests {
 
     #[gpui_kit::test]
     fn cmd_click_goes_to_the_definition(cx: &mut TestAppContext) {
+        cmd_click_to_definition(cx, 0);
+    }
+
+    #[gpui_kit::test]
+    fn cmd_click_works_after_scrolling(cx: &mut TestAppContext) {
+        // Far enough down that the editor must scroll more than a screen.
+        cmd_click_to_definition(cx, 200);
+    }
+
+    /// Cmd+hover then Cmd+click a call `padding` lines down main.rs; it
+    /// should land on the function in lib.rs.
+    fn cmd_click_to_definition(cx: &mut TestAppContext, padding: usize) {
         use serde_json::json;
 
         cx.executor().allow_parking();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
-        std::fs::write(
-            dir.path().join("src/main.rs"),
-            "fn main() {\n    renamed();\n}\n",
-        )
-        .unwrap();
+        let main = format!(
+            "fn main() {{\n{}    renamed();\n}}\n",
+            "    // filler\n".repeat(padding)
+        );
+        let call = main.find("renamed").unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), &main).unwrap();
         let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
         let (client, _seen) =
             crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
@@ -2406,10 +2419,19 @@ mod tests {
 
         let (window, workspace) = open(cx, dir.path());
         open_file(cx, window, &workspace, &main_path);
+        // Scroll the call into view.
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(call..call, cx);
+        });
+        step(cx, window, |window, cx| window.render_frame(cx));
         step(cx, window, |window, cx| window.render_frame(cx));
         let point = cx.update(|cx| {
             let state = workspace.read(cx).editor().state().clone();
-            let bounds = state.read(cx).range_to_bounds(&(18..20)).unwrap();
+            let bounds = state
+                .read(cx)
+                .range_to_bounds(&(call + 1..call + 2))
+                .unwrap();
             bounds.center()
         });
         let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
@@ -2432,7 +2454,8 @@ mod tests {
                     .path
                     .as_ref()
                     .unwrap()
-                    .ends_with("src/lib.rs")
+                    .ends_with("src/lib.rs"),
+                "Cmd+click at {point:?} didn't jump"
             );
             assert_eq!(this.editor().selection(cx), 7..12);
         });

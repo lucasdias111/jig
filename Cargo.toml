@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,3 +28,10 @@ jig-editor = { path = "crates/jig-editor" }
 jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }
 anyhow = "1"
+
+# GPUI Kit's editor stops seeing the mouse once it has scrolled more than a
+# screen, which breaks Cmd+click below the first page. Patched copy of
+# gpui-base 0.7.0 until a release fixes it; the change is marked "Jig patch"
+# in vendor/gpui-base/src/input/base/state.rs.
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
