@@ -37,7 +37,7 @@ A change goes into the buffer provisionally: highlighted, file read-only, one un
 
 Rust workspace, edition 2024, toolchain pinned in `rust-toolchain.toml`.
 
-- `crates/jig-app`: the binary (`Jig`). Window, workspace, tabs, file tree, Go to File (⌘P), Find in Files (⇧⌘F), menus, settings window, themes. `workspace/commands.rs` runs quick commands; `workspace/agent.rs` runs agent commands and their review; `agent.rs` owns the shared OpenCode server; `project.rs` finds the project root and `AGENTS.md`; `diff.rs` is the preview diff.
+- `crates/jig-app`: the binary (`Jig`). Window, workspace, tabs, file tree, Go to File (⌘P), Find in Files (⇧⌘F), menus, settings window, themes. `workspace/commands.rs` runs quick commands; `workspace/agent.rs` runs agent commands and their review; `agent.rs` owns the shared OpenCode server; `project.rs` finds the project root and `AGENTS.md`; `diff.rs` is the preview diff. `lsp.rs` runs language servers (not bundled; one that isn't installed is skipped) for ⌘-click go to definition, with `definitions.rs` guessing declarations when no server answers. `workspace/status_bar.rs` shows cursor position, indentation (`indentation.rs`), encoding and language.
 - `crates/jig-commands`: command presets (TOML), the command palette, the add-command form, the reply bubble, shared panel styling and lane colours (`surface.rs`).
 - `crates/jig-editor`: `EditorHandle`, the only way the command layer touches the editor (text, selection, cursor, screen anchor, one-undo-step edits, highlights). Keeps the door open to replacing GPUI Kit's editor.
 - `crates/jig-ai`: no GPUI, tested on its own. `Provider` trait with Anthropic and OpenAI-compatible implementations, prompt building, reply parsing, and `agent.rs` (OpenCode client and unified-diff applier).
@@ -56,7 +56,7 @@ User files live in `~/.config/jig/`: `commands.toml` (own commands; same name re
 
 ```sh
 cargo run -p jig-app -- <file-or-folder>
-cargo test                       # ~170 tests, including headless UI tests
+cargo test                       # ~190 tests, including headless UI tests
 cargo clippy --all-targets       # keep at zero warnings
 cargo fmt
 script/bundle-macos.sh           # builds target/Jig.app
@@ -71,4 +71,4 @@ script/bundle-macos.sh           # builds target/Jig.app
 
 ## Not doing (for now)
 
-LSP, git UI, terminal, plugins, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, moving API keys to the Keychain (an app opened from Finder doesn't see shell variables), open-sourcing.
+Git UI, terminal, plugins, LSP beyond go to definition, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, moving API keys to the Keychain (an app opened from Finder doesn't see shell variables), open-sourcing.
