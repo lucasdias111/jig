@@ -32,6 +32,7 @@ use jig_editor::EditorHandle;
 use crate::document::Document;
 use crate::file_tree::FileTree;
 use crate::settings::{self, Settings};
+use crate::theme;
 use commands::CommandRun;
 use tabs::Tab;
 
@@ -524,7 +525,7 @@ impl Render for Workspace {
                                     this.pl(px(TRAFFIC_LIGHTS_WIDTH))
                                 })
                                 .pr_2()
-                                .bg(theme.background)
+                                .bg(theme::editor_surface(cx))
                                 .border_b_1()
                                 .border_color(theme.title_bar_border)
                                 .child(title)
@@ -542,14 +543,17 @@ impl Render for Workspace {
                         v_flex()
                             .flex_1()
                             .min_w_0()
+                            .bg(theme::editor_surface(cx))
                             .when(self.home, |this| {
                                 this.child(div().flex_1().min_h_0().child(self.render_start(cx)))
                             })
                             .when(!self.home, |this| {
-                                this.bg(theme.background).child(
+                                this.child(
                                     div().flex_1().min_h_0().pl_2().pr_3().pt_1().pb_2().child(
                                         Editor::new(self.editor().state())
                                             .bordered(false)
+                                            // The column behind it is the surface.
+                                            .bg(transparent_black())
                                             // Locked while a command's change awaits
                                             // review. The element re-applies this
                                             // every frame.

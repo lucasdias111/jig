@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FONT_SIZE: f32 = 13.5;
 pub const MIN_FONT_SIZE: f32 = 9.;
 pub const MAX_FONT_SIZE: f32 = 28.;
+pub const DEFAULT_TRANSLUCENCY: f32 = 20.;
+pub const MAX_TRANSLUCENCY: f32 = 40.;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -66,6 +68,9 @@ pub struct Appearance {
     pub theme: ThemeChoice,
     /// Size of the code font, in points.
     pub font_size: f32,
+    /// How much of the blurred desktop shows through the editor, in
+    /// percent. Only macOS blurs the window, so elsewhere it is ignored.
+    pub translucency: f32,
 }
 
 impl Default for Appearance {
@@ -73,6 +78,7 @@ impl Default for Appearance {
         Self {
             theme: ThemeChoice::System,
             font_size: DEFAULT_FONT_SIZE,
+            translucency: DEFAULT_TRANSLUCENCY,
         }
     }
 }
@@ -208,6 +214,8 @@ impl Settings {
             .appearance
             .font_size
             .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        settings.appearance.translucency =
+            settings.appearance.translucency.clamp(0., MAX_TRANSLUCENCY);
         Ok(settings)
     }
 
@@ -303,10 +311,15 @@ mod tests {
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
 
-        std::fs::write(&path, "[appearance]\ntheme = \"light\"\nfont_size = 99\n").unwrap();
+        std::fs::write(
+            &path,
+            "[appearance]\ntheme = \"light\"\nfont_size = 99\ntranslucency = 90\n",
+        )
+        .unwrap();
         let partial = Settings::load(&path).unwrap();
         assert_eq!(partial.appearance.theme, ThemeChoice::Light);
         assert_eq!(partial.appearance.font_size, MAX_FONT_SIZE, "clamped");
+        assert_eq!(partial.appearance.translucency, MAX_TRANSLUCENCY, "clamped");
         assert_eq!(partial.editor, EditorSettings::default());
     }
 

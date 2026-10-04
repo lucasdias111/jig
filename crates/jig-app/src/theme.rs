@@ -5,7 +5,8 @@
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeSet};
+use gpui_kit::component::highlighter::HighlightThemeStyle;
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeConfig, ThemeMode, ThemeSet};
 use gpui_kit::{App, Global, Hsla, Rgba, SharedString, Window};
 use serde_json::Value;
 
@@ -161,6 +162,26 @@ fn ember_with(colors: &ColorSettings) -> ThemeSet {
 struct Built {
     fonts: Fonts,
     colors: ColorSettings,
+    see_through: SeeThrough,
+}
+
+/// How the editor lets the window's blur through.
+#[derive(Clone, Copy, PartialEq)]
+struct SeeThrough {
+    /// Of the editor's surfaces, from 0 to 1.
+    opacity: f32,
+    /// Whether lines wrap. Then no code scrolls under the gutter, so it
+    /// needs no background of its own.
+    wraps: bool,
+}
+
+impl SeeThrough {
+    fn from_settings(cx: &App) -> Self {
+        Self {
+            opacity: editor_opacity(cx),
+            wraps: settings::get(cx).editor.soft_wrap,
+        }
+    }
 }
 
 impl Global for Built {}
@@ -170,23 +191,52 @@ impl Global for Built {}
 pub fn init(cx: &mut App) {
     let fonts = Fonts::for_platform(cx);
     let colors = settings::get(cx).colors;
-    install(&fonts, &colors, cx);
-    cx.set_global(Built { fonts, colors });
+    let see_through = SeeThrough::from_settings(cx);
+    install(&fonts, &colors, see_through, cx);
+    cx.set_global(Built {
+        fonts,
+        colors,
+        see_through,
+    });
     cx.observe_global::<settings::AppSettings>(|cx| {
         let colors = settings::get(cx).colors;
-        if cx.global::<Built>().colors != colors {
-            let fonts = cx.global::<Built>().fonts.clone();
-            install(&fonts, &colors, cx);
-            cx.global_mut::<Built>().colors = colors;
+        let see_through = SeeThrough::from_settings(cx);
+        let built = cx.global::<Built>();
+        if built.colors != colors || built.see_through != see_through {
+            let fonts = built.fonts.clone();
+            install(&fonts, &colors, see_through, cx);
+            let built = cx.global_mut::<Built>();
+            built.colors = colors;
+            built.see_through = see_through;
         }
         apply(None, cx)
     })
     .detach();
 }
 
+/// How opaque the editor's surfaces are. Only macOS blurs what is behind
+/// the window; elsewhere a see-through editor would show the desktop
+/// sharp, so it stays solid.
+fn editor_opacity(cx: &App) -> f32 {
+    if cfg!(target_os = "macos") {
+        1. - settings::get(cx).appearance.translucency / 100.
+    } else {
+        1.
+    }
+}
+
+/// The background of the editor and the bars around it, letting the
+/// window's blur through as far as the settings ask.
+pub fn editor_surface(cx: &App) -> Hsla {
+    let opacity = cx
+        .try_global::<Built>()
+        .map_or(1., |built| built.see_through.opacity);
+    cx.theme().background.opacity(opacity)
+}
+
 /// Build both variants and make them the themes for light and dark mode.
 /// They take effect at the next `apply`.
-fn install(fonts: &Fonts, colors: &ColorSettings, cx: &mut App) {
+fn install(fonts: &Fonts, colors: &ColorSettings, see_through: SeeThrough, cx: &mut App) {
     let font_size = Some(settings::get(cx).appearance.font_size);
     let mut light: Option<Rc<ThemeConfig>> = None;
     let mut dark = None;
@@ -194,6 +244,14 @@ fn install(fonts: &Fonts, colors: &ColorSettings, cx: &mut App) {
         theme.font_family = fonts.ui.clone();
         theme.mono_font_family = Some(fonts.mono.clone());
         theme.mono_font_size = font_size;
+        if see_through.opacity < 1.
+            && let Some(highlight) = theme.highlight.as_mut()
+        {
+            let foreground = highlight
+                .editor_foreground
+                .or_else(|| theme.colors.foreground.as_deref().and_then(parse_hex));
+            see_through_editor(highlight, foreground, see_through);
+        }
         let slot = if theme.mode.is_dark() {
             &mut dark
         } else {
@@ -205,6 +263,33 @@ fn install(fonts: &Fonts, colors: &ColorSettings, cx: &mut App) {
         theme.light_theme = light.expect("ember.json has a light theme");
         theme.dark_theme = dark.expect("ember.json has a dark theme");
     });
+}
+
+/// The editor paints its gutter and current line over the surface behind
+/// it. In their solid colors they would stand out as opaque bands.
+fn see_through_editor(
+    highlight: &mut HighlightThemeStyle,
+    foreground: Option<Hsla>,
+    see_through: SeeThrough,
+) {
+    let background = highlight.editor_background;
+    // The current line becomes a faint wash of the text color, as far
+    // from the background as the solid color was.
+    if let (Some(line), Some(background), Some(foreground)) =
+        (highlight.editor_active_line, background, foreground)
+    {
+        let distance = (foreground.l - background.l).abs().max(f32::EPSILON);
+        let wash = ((line.l - background.l).abs() / distance).clamp(0., 1.);
+        highlight.editor_active_line = Some(foreground.opacity(wash));
+    }
+    // The gutter covers code scrolled sideways under it, so without wrap it
+    // keeps a background, at the surface's opacity.
+    highlight.editor_gutter_background = if see_through.wraps {
+        Some(gpui_kit::transparent_black())
+    } else {
+        background.map(|color| color.opacity(see_through.opacity))
+    };
+    highlight.editor_background = background.map(|color| color.opacity(see_through.opacity));
 }
 
 #[derive(Clone)]
@@ -269,7 +354,12 @@ mod tests {
     use gpui_kit::component::{Theme, ThemeMode, ThemeSet};
     use gpui_kit::{TestAppContext, rgb};
 
-    use super::{EDITABLE, EMBER, apply, default_color, ember_with, init, parse_hex, to_hex};
+    use gpui_kit::component::highlighter::HighlightThemeStyle;
+
+    use super::{
+        EDITABLE, EMBER, SeeThrough, apply, default_color, ember_with, init, parse_hex,
+        see_through_editor, to_hex,
+    };
     use crate::settings::{self, ColorSettings, ThemeChoice};
 
     #[gpui_kit::test]
@@ -320,6 +410,38 @@ mod tests {
                 "the size survives a mode switch"
             );
         });
+    }
+
+    #[test]
+    fn see_through_editor_keeps_no_solid_bands() {
+        let solid = |hex| parse_hex(hex);
+        let mut highlight = HighlightThemeStyle {
+            editor_background: solid("#272624"),
+            editor_active_line: solid("#2D2C2A"),
+            ..Default::default()
+        };
+        let foreground = solid("#D8D2CA");
+        let wrapping = SeeThrough {
+            opacity: 0.8,
+            wraps: true,
+        };
+        let mut wrapped = highlight.clone();
+        see_through_editor(&mut wrapped, foreground, wrapping);
+        assert_eq!(wrapped.editor_background.unwrap().a, 0.8);
+        assert_eq!(wrapped.editor_gutter_background.unwrap().a, 0.);
+        let line = wrapped.editor_active_line.unwrap();
+        assert!(line.a > 0. && line.a < 0.1, "a faint wash, got {}", line.a);
+
+        let scrolling = SeeThrough {
+            wraps: false,
+            ..wrapping
+        };
+        see_through_editor(&mut highlight, foreground, scrolling);
+        assert_eq!(
+            highlight.editor_gutter_background.unwrap().a,
+            0.8,
+            "covers code scrolled under it"
+        );
     }
 
     #[test]

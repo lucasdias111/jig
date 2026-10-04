@@ -664,7 +664,6 @@ impl Workspace {
                 .relative()
                 .flex_none()
                 .h(self.runs.panel_height)
-                .bg(theme.background)
                 .border_t_1()
                 .border_color(theme.title_bar_border)
                 .child(header)

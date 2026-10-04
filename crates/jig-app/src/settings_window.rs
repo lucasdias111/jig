@@ -14,7 +14,8 @@ use jig_commands::{Preset, presets};
 
 use crate::languages::{self, Language};
 use crate::settings::{
-    self, DEFAULT_FONT_SIZE, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, ThemeChoice,
+    self, DEFAULT_FONT_SIZE, DEFAULT_TRANSLUCENCY, EditorSettings, MAX_FONT_SIZE, MAX_TRANSLUCENCY,
+    MIN_FONT_SIZE, ThemeChoice,
 };
 use crate::theme::{self, EDITABLE, Section};
 use crate::workspace::{AddCommand, EditCommands, EditModelConfig};
@@ -304,47 +305,71 @@ impl SettingsWindow {
             .description(description)
         };
 
+        let mut theme_group = SettingGroup::new()
+            .title("Theme")
+            .item(
+                SettingItem::new(
+                    "Appearance",
+                    SettingField::dropdown(
+                        theme_options,
+                        |cx| settings::get(cx).appearance.theme.key().into(),
+                        |key: SharedString, cx| {
+                            settings::update(cx, |s| {
+                                s.appearance.theme = ThemeChoice::from_key(&key)
+                            })
+                        },
+                    )
+                    .default_value(ThemeChoice::System.key()),
+                )
+                .description("Ember Light or Ember, or follow the system."),
+            )
+            .item(
+                SettingItem::new(
+                    "Code font size",
+                    SettingField::number_input(
+                        NumberFieldOptions {
+                            min: MIN_FONT_SIZE.into(),
+                            max: MAX_FONT_SIZE.into(),
+                            step: 0.5,
+                        },
+                        |cx| settings::get(cx).appearance.font_size.into(),
+                        |size, cx| {
+                            let size = (size as f32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+                            settings::update(cx, |s| s.appearance.font_size = size)
+                        },
+                    )
+                    .default_value(f64::from(DEFAULT_FONT_SIZE)),
+                )
+                .description("In points."),
+            );
+        // Only macOS blurs what is behind the window.
+        if cfg!(target_os = "macos") {
+            theme_group = theme_group.item(
+                SettingItem::new(
+                    "Translucency",
+                    SettingField::number_input(
+                        NumberFieldOptions {
+                            min: 0.,
+                            max: MAX_TRANSLUCENCY.into(),
+                            step: 5.,
+                        },
+                        |cx| settings::get(cx).appearance.translucency.into(),
+                        |percent, cx| {
+                            let percent = (percent as f32).clamp(0., MAX_TRANSLUCENCY);
+                            settings::update(cx, |s| s.appearance.translucency = percent)
+                        },
+                    )
+                    .default_value(f64::from(DEFAULT_TRANSLUCENCY)),
+                )
+                .description(
+                    "How much of the blurred desktop shows through the editor, in percent.",
+                ),
+            );
+        }
+
         SettingPage::new("Appearance")
             .icon(Icon::default().data(PALETTE))
-            .group(
-                SettingGroup::new()
-                    .title("Theme")
-                    .item(
-                        SettingItem::new(
-                            "Appearance",
-                            SettingField::dropdown(
-                                theme_options,
-                                |cx| settings::get(cx).appearance.theme.key().into(),
-                                |key: SharedString, cx| {
-                                    settings::update(cx, |s| {
-                                        s.appearance.theme = ThemeChoice::from_key(&key)
-                                    })
-                                },
-                            )
-                            .default_value(ThemeChoice::System.key()),
-                        )
-                        .description("Ember Light or Ember, or follow the system."),
-                    )
-                    .item(
-                        SettingItem::new(
-                            "Code font size",
-                            SettingField::number_input(
-                                NumberFieldOptions {
-                                    min: MIN_FONT_SIZE.into(),
-                                    max: MAX_FONT_SIZE.into(),
-                                    step: 0.5,
-                                },
-                                |cx| settings::get(cx).appearance.font_size.into(),
-                                |size, cx| {
-                                    let size = (size as f32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-                                    settings::update(cx, |s| s.appearance.font_size = size)
-                                },
-                            )
-                            .default_value(f64::from(DEFAULT_FONT_SIZE)),
-                        )
-                        .description("In points."),
-                    ),
-            )
+            .group(theme_group)
             .group(
                 SettingGroup::new()
                     .title("Editor")

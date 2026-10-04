@@ -60,7 +60,6 @@ impl Workspace {
             .px_3()
             .gap_4()
             .justify_end()
-            .bg(theme.background)
             .border_t_1()
             .border_color(theme.title_bar_border)
             .text_xs()

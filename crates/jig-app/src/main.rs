@@ -65,8 +65,8 @@ fn main() {
 
         // A transparent titlebar: the workspace draws its own, so only the
         // traffic lights and the code remain. On macOS the window is
-        // translucent so the sidebar picks up the desktop's vibrancy; the
-        // editor paints its own opaque background.
+        // translucent so the sidebar picks up the desktop's vibrancy, and
+        // the editor as much as the translucency setting lets it.
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1080.), px(760.)), cx)),
             window_min_size: Some(size(px(480.), px(320.))),
@@ -82,16 +82,22 @@ fn main() {
             },
             ..TitleBar::window_options()
         };
-        let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| {
-                let mut workspace = Workspace::new(path, window, cx);
-                for path in &more {
-                    workspace.open_file(path, window, cx);
-                }
-                workspace
+        let window = cx
+            .open_window(options, |window, cx| {
+                let workspace = cx.new(|cx| {
+                    let mut workspace = Workspace::new(path, window, cx);
+                    for path in &more {
+                        workspace.open_file(path, window, cx);
+                    }
+                    workspace
+                });
+                // The root would paint the theme's background over the
+                // whole window, hiding the blur behind the sidebar and editor.
+                cx.new(|cx| {
+                    gpui_kit::base::Root::new(workspace, window, cx).bg(transparent_black())
+                })
             })
-        })
-        .expect("failed to open window");
+            .expect("failed to open window");
         cx.activate(true);
         if let Some(error) = settings_error {
             window

@@ -1,5 +1,8 @@
 //! The look shared by the floating windows: a macOS-style panel with a
-//! hairline edge and a soft, layered shadow.
+//! hairline edge, a soft, layered shadow and a faint sheen, like frosted
+//! glass. GPUI can't blur what is behind an element, so the panel stays
+//! opaque and only looks the part: see-through, the code behind it would
+//! compete with its text.
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
@@ -12,9 +15,20 @@ pub fn panel(cx: &App) -> Div {
     let theme = cx.theme();
     // Darker shadows in dark mode, where a light one would read as a glow.
     let depth = if theme.is_dark() { 0.45 } else { 0.12 };
+    // Light falls from above: a touch brighter at the top in dark mode, a
+    // touch dimmer at the bottom in light mode, where the top is white.
+    let (top, bottom) = if theme.is_dark() {
+        (lighten(theme.popover, 0.035), theme.popover)
+    } else {
+        (theme.popover, lighten(theme.popover, -0.02))
+    };
     div()
         .occlude()
-        .bg(theme.popover)
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(top, 0.),
+            linear_color_stop(bottom, 1.),
+        ))
         .text_color(theme.popover_foreground)
         .border_1()
         .border_color(if theme.is_dark() {
@@ -24,6 +38,14 @@ pub fn panel(cx: &App) -> Div {
         })
         .rounded(px(RADIUS))
         .shadow(vec![
+            // The glass's lit top edge, inside the hairline.
+            BoxShadow {
+                color: hsla(0., 0., 1., if theme.is_dark() { 0.06 } else { 0.7 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
             BoxShadow {
                 color: hsla(0., 0., 0., depth * 0.5),
                 offset: point(px(0.), px(1.)),
@@ -39,6 +61,13 @@ pub fn panel(cx: &App) -> Div {
                 inset: false,
             },
         ])
+}
+
+fn lighten(color: Hsla, amount: f32) -> Hsla {
+    Hsla {
+        l: (color.l + amount).clamp(0., 1.),
+        ..color
+    }
 }
 
 /// A small, muted line of keyboard hints.
