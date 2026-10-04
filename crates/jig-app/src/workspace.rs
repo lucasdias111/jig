@@ -568,6 +568,7 @@ impl Render for Workspace {
             .capture_action(cx.listener(Self::on_accept_indent))
             .capture_action(cx.listener(Self::on_undo))
             .on_drag_move(cx.listener(Self::drag_agent_chat))
+            .on_drag_move(cx.listener(Self::resize_agent_chat))
             .child(
                 // One unified bar across the window: the sidebar's top runs
                 // up under the traffic lights, the rest holds the title or tabs.
@@ -1563,6 +1564,92 @@ mod tests {
                 .clone();
             assert!(input.focus_handle(cx).is_focused(window));
         });
+    }
+
+    #[gpui_kit::test]
+    fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let short = "fn short() {}\n";
+        let long = format!("// {}\n", "x".repeat(110));
+        std::fs::write(dir.path().join("a.rs"), format!("{short}{long}")).unwrap();
+        let (window, workspace) = open(cx, &dir.path().join("a.rs"));
+
+        // Open on `line`, and say where it ended up against that line's end.
+        let open_on = |cx: &mut TestAppContext, line: std::ops::Range<usize>| {
+            let (ws, selected) = (workspace.clone(), line.clone());
+            step(cx, window, move |window, cx| {
+                window.render_frame(cx);
+                ws.update(cx, |this, cx| {
+                    this.editor().select(selected.clone(), cx);
+                    this.open_test_conversation(window, cx);
+                })
+            });
+            cx.update(|cx| {
+                let this = workspace.read(cx);
+                let end = this
+                    .editor()
+                    .state()
+                    .read(cx)
+                    .range_to_bounds(&(line.end - 1..line.end - 1))
+                    .unwrap();
+                (this.run.as_ref().unwrap().anchor, end)
+            })
+        };
+
+        let (anchor, end) = open_on(cx, 0..short.len());
+        assert!(
+            anchor.x > end.left(),
+            "right of the code: {anchor:?} {end:?}"
+        );
+        assert!((anchor.y - end.top()).abs() < px(8.), "level with it");
+
+        let (anchor, end) = open_on(cx, short.len()..short.len() + long.len());
+        assert!(
+            anchor.y >= end.bottom(),
+            "no room on the right, so below it: {anchor:?} {end:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_agent_conversation_resizes_by_its_corner(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let grip = vcx
+            .debug_bounds("agent-chat-resize")
+            .expect("a corner grip");
+        let header = vcx.debug_bounds("agent-chat-header").unwrap();
+
+        let (from, by) = (grip.center(), gpui_kit::point(px(80.), px(60.)));
+        let none = gpui_kit::Modifiers::none();
+        vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, none);
+        for i in 1..=5 {
+            let at = from + by * (i as f32 / 5.);
+            vcx.simulate_mouse_move(at, Some(gpui_kit::MouseButton::Left), none);
+        }
+        vcx.simulate_mouse_up(from + by, gpui_kit::MouseButton::Left, none);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+
+        let wider = vcx.debug_bounds("agent-chat-header").unwrap();
+        assert_eq!(
+            wider.size.width,
+            header.size.width + by.x,
+            "wider by the drag"
+        );
+        assert_eq!(
+            wider.origin.x, header.origin.x,
+            "growing from its left edge"
+        );
+        let moved = vcx.debug_bounds("agent-chat-resize").unwrap().origin - grip.origin;
+        assert!(
+            (moved.x - by.x).abs() <= px(1.) && (moved.y - by.y).abs() <= px(7.),
+            "the corner followed the mouse: {moved:?}"
+        );
     }
 
     #[gpui_kit::test]

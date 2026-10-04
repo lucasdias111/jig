@@ -10,7 +10,7 @@ pub mod presets;
 pub mod surface;
 
 pub use bubble::{Bubble, LiveStep};
-pub use chat::{ChatBounds, ChatDrag, ChatEntry, ChatStatus, Conversation};
+pub use chat::{ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus, Conversation};
 pub use new_command::{NewCommandEvent, NewCommandForm};
 pub use palette::{CommandPalette, PaletteEvent};
 pub use presets::{CommentMode, Invocation, Preset, Scope};

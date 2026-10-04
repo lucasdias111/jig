@@ -5,6 +5,7 @@
 //! the user can reply, and the agent carries on in the same session.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -13,7 +14,9 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use jig_ai::PromptRequest;
 use jig_ai::agent::{AgentEvent, AgentRequest, AgentSession, EditRequest};
-use jig_commands::{Bubble, ChatBounds, ChatDrag, ChatEntry, ChatStatus, Conversation, LiveStep};
+use jig_commands::{
+    Bubble, ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus, Conversation, LiveStep,
+};
 use jig_editor::EditorHandle;
 
 use super::Workspace;
@@ -53,10 +56,13 @@ pub(super) struct AgentRun {
     /// The reply box, shown between turns.
     pub(super) input: Entity<InputState>,
     scroll: ScrollHandle,
-    /// Where the conversation is on screen, and while it's dragged, where
-    /// the mouse holds it from its corner.
-    bounds: ChatBounds,
+    /// The conversation's size, and where it is on screen.
+    frame: ChatFrame,
+    /// While it's dragged, where the mouse holds it from its corner.
     grab: Option<Point<Pixels>>,
+    /// While it's resized: where the mouse started, and the width and
+    /// transcript height then.
+    resize: Option<(Point<Pixels>, Size<Pixels>)>,
     /// Dragged somewhere by the user: it stays there rather than following
     /// the agent's edits.
     moved: bool,
@@ -107,7 +113,12 @@ impl Workspace {
         };
         let agent = self.new_agent_run(name, asked, &path, window, cx);
         let run = self.run.as_mut().expect("run_command set up the run");
+        let target = run.target.clone();
         run.agent = Some(agent);
+        let anchor = self.agent_anchor(target, window, cx);
+        if let Some(run) = self.run.as_mut() {
+            run.anchor = anchor;
+        }
         self.start_turn(id, jig_ai::agent::prompt(&request), window, cx);
     }
 
@@ -145,8 +156,9 @@ impl Workspace {
             entries: vec![ChatEntry::User(asked)],
             input,
             scroll: ScrollHandle::new(),
-            bounds: Default::default(),
+            frame: ChatFrame::default(),
             grab: None,
+            resize: None,
             moved: false,
             _input_events: input_events,
         }
@@ -158,9 +170,11 @@ impl Workspace {
         let path = self.document().path.clone().expect("a saved file");
         self.show_note(String::new(), window, cx);
         let agent = self.new_agent_run(None, "Hello".into(), &path, window, cx);
+        let anchor = self.agent_anchor(self.editor().selection(cx), window, cx);
         if let Some(run) = self.run.as_mut() {
             run._task = None;
             run.agent = Some(agent);
+            run.anchor = anchor;
         }
         cx.notify();
     }
@@ -293,6 +307,25 @@ impl Workspace {
             .unwrap_or_default()
     }
 
+    /// Where the conversation opens: just right of the code it's about, so
+    /// it doesn't cover it, when the window has room for it there; below
+    /// the cursor otherwise.
+    fn agent_anchor(&self, range: Range<usize>, window: &Window, cx: &App) -> Point<Pixels> {
+        const GAP: f32 = 32.;
+        const MARGIN: f32 = 8.;
+        let width = self
+            .run
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .map_or(px(jig_commands::chat::WIDTH), |agent| agent.frame.width);
+        self.editor()
+            .beside_point(range, cx)
+            // Level with the first line, give or take the panel's padding.
+            .map(|at| at + point(px(GAP), px(-4.)))
+            .filter(|at| at.x + width + px(MARGIN) <= window.viewport_size().width)
+            .unwrap_or_else(|| self.floating_anchor(cx))
+    }
+
     /// Pressed on the conversation's header: a drag may follow.
     fn grab_agent_chat(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let Some(run) = self.run.as_mut() else {
@@ -303,19 +336,67 @@ impl Workspace {
         };
         // From where it's drawn, which may differ from the anchor when it
         // was pushed in to fit the window.
-        let origin = agent.bounds.get().origin;
+        let origin = agent.frame.bounds.get().origin;
         agent.grab = Some(event.position - origin);
         run.anchor = origin;
         cx.stop_propagation();
+    }
+
+    /// Pressed on the conversation's corner grip: a resize may follow.
+    fn grab_agent_chat_corner(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let Some(agent) = run.agent.as_mut() else {
+            return;
+        };
+        let height = agent.frame.transcript_bounds.get().size.height;
+        agent.resize = Some((event.position, size(agent.frame.width, height)));
+        // It grows from where it's drawn.
+        run.anchor = agent.frame.bounds.get().origin;
+        cx.stop_propagation();
+    }
+
+    /// The conversation's corner follows the mouse while it's resized.
+    pub(super) fn resize_agent_chat(
+        &mut self,
+        event: &DragMoveEvent<ChatResize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        const MIN: Size<Pixels> = Size {
+            width: px(320.),
+            height: px(60.),
+        };
+        let viewport = window.viewport_size();
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let Some(agent) = run.agent.as_mut() else {
+            return;
+        };
+        let Some((start, from)) = agent.resize else {
+            return;
+        };
+        // The resize cursor stays on wherever the mouse goes.
+        cx.set_active_drag_cursor_style(CursorStyle::ResizeUpLeftDownRight, window);
+        let by = event.event.position - start;
+        // Room for the header and reply box below the transcript.
+        let max = size(viewport.width - px(16.), viewport.height - px(180.));
+        agent.frame.width = (from.width + by.x).clamp(MIN.width, max.width.max(MIN.width));
+        agent.frame.transcript_height =
+            Some((from.height + by.y).clamp(MIN.height, max.height.max(MIN.height)));
+        cx.notify();
     }
 
     /// The conversation follows the mouse while its header is dragged.
     pub(super) fn drag_agent_chat(
         &mut self,
         event: &DragMoveEvent<ChatDrag>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        cx.set_active_drag_cursor_style(CursorStyle::ClosedHand, window);
         let Some(run) = self.run.as_mut() else {
             return;
         };
@@ -358,9 +439,12 @@ impl Workspace {
                 status,
                 agent.input.clone(),
                 agent.scroll.clone(),
-                agent.bounds.clone(),
+                agent.frame.clone(),
             )
             .on_grab(cx.listener(|this, event, _, cx| this.grab_agent_chat(event, cx)))
+            .on_resize_grab(
+                cx.listener(|this, event, _, cx| this.grab_agent_chat_corner(event, cx)),
+            )
             .into_any_element(),
         )
     }
@@ -492,11 +576,11 @@ impl Workspace {
         );
         self.editor().select(range.start..range.start, cx);
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
-            preview.range = range;
+            preview.range = range.clone();
         }
         // The bubble follows the change once it's scrolled into view.
-        cx.on_next_frame(window, |this, _, cx| {
-            let anchor = this.floating_anchor(cx);
+        cx.on_next_frame(window, move |this, window, cx| {
+            let anchor = this.agent_anchor(range, window, cx);
             if let Some(run) = this
                 .run
                 .as_mut()

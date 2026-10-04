@@ -15,6 +15,9 @@ use gpui_kit::*;
 
 use crate::LiveStep;
 
+/// The conversation's width.
+pub const WIDTH: f32 = 460.;
+
 /// Tallest the transcript grows before it scrolls.
 const TRANSCRIPT_HEIGHT: f32 = 280.;
 
@@ -49,8 +52,37 @@ pub enum ChatStatus {
 /// What's dragged while the conversation is moved by its header.
 pub struct ChatDrag;
 
-/// Where the conversation was last drawn, in window coordinates.
+/// What's dragged while the conversation is resized by its corner.
+pub struct ChatResize;
+
+/// Where something was last drawn, in window coordinates.
 pub type ChatBounds = Rc<Cell<Bounds<Pixels>>>;
+
+/// The conversation's size, and where it was last drawn. Kept by its owner
+/// from frame to frame.
+#[derive(Clone)]
+pub struct ChatFrame {
+    pub width: Pixels,
+    /// Set once the user resizes it; until then the transcript grows with
+    /// its content, up to a limit.
+    pub transcript_height: Option<Pixels>,
+    pub bounds: ChatBounds,
+    pub transcript_bounds: ChatBounds,
+}
+
+impl Default for ChatFrame {
+    fn default() -> Self {
+        Self {
+            width: px(WIDTH),
+            transcript_height: None,
+            bounds: Default::default(),
+            transcript_bounds: Default::default(),
+        }
+    }
+}
+
+/// The corner grip (two short diagonal strokes).
+const GRIP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><path d="M20 11 11 20"/><path d="M20 17 17 20"/></svg>"#;
 
 type GrabHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 
@@ -63,8 +95,9 @@ pub struct Conversation {
     status: ChatStatus,
     input: Entity<InputState>,
     scroll: ScrollHandle,
-    bounds: ChatBounds,
+    frame: ChatFrame,
     on_grab: Option<GrabHandler>,
+    on_resize_grab: Option<GrabHandler>,
 }
 
 impl Conversation {
@@ -74,7 +107,7 @@ impl Conversation {
         status: ChatStatus,
         input: Entity<InputState>,
         scroll: ScrollHandle,
-        bounds: ChatBounds,
+        frame: ChatFrame,
     ) -> Self {
         Self {
             label,
@@ -82,9 +115,20 @@ impl Conversation {
             status,
             input,
             scroll,
-            bounds,
+            frame,
             on_grab: None,
+            on_resize_grab: None,
         }
+    }
+
+    /// Called when the corner grip is pressed; the workspace then resizes
+    /// the window with [`ChatResize`] moves.
+    pub fn on_resize_grab(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_resize_grab = Some(Rc::new(handler));
+        self
     }
 
     /// Called when the header is pressed, before a drag may start; the
@@ -132,7 +176,10 @@ impl RenderOnce for Conversation {
 
         let transcript = v_flex()
             .id("jig-agent-transcript")
-            .max_h(px(TRANSCRIPT_HEIGHT))
+            .map(|this| match self.frame.transcript_height {
+                Some(height) => this.h(height),
+                None => this.max_h(px(TRANSCRIPT_HEIGHT)),
+            })
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .gap_2()
@@ -141,6 +188,17 @@ impl RenderOnce for Conversation {
                     .into_iter()
                     .map(|entry| render_entry(entry, cx)),
             );
+        let transcript_bounds = self.frame.transcript_bounds.clone();
+        let transcript = div().relative().child(transcript).child(
+            canvas(
+                move |drawn, _, _| transcript_bounds.set(drawn),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        );
 
         let status = match self.status {
             ChatStatus::Working { step, .. } => {
@@ -217,7 +275,7 @@ impl RenderOnce for Conversation {
         let panel = crate::surface::panel(cx)
             .flex()
             .flex_col()
-            .w(px(460.))
+            .w(self.frame.width)
             .px_3p5()
             .py_2p5()
             .gap_2p5()
@@ -229,7 +287,27 @@ impl RenderOnce for Conversation {
             .child(status);
         // Remember where it's drawn, outside the panel's slide-in, so a drag
         // starts from there even when it was nudged to fit the window.
-        let bounds = self.bounds;
+        let bounds = self.frame.bounds;
+        let grip = div()
+            .id("jig-agent-chat-resize")
+            .debug_selector(|| "agent-chat-resize".into())
+            .absolute()
+            .right(px(3.))
+            .bottom(px(3.))
+            .size(px(14.))
+            .cursor_nwse_resize()
+            .when_some(self.on_resize_grab, |this, on_grab| {
+                this.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    on_grab(event, window, cx)
+                })
+            })
+            .on_drag(ChatResize, |_, _, _, cx| cx.new(|_| EmptyView))
+            .child(
+                gpui_kit::component::Icon::default()
+                    .data(GRIP_ICON)
+                    .size(px(14.))
+                    .text_color(theme.muted_foreground.opacity(0.6)),
+            );
         div()
             .relative()
             .child(crate::motion::pop_in(panel, "jig-agent-chat"))
@@ -240,6 +318,7 @@ impl RenderOnce for Conversation {
                     .left_0()
                     .size_full(),
             )
+            .child(grip)
     }
 }
 
