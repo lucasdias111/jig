@@ -188,6 +188,8 @@ impl Workspace {
         {
             self.save_to(&path, window, cx);
         }
+        // Read on this thread: the keys and lanes live in the app.
+        let target = crate::providers::agent_target(cx);
         let Some(agent) = self.agent_run(id) else {
             return;
         };
@@ -215,10 +217,11 @@ impl Workspace {
                 let _ = sender.unbounded_send(message);
             };
             let result = (|| {
+                let target = target.map_err(anyhow::Error::msg)?;
                 let session = match session {
                     Some(session) => session,
                     None => {
-                        let server = crate::agent::server()?;
+                        let server = crate::agent::server(target.config.as_ref())?;
                         let session = AgentSession::create(server, &directory)?;
                         send(Message::Started(session.clone()));
                         session
@@ -227,7 +230,7 @@ impl Workspace {
                 let request = AgentRequest {
                     directory,
                     prompt,
-                    model: crate::agent::model(),
+                    model: target.model,
                 };
                 session.run(&request, &|event| send(Message::Event(event)))
             })();

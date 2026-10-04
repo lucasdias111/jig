@@ -1,7 +1,7 @@
 //! Send one real command to a configured provider and print the reply.
 //!
-//!     cargo run -p jig-ai --example live                       # the default provider
-//!     cargo run -p jig-ai --example live -- ollama             # a provider by name
+//!     cargo run -p jig-ai --example live                       # the quick model
+//!     cargo run -p jig-ai --example live -- ollama/qwen3:8b    # provider/model
 //!     cargo run -p jig-ai --example live -- --file src/x.rs --lines 10-20
 //!                                     # the doc command on lines 10-20 of a real file
 
@@ -22,12 +22,12 @@ fn main() -> anyhow::Result<()> {
 
     let config = Config::load(Config::user_path().as_deref())?;
     let provider_config = match name {
-        Some(name) => config
-            .providers
-            .iter()
-            .find(|p| &p.name == name)
-            .ok_or_else(|| anyhow::anyhow!("no provider named {name}"))?,
-        None => config.default_provider(),
+        Some(id) => Config {
+            quick: Some(id.clone()),
+            ..config
+        }
+        .quick()?,
+        None => config.quick()?,
     };
     println!(
         "provider: {} ({})",

@@ -5,7 +5,12 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
 use crate::config::AuthStyle;
+use crate::http::{Fallback, Lenient};
 use crate::{Provider, http};
+
+/// Servers that speak the format without all of it reject the switch that
+/// turns thinking off.
+const FALLBACKS: &[Fallback] = &[Fallback::Drop("thinking")];
 
 pub struct AnthropicProvider {
     pub base_url: String,
@@ -20,6 +25,7 @@ pub struct AnthropicProvider {
     /// Sent with every request, e.g. OpenCode Go's session header.
     pub extra_headers: Vec<(String, String)>,
     agent: ureq::Agent,
+    lenient: Lenient,
 }
 
 impl AnthropicProvider {
@@ -39,6 +45,7 @@ impl AnthropicProvider {
             thinking: false,
             extra_headers: Vec::new(),
             agent: http::agent(),
+            lenient: Lenient::new(FALLBACKS),
         }
     }
 
@@ -81,11 +88,11 @@ impl AnthropicProvider {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.clone())),
         );
-        http::post_json(
+        self.lenient.post_json(
             &self.agent,
             &format!("{}/messages", self.base_url),
             &headers,
-            &body,
+            body,
         )
     }
 }

@@ -16,10 +16,76 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::PromptRequest;
+use crate::config::{AgentModel, ProviderKind};
+use crate::{PromptRequest, ProviderConfig};
 
-/// The model the agent uses unless `agent_model` is set in `config.toml`.
+/// A model OpenCode knows by itself, for trying the agent lane on its own.
 pub const DEFAULT_MODEL: &str = "opencode-go/qwen3.8-flash";
+
+/// Room OpenCode assumes for a model Jig hands it; it can't look these up
+/// for a model it doesn't know.
+const CONTEXT_TOKENS: u32 = 128_000;
+const OUTPUT_TOKENS: u32 = 16_000;
+
+/// What an agent run needs from OpenCode: the model, as OpenCode names it,
+/// and the provider config to start the server with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentTarget {
+    pub model: String,
+    /// Passed as `OPENCODE_CONFIG_CONTENT`. `None` for a model OpenCode
+    /// knows by itself.
+    pub config: Option<Value>,
+}
+
+impl AgentTarget {
+    /// Hand one of Jig's providers to OpenCode under a name of its own, so
+    /// it never clashes with OpenCode's built-in providers or needs their
+    /// model catalogue.
+    pub fn new(agent: &AgentModel, api_key: Option<&str>) -> Self {
+        let (provider, model) = match agent {
+            AgentModel::OpenCode(model) => {
+                return Self {
+                    model: model.clone(),
+                    config: None,
+                };
+            }
+            AgentModel::Jig { provider, model } => (provider, model),
+        };
+        let id = format!("jig-{}", provider.name);
+        Self {
+            model: format!("{id}/{model}"),
+            config: Some(
+                json!({ "provider": { id: opencode_provider(provider, model, api_key) } }),
+            ),
+        }
+    }
+}
+
+fn opencode_provider(provider: &ProviderConfig, model: &str, api_key: Option<&str>) -> Value {
+    let npm = match provider.kind {
+        ProviderKind::Anthropic => "@ai-sdk/anthropic",
+        ProviderKind::Openai => "@ai-sdk/openai-compatible",
+    };
+    let mut options = json!({ "baseURL": provider.base_url.trim_end_matches('/') });
+    if let Some(key) = api_key {
+        options["apiKey"] = json!(key);
+    }
+    if let Some(header) = &provider.session_header {
+        options["headers"] = json!({ header: crate::config::session_id() });
+    }
+    json!({
+        "npm": npm,
+        "name": provider.name,
+        "options": options,
+        "models": {
+            model: {
+                "name": model,
+                "tool_call": true,
+                "limit": { "context": CONTEXT_TOKENS, "output": OUTPUT_TOKENS },
+            },
+        },
+    })
+}
 
 /// How the agent should behave inside Jig, added to its own system prompt.
 const SYSTEM: &str = "You are running inside Jig, a code editor. The user gave you this task from the code itself; the message says which file they are in and what they selected. Make the change with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Change only what the task needs. When you are done, reply with one plain sentence of at most 20 words saying what you did. If the task is unclear, ask one short question instead; the user can reply, and later messages continue the same task. No markdown, no lists.";
@@ -35,10 +101,15 @@ pub struct AgentServer {
 }
 
 impl AgentServer {
-    /// Start the server and wait until it listens.
-    pub fn start() -> Result<Self> {
+    /// Start the server with `config` added to the user's own OpenCode
+    /// config, and wait until it listens.
+    pub fn start(config: Option<&Value>) -> Result<Self> {
         let password = random_hex();
-        let mut child = Command::new(opencode_binary())
+        let mut command = Command::new(opencode_binary());
+        if let Some(config) = config {
+            command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
+        }
+        let mut child = command
             .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
             .env("OPENCODE_SERVER_PASSWORD", &password)
             .stdin(Stdio::null())
@@ -624,5 +695,39 @@ mod tests {
     fn base64_matches_known_values() {
         assert_eq!(base64(b"opencode:pw"), "b3BlbmNvZGU6cHc=");
         assert_eq!(base64(b"ab"), "YWI=");
+    }
+
+    #[test]
+    fn jig_providers_are_handed_to_opencode_under_their_own_name() {
+        let config = crate::Config::parse(
+            "[[provider]]\nname = \"openrouter\"\nkind = \"openai\"\nbase_url = \"https://openrouter.ai/api/v1/\"\n",
+        )
+        .unwrap();
+        let agent = AgentModel::Jig {
+            provider: config.providers[0].clone(),
+            model: "anthropic/claude-sonnet-5-5".into(),
+        };
+        let target = AgentTarget::new(&agent, Some("sk"));
+        assert_eq!(target.model, "jig-openrouter/anthropic/claude-sonnet-5-5");
+        let provider = &target.config.unwrap()["provider"]["jig-openrouter"];
+        assert_eq!(provider["npm"], "@ai-sdk/openai-compatible");
+        assert_eq!(
+            provider["options"]["baseURL"],
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(provider["options"]["apiKey"], "sk");
+        assert_eq!(
+            provider["models"]["anthropic/claude-sonnet-5-5"]["tool_call"],
+            true
+        );
+
+        let native = AgentTarget::new(&AgentModel::OpenCode(DEFAULT_MODEL.into()), None);
+        assert_eq!(
+            native,
+            AgentTarget {
+                model: DEFAULT_MODEL.into(),
+                config: None
+            }
+        );
     }
 }

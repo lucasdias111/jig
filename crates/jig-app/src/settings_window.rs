@@ -1,18 +1,25 @@
 //! The Settings window (⌘,): Appearance, Colors, Languages, Commands and
 //! Model.
 
+use std::time::Instant;
+
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::group_box::GroupBoxVariant;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, TitleBar, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named};
 use jig_commands::{Preset, presets};
 
 use crate::languages::{self, Language};
+use crate::providers::{self, ModelList};
 use crate::settings::{
     self, DEFAULT_FONT_SIZE, DEFAULT_TRANSLUCENCY, EditorSettings, MAX_FONT_SIZE, MAX_TRANSLUCENCY,
     MIN_FONT_SIZE, ThemeChoice,
@@ -30,6 +37,12 @@ const SPARKLES: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 
 /// Longest prompt shown under a command's name.
 const MAX_PROMPT_CHARS: usize = 90;
+
+#[cfg(test)]
+thread_local! {
+    /// Which page a test's Settings window opens on.
+    static START_PAGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// The Settings window, while it's open.
 struct OpenWindow(AnyWindowHandle);
@@ -153,15 +166,11 @@ impl CommandRow {
     }
 }
 
-/// What the Model page offers, read from `config.toml`.
-#[derive(Clone)]
-struct Providers {
-    /// (name, label) for the dropdown.
-    options: Vec<(SharedString, SharedString)>,
-    /// The config file's own default.
-    default: SharedString,
-    /// Per provider: the key variable it needs and whether it's set.
-    keys: Vec<(SharedString, Option<(String, bool)>)>,
+/// Work Settings started for a provider: loading its models, or testing it.
+enum Fetch<T> {
+    Running,
+    Done(T),
+    Failed(SharedString),
 }
 
 pub struct SettingsWindow {
@@ -169,7 +178,13 @@ pub struct SettingsWindow {
     user_commands: Vec<CommandRow>,
     built_in_commands: Vec<CommandRow>,
     commands_error: Option<SharedString>,
-    providers: Result<Providers, SharedString>,
+    /// A masked key field per provider that takes a key, in `TEMPLATES`
+    /// order. A key is saved as it's typed and never read back in.
+    key_inputs: Vec<(&'static ProviderTemplate, Entity<InputState>)>,
+    /// From Test: how long the quick model took to answer.
+    check: Option<Fetch<SharedString>>,
+    /// Why the last change to the providers didn't work.
+    providers_error: Option<SharedString>,
     /// One per entry of `theme::EDITABLE`, in the same order.
     color_pickers: Vec<Entity<ColorPickerState>>,
     _subscriptions: Vec<Subscription>,
@@ -181,15 +196,39 @@ impl SettingsWindow {
         let subscriptions = vec![
             cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx)),
             cx.observe_global::<settings::AppSettings>(|_, cx| cx.notify()),
+            cx.observe_global::<providers::Providers>(|_, cx| cx.notify()),
             // Commands or providers may have been edited in the meantime.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    this.reload();
+                    this.reload_commands();
+                    providers::reload(cx);
+                    providers::load_all_models(true, cx);
                     cx.notify();
                 }
             }),
         ];
         let mut subscriptions = subscriptions;
+        let key_inputs = TEMPLATES
+            .iter()
+            .filter(|template| template.api_key_env.is_some())
+            .map(|template| {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .masked(true)
+                        .placeholder("Paste an API key")
+                });
+                subscriptions.push(cx.subscribe(&input, move |this, input, event, cx| {
+                    if let InputEvent::Change = event {
+                        let key = input.read(cx).value();
+                        if !key.trim().is_empty() {
+                            let result = providers::connect(template, Some(&key), cx);
+                            this.report(result, cx);
+                        }
+                    }
+                }));
+                (template, input)
+            })
+            .collect();
         let color_pickers = EDITABLE
             .iter()
             .map(|editable| {
@@ -212,17 +251,15 @@ impl SettingsWindow {
             user_commands: Vec::new(),
             built_in_commands: Vec::new(),
             commands_error: None,
-            providers: Err(SharedString::default()),
+            key_inputs,
+            check: None,
+            providers_error: None,
             color_pickers,
             _subscriptions: subscriptions,
         };
-        this.reload();
+        this.reload_commands();
+        providers::load_all_models(true, cx);
         this
-    }
-
-    fn reload(&mut self) {
-        self.reload_commands();
-        self.reload_providers();
     }
 
     fn reload_commands(&mut self) {
@@ -257,32 +294,6 @@ impl SettingsWindow {
             .map(CommandRow::new)
             .collect();
         self.user_commands = user.iter().map(CommandRow::new).collect();
-    }
-
-    fn reload_providers(&mut self) {
-        self.providers = jig_ai::Config::load(jig_ai::Config::user_path().as_deref())
-            .map(|config| Providers {
-                options: config
-                    .providers
-                    .iter()
-                    .map(|p| {
-                        (
-                            p.name.clone().into(),
-                            format!("{} · {}", p.name, p.model).into(),
-                        )
-                    })
-                    .collect(),
-                default: config.default.clone().into(),
-                keys: config
-                    .providers
-                    .iter()
-                    .map(|p| {
-                        let key = p.api_key_env.clone().map(|var| (var, p.has_key()));
-                        (p.name.clone().into(), key)
-                    })
-                    .collect(),
-            })
-            .map_err(|error| format!("{error:#}").into());
     }
 
     fn appearance_page(&self) -> SettingPage {
@@ -653,36 +664,51 @@ impl SettingsWindow {
         )
     }
 
-    fn model_page(&self) -> SettingPage {
-        let edit_file = SettingItem::render(|_, _, cx| {
-            v_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            "Providers live in ~/.config/jig/config.toml. API keys are \
-                             read from environment variables, never stored by Jig.",
-                        ),
-                )
-                .child(
-                    h_flex().child(
-                        Button::new("edit-config")
-                            .label("Edit Providers File")
-                            .small()
-                            .outline()
-                            .on_click(|_, _, cx| send_to_workspace(Box::new(EditModelConfig), cx)),
-                    ),
-                )
-        })
-        .keywords(["config", "provider", "api", "key"]);
+    /// Show a failed change to the providers until the next one works.
+    fn report(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.providers_error = result.err().map(SharedString::from);
+        cx.notify();
+    }
 
-        let page = SettingPage::new("Model").icon(Icon::default().data(SPARKLES));
-        let providers = match &self.providers {
-            Ok(providers) => providers.clone(),
+    /// Run one small command on the quick model.
+    fn check(&mut self, cx: &mut Context<Self>) {
+        let provider = match providers::quick(cx) {
+            Ok(provider) => provider,
             Err(error) => {
-                let error = error.clone();
+                self.check = Some(Fetch::Failed(error.into()));
+                cx.notify();
+                return;
+            }
+        };
+        let key = providers::api_key(&provider, cx).map(|(key, _)| key);
+        self.check = Some(Fetch::Running);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let started = Instant::now();
+                    jig_ai::check(provider.build_with(key)?.as_ref())?;
+                    anyhow::Ok(started.elapsed())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.check = Some(match result {
+                    Ok(took) => Fetch::Done(format!("Works · {:.1} s", took.as_secs_f32()).into()),
+                    Err(error) => Fetch::Failed(format!("{error:#}").into()),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn model_page(&self, cx: &Context<Self>) -> SettingPage {
+        let page = SettingPage::new("Model").icon(Icon::default().data(SPARKLES));
+        let config = match providers::config(cx) {
+            Ok(config) => config,
+            Err(error) => {
                 return page.group(
                     SettingGroup::new()
                         .item(SettingItem::render(move |_, _, cx| {
@@ -691,86 +717,393 @@ impl SettingsWindow {
                                 .text_color(cx.theme().danger)
                                 .child(format!("Couldn't read your providers. {error}"))
                         }))
-                        .item(edit_file),
+                        .item(edit_providers_file()),
                 );
             }
         };
+        let mut page = page;
+        if let Some(error) = self.providers_error.clone() {
+            page = page.group(
+                SettingGroup::new().item(SettingItem::render(move |_, _, cx| {
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error.clone())
+                })),
+            );
+        }
+        page = page
+            .group(self.models_group(&config, cx))
+            .group(self.providers_group(&config, cx));
+        let mut others = SettingGroup::new().title("Other providers");
+        let hand_added: Vec<&ProviderConfig> = config
+            .providers
+            .iter()
+            .filter(|provider| template_named(&provider.name).is_none())
+            .collect();
+        if !hand_added.is_empty() {
+            others = others.description("Added to config.toml by hand.");
+        }
+        for provider in hand_added {
+            others = others.item(other_provider_item(provider, cx));
+        }
+        page.group(others.item(edit_providers_file()))
+    }
 
-        let chosen = {
-            let providers = providers.clone();
-            move |cx: &App| -> SharedString {
-                settings::get(cx)
-                    .ai
-                    .provider
-                    .map(SharedString::from)
-                    .filter(|name| providers.options.iter().any(|(option, _)| option == name))
-                    .unwrap_or_else(|| providers.default.clone())
+    /// The model each lane uses, from what the connected providers offer.
+    fn models_group(&self, config: &Config, cx: &Context<Self>) -> SettingGroup {
+        let this = cx.entity().downgrade();
+        let offered = offered_models(config, cx);
+        let mut quick_options = offered.clone();
+        if let Some(id) = config.quick_model() {
+            keep_current(&mut quick_options, &id, config);
+        }
+
+        let mut agent_options = vec![(SharedString::from(""), "Same as quick commands".into())];
+        let agent = match (&config.agent, &config.agent_model) {
+            (Some(id), _) => id.clone(),
+            (None, Some(native)) => {
+                let id = format!("{OPENCODE_OWN}{native}");
+                agent_options.push((
+                    id.clone().into(),
+                    format!("{native} (from OpenCode)").into(),
+                ));
+                id
             }
+            (None, None) => String::new(),
         };
-        let default = providers.default.clone();
-        let key_status = {
-            let chosen = chosen.clone();
-            let providers = providers.clone();
-            SettingField::render(move |_, _, cx| {
-                let name = chosen(cx);
-                let key = providers
-                    .keys
-                    .iter()
-                    .find(|(provider, _)| *provider == name)
-                    .and_then(|(_, key)| key.clone());
-                let (text, ok) = match key {
-                    None => ("Not needed".to_string(), true),
-                    Some((var, true)) => (format!("{var} is set"), true),
-                    Some((var, false)) => (format!("{var} is not set"), false),
-                };
+        agent_options.extend(offered);
+        if config.agent.is_some() {
+            keep_current(&mut agent_options, &agent, config);
+        }
+
+        let quick_item = if quick_options.is_empty() {
+            SettingItem::render(|_, _, cx| {
                 div()
                     .text_sm()
-                    .text_color(if ok {
-                        cx.theme().muted_foreground
-                    } else {
-                        cx.theme().danger
-                    })
-                    .child(text)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Connect a provider below, then pick its models here.")
             })
-        };
-
-        page.group(
-            SettingGroup::new()
-                .title("Provider")
-                .item(
-                    SettingItem::new(
-                        "Model",
-                        SettingField::dropdown(
-                            providers.options.clone(),
-                            chosen,
-                            move |name: SharedString, cx| {
-                                // Picking the file's default clears the choice,
-                                // so a later change of default applies.
-                                let choice = (name != default).then(|| name.to_string());
-                                settings::update(cx, |s| s.ai.provider = choice)
-                            },
-                        )
-                        .default_value(providers.default.clone()),
-                    )
-                    .description("The model every command uses."),
-                )
-                .item(
-                    SettingItem::new("API key", key_status)
-                        .description("Set in the environment Jig was started from."),
+        } else {
+            let this = this.clone();
+            SettingItem::new(
+                "Quick commands",
+                SettingField::scrollable_dropdown(
+                    quick_options,
+                    |cx| {
+                        providers::config(cx)
+                            .ok()
+                            .and_then(|config| config.quick_model())
+                            .unwrap_or_default()
+                            .into()
+                    },
+                    move |id: SharedString, cx| {
+                        let result = providers::set_quick(&id, cx);
+                        this.update(cx, |this, cx| {
+                            this.check = None;
+                            this.report(result, cx);
+                        })
+                        .ok();
+                    },
                 ),
+            )
+            .description("One fast call at the cursor. Small models answer in 2-5 s.")
+        };
+        let agent_item = SettingItem::new(
+            "Agent",
+            SettingField::scrollable_dropdown(
+                agent_options,
+                move |_| agent.clone().into(),
+                move |id: SharedString, cx| {
+                    if id.starts_with(OPENCODE_OWN) {
+                        return;
+                    }
+                    let id = (!id.is_empty()).then_some(id.as_ref());
+                    let result = providers::set_agent(id, cx);
+                    this.update(cx, |this, cx| this.report(result, cx)).ok();
+                },
+            ),
         )
-        .group(
-            SettingGroup::new()
-                .variant(GroupBoxVariant::Normal)
-                .item(edit_file),
-        )
+        .description("Works across the project through OpenCode. A stronger model helps.");
+
+        SettingGroup::new()
+            .title("Models")
+            .item(quick_item)
+            .item(agent_item)
+            .item(self.check_item(config, cx))
     }
+
+    /// Test the quick model, and refresh every provider's models.
+    fn check_item(&self, config: &Config, cx: &Context<Self>) -> SettingItem {
+        let this = cx.entity().downgrade();
+        let can_test = config.quick_model().is_some();
+        let check = self.check.as_ref().map(|fetch| match fetch {
+            Fetch::Running => (SharedString::from("Testing…"), true),
+            Fetch::Done(result) => (result.clone(), true),
+            Fetch::Failed(error) => (error.clone(), false),
+        });
+        let testing = matches!(self.check, Some(Fetch::Running));
+        SettingItem::render(move |_, _, cx| {
+            let test = this.clone();
+            v_flex()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("test-quick")
+                                .label("Test Quick Model")
+                                .small()
+                                .outline()
+                                .disabled(testing || !can_test)
+                                .on_click(move |_, _, cx| {
+                                    test.update(cx, |this, cx| this.check(cx)).ok();
+                                }),
+                        )
+                        .child(
+                            Button::new("refresh-models")
+                                .label("Refresh Models")
+                                .small()
+                                .ghost()
+                                .on_click(|_, _, cx| providers::load_all_models(false, cx)),
+                        ),
+                )
+                .when_some(check.clone(), |this, (text, ok)| {
+                    this.child(status_text(text, ok, cx))
+                })
+        })
+        .keywords(["test", "check", "refresh", "models"])
+    }
+
+    /// Every major provider, with a key field or a switch to connect it.
+    fn providers_group(&self, config: &Config, cx: &Context<Self>) -> SettingGroup {
+        let mut group = SettingGroup::new().title("Providers").description(
+            "Paste a key to connect. Keys go in the system keychain, never in config.toml.",
+        );
+        for template in TEMPLATES {
+            let provider = config.provider(template.name).cloned();
+            let item = match self
+                .key_inputs
+                .iter()
+                .find(|(keyed, _)| keyed.name == template.name)
+            {
+                Some((_, input)) => keyed_item(template, provider, input.clone(), cx),
+                None => local_item(template, provider, cx),
+            };
+            group = group.item(item);
+        }
+        group
+    }
+}
+
+/// Marks an agent model OpenCode knows by itself, from an older file's
+/// `agent_model`.
+const OPENCODE_OWN: &str = "opencode:";
+
+/// How the model lists name a provider.
+fn provider_label(name: &str) -> &str {
+    template_named(name).map_or(name, |template| template.label)
+}
+
+/// Every model the connected providers offer, as (`provider/model`, label).
+fn offered_models(config: &Config, cx: &App) -> Vec<(SharedString, SharedString)> {
+    let mut offered = Vec::new();
+    for provider in &config.providers {
+        if let Some(ModelList::Loaded(models)) = providers::models(&provider.name, cx) {
+            for model in models {
+                offered.push((
+                    format!("{}/{model}", provider.name).into(),
+                    format!("{} · {model}", provider_label(&provider.name)).into(),
+                ));
+            }
+        }
+    }
+    offered
+}
+
+/// Keep the model in use in its list while models load, or if the
+/// provider stopped offering it.
+fn keep_current(options: &mut Vec<(SharedString, SharedString)>, id: &str, config: &Config) {
+    if id.is_empty() || options.iter().any(|(value, _)| value == id) {
+        return;
+    }
+    let label = match jig_ai::split_model(id) {
+        Some((name, model)) if config.provider(name).is_some() => {
+            format!("{} · {model}", provider_label(name))
+        }
+        _ => format!("{id} (not connected)"),
+    };
+    options.insert(0, (id.to_string().into(), label.into()));
+}
+
+/// What a provider row says, and whether it's fine.
+fn connection_status(provider: &ProviderConfig, cx: &App) -> (String, bool) {
+    if !providers::is_ready(provider, cx) {
+        return ("Paste a key to connect".into(), false);
+    }
+    let source = providers::api_key(provider, cx)
+        .map(|(_, source)| format!(" · {}", source.label()))
+        .unwrap_or_default();
+    match providers::models(&provider.name, cx) {
+        Some(ModelList::Loaded(models)) => (format!("{} models{source}", models.len()), true),
+        Some(ModelList::Failed(error)) => (error, false),
+        Some(ModelList::Loading) | None => (format!("Loading models…{source}"), true),
+    }
+}
+
+fn status_text(text: impl Into<SharedString>, ok: bool, cx: &App) -> impl IntoElement {
+    div()
+        .text_xs()
+        .text_color(if ok {
+            cx.theme().muted_foreground
+        } else {
+            cx.theme().danger
+        })
+        .child(text.into())
+}
+
+/// A provider that takes a key: the key field, and Disconnect once it's in
+/// the file.
+fn keyed_item(
+    template: &'static ProviderTemplate,
+    provider: Option<ProviderConfig>,
+    input: Entity<InputState>,
+    cx: &Context<SettingsWindow>,
+) -> SettingItem {
+    let this = cx.entity().downgrade();
+    let env = template
+        .api_key_env
+        .filter(|var| std::env::var(var).is_ok_and(|key| !key.trim().is_empty()));
+    SettingItem::new(
+        template.label,
+        SettingField::render(move |_, _, cx| {
+            let status = provider
+                .as_ref()
+                .map(|provider| connection_status(provider, cx));
+            let disconnect = this.clone();
+            let use_env = this.clone();
+            v_flex()
+                .gap_1()
+                .items_end()
+                .child(Input::new(&input).small().mask_toggle().w_64())
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .when_some(status, |row, (text, ok)| {
+                            row.child(status_text(text, ok, cx))
+                        })
+                        .when_some(env.filter(|_| provider.is_none()), |row, var| {
+                            row.child(
+                                Button::new(SharedString::from(format!("env-{}", template.name)))
+                                    .label(format!("Use {var}"))
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        let result = providers::connect(template, None, cx);
+                                        use_env.update(cx, |this, cx| this.report(result, cx)).ok();
+                                    }),
+                            )
+                        })
+                        .when(provider.is_some(), |row| {
+                            row.child(
+                                Button::new(SharedString::from(format!(
+                                    "disconnect-{}",
+                                    template.name
+                                )))
+                                .label("Disconnect")
+                                .xsmall()
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    let result = providers::disconnect(template.name, cx);
+                                    disconnect
+                                        .update(cx, |this, cx| this.report(result, cx))
+                                        .ok();
+                                }),
+                            )
+                        }),
+                )
+        }),
+    )
+    .keywords([template.name, "key", "api", "token", "connect"])
+}
+
+/// A server on this computer: a switch, since it needs no key.
+fn local_item(
+    template: &'static ProviderTemplate,
+    provider: Option<ProviderConfig>,
+    cx: &Context<SettingsWindow>,
+) -> SettingItem {
+    let this = cx.entity().downgrade();
+    let description = match &provider {
+        Some(provider) => connection_status(provider, cx).0,
+        None => format!("Runs on this computer at {}", template.base_url),
+    };
+    SettingItem::new(
+        template.label,
+        SettingField::switch(
+            move |cx| {
+                providers::config(cx).is_ok_and(|config| config.provider(template.name).is_some())
+            },
+            move |on, cx| {
+                let result = if on {
+                    providers::connect(template, None, cx)
+                } else {
+                    providers::disconnect(template.name, cx)
+                };
+                this.update(cx, |this, cx| this.report(result, cx)).ok();
+            },
+        )
+        .default_value(false),
+    )
+    .description(description)
+    .keywords([template.name, "local", "connect"])
+}
+
+/// A provider added to `config.toml` by hand, which only the file can
+/// change.
+fn other_provider_item(provider: &ProviderConfig, cx: &Context<SettingsWindow>) -> SettingItem {
+    let this = cx.entity().downgrade();
+    let name = provider.name.clone();
+    let (status, _) = connection_status(provider, cx);
+    SettingItem::new(
+        provider.name.clone(),
+        SettingField::render(move |_, _, _| {
+            let this = this.clone();
+            let name = name.clone();
+            h_flex().child(
+                Button::new(SharedString::from(format!("remove-{name}")))
+                    .label("Remove")
+                    .small()
+                    .ghost()
+                    .on_click(move |_, _, cx| {
+                        let result = providers::disconnect(&name, cx);
+                        this.update(cx, |this, cx| this.report(result, cx)).ok();
+                    }),
+            )
+        }),
+    )
+    .description(format!("{} · {status}", provider.base_url))
+}
+
+fn edit_providers_file() -> SettingItem {
+    SettingItem::render(|_, _, _| {
+        h_flex().child(
+            Button::new("edit-config")
+                .label("Edit Providers File")
+                .small()
+                .outline()
+                .on_click(|_, _, cx| send_to_workspace(Box::new(EditModelConfig), cx)),
+        )
+    })
+    .keywords(["config", "provider", "toml", "custom"])
 }
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_color_pickers(window, cx);
         let colors_page = self.colors_page(cx);
+        let model_page = self.model_page(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -788,21 +1121,26 @@ impl Render for SettingsWindow {
                         .child("Settings"),
                 ),
             )
-            .child(
-                div().flex_1().min_h_0().child(
-                    Settings::new("jig-settings")
-                        .sidebar_width(px(200.))
-                        .sidebar_size_range(px(170.)..px(280.))
-                        .with_group_variant(GroupBoxVariant::Outline)
-                        .pages([
-                            self.appearance_page(),
-                            colors_page,
-                            self.languages_page(),
-                            self.commands_page(),
-                            self.model_page(),
-                        ]),
-                ),
-            )
+            .child(div().flex_1().min_h_0().child({
+                let settings = Settings::new("jig-settings")
+                    .sidebar_width(px(200.))
+                    .sidebar_size_range(px(170.)..px(280.))
+                    .with_group_variant(GroupBoxVariant::Outline)
+                    .pages([
+                        self.appearance_page(),
+                        colors_page,
+                        self.languages_page(),
+                        self.commands_page(),
+                        model_page,
+                    ]);
+                #[cfg(test)]
+                let settings =
+                    settings.default_selected_index(gpui_kit::component::setting::SelectIndex {
+                        page_ix: START_PAGE.get(),
+                        group_ix: None,
+                    });
+                settings
+            }))
     }
 }
 
@@ -812,7 +1150,11 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
     use jig_commands::Preset;
 
-    use super::{CommandRow, MAX_PROMPT_CHARS, init, is_settings_window, open, set_color};
+    use super::{
+        CommandRow, Fetch, MAX_PROMPT_CHARS, OpenWindow, START_PAGE, SettingsWindow, init,
+        is_settings_window, open, set_color,
+    };
+    use crate::providers;
     use crate::settings::{self, ThemeChoice};
 
     #[test]
@@ -872,5 +1214,54 @@ mod tests {
             );
             assert!(settings::get(cx).colors.dark.is_empty());
         });
+    }
+
+    #[gpui_kit::test]
+    fn the_model_page_draws_in_every_state(cx: &mut TestAppContext) {
+        let _dir = providers::init_temp(cx);
+        START_PAGE.set(4);
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init(cx);
+            init(cx);
+            open(cx);
+        });
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.global::<OpenWindow>().0);
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        let update = |cx: &mut TestAppContext, change: fn(&mut SettingsWindow)| {
+            cx.update_window(handle, |root, _, cx| {
+                let window = root.downcast::<gpui_kit::component::Root>().unwrap();
+                let view = window.read(cx).view().clone().downcast::<SettingsWindow>();
+                view.unwrap().update(cx, |this, cx| {
+                    change(this);
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        };
+        draw(cx);
+
+        update(cx, |this| {
+            this.check = Some(Fetch::Failed("401 Unauthorized".into()));
+            this.providers_error = Some("Couldn't write config.toml.".into());
+        });
+        draw(cx);
+
+        // Connected providers: one that takes a key, and a local one.
+        cx.update(|cx| {
+            let anthropic = jig_ai::template_named("anthropic").unwrap();
+            providers::connect(anthropic, Some("sk-test"), cx).unwrap();
+            providers::connect(jig_ai::template_named("ollama").unwrap(), None, cx).unwrap();
+            providers::set_quick("anthropic/claude-haiku-4-5", cx).unwrap();
+            providers::set_agent(Some("anthropic/claude-sonnet-5-5"), cx).unwrap();
+        });
+        draw(cx);
+        cx.update(|cx| providers::disconnect("opencode-go", cx).unwrap());
+        draw(cx);
+        START_PAGE.set(0);
     }
 }

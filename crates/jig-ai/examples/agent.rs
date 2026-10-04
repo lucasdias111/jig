@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let directory = std::path::PathBuf::from(args.next().expect("project dir"));
     let prompt = args.next().expect("prompt");
-    let server = Arc::new(AgentServer::start()?);
+    let server = Arc::new(AgentServer::start(None)?);
     let session = AgentSession::create(server, &directory)?;
     let request = AgentRequest {
         directory,

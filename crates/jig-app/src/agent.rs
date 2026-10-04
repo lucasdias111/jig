@@ -5,37 +5,38 @@ use std::sync::{Arc, Mutex};
 
 use gpui_kit::App;
 use jig_ai::agent::AgentServer;
+use serde_json::Value;
 
-static SERVER: Mutex<Option<Arc<AgentServer>>> = Mutex::new(None);
+/// The running server and the provider config it was started with.
+static SERVER: Mutex<Option<(Option<Value>, Arc<AgentServer>)>> = Mutex::new(None);
 
 /// Stop the server on quit; a static is never dropped on its own.
 pub fn init(cx: &mut App) {
     cx.on_app_quit(|_| {
-        if let Some(server) = SERVER.lock().ok().and_then(|mut server| server.take()) {
-            server.stop();
-        }
+        stop();
         async {}
     })
     .detach();
 }
 
-/// The running server, starting it if needed. Blocks while it starts, so
-/// call it off the main thread.
-pub fn server() -> anyhow::Result<Arc<AgentServer>> {
-    let mut server = SERVER.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(server) = server.as_ref() {
-        return Ok(server.clone());
+/// Stop the running server, if there is one.
+pub fn stop() {
+    if let Some((_, server)) = SERVER.lock().ok().and_then(|mut server| server.take()) {
+        server.stop();
     }
-    let started = Arc::new(AgentServer::start()?);
-    *server = Some(started.clone());
-    Ok(started)
 }
 
-/// The model agent commands use: `agent_model` in `config.toml`, or the
-/// default.
-pub fn model() -> String {
-    jig_ai::Config::load(jig_ai::Config::user_path().as_deref())
-        .ok()
-        .and_then(|config| config.agent_model)
-        .unwrap_or_else(|| jig_ai::agent::DEFAULT_MODEL.to_string())
+/// A server started with `config`, starting one if needed. A server
+/// started with other providers is replaced; runs still using it keep it
+/// until they end. Blocks while it starts, so call it off the main thread.
+pub fn server(config: Option<&Value>) -> anyhow::Result<Arc<AgentServer>> {
+    let mut server = SERVER.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some((started_with, server)) = server.as_ref()
+        && started_with.as_ref() == config
+    {
+        return Ok(server.clone());
+    }
+    let started = Arc::new(AgentServer::start(config)?);
+    *server = Some((config.cloned(), started.clone()));
+    Ok(started)
 }

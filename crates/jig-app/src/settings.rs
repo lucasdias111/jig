@@ -21,7 +21,6 @@ pub struct Settings {
     pub editor: EditorSettings,
     pub commands: CommandSettings,
     pub languages: LanguageSettings,
-    pub ai: AiSettings,
     pub colors: ColorSettings,
 }
 
@@ -161,13 +160,6 @@ impl LanguageSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AiSettings {
-    /// The provider commands use. `None` keeps `default` from config.toml.
-    pub provider: Option<String>,
-}
-
 /// Colors changed in the theme editor, over Ember's own, per variant:
 /// `[colors.dark]` with `"syntax.keyword" = "#FF6188"`. Keys are listed in
 /// `theme::EDITABLE`.
@@ -299,7 +291,6 @@ mod tests {
         settings.appearance.theme = ThemeChoice::Dark;
         settings.editor.soft_wrap = false;
         settings.commands.set_hidden("Explain", true);
-        settings.ai.provider = Some("claude".into());
         settings.languages.set_off("java", true);
         settings
             .languages

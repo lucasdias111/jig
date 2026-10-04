@@ -1,13 +1,12 @@
 //! Running a command: the palette, the AI request, and the reply bubble.
 
 use std::ops::Range;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, OutdentInline, Undo};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::*;
-use jig_ai::{PromptRequest, Provider, Reply};
+use jig_ai::{PromptRequest, Reply};
 use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
 use jig_editor::EditorHandle;
 
@@ -51,13 +50,6 @@ pub(super) struct CommandRun {
 pub(super) struct Preview {
     /// Where the new code is in the buffer.
     pub(super) range: Range<usize>,
-}
-
-/// The provider picked in Settings, or the config file's default.
-pub(super) fn load_provider(choice: Option<&str>) -> Result<Arc<dyn Provider>, String> {
-    jig_ai::Config::load(jig_ai::Config::user_path().as_deref())
-        .and_then(|config| config.chosen_provider(choice).build())
-        .map_err(|error| format!("{error:#}"))
 }
 
 impl Workspace {

@@ -42,17 +42,18 @@ Rust workspace, edition 2024, toolchain pinned in `rust-toolchain.toml`.
 - Run configurations (IntelliJ-style): `run_configs.rs` loads the project's `.jig/run.toml` (`[[run]]` with `name`, `command` run through `/bin/sh`, optional `cwd`, `env`) and detects Cargo binaries/examples, `package.json` scripts and Go modules; a file entry replaces a detected one of the same name. `run_output.rs` runs one in its own process group (Stop kills what it started), keeps ANSI colours and links `file:line:col`. `run_picker.rs` is the ⌃⌥R picker; `workspace/run.rs` has ⌃R run, ⌘F2 stop, ⌘J output panel, and the title-bar controls. Changed files are saved before a run. No stdin and no debugger yet.
 - `crates/jig-commands`: command presets (TOML), the command palette, the add-command form, the reply bubble, the agent conversation, shared panel styling and lane colours (`surface.rs`).
 - `crates/jig-editor`: `EditorHandle`, the only way the command layer touches the editor (text, selection, cursor, screen anchor, one-undo-step edits, highlights). Keeps the door open to replacing GPUI Kit's editor.
-- `crates/jig-ai`: no GPUI, tested on its own. `Provider` trait with Anthropic and OpenAI-compatible implementations, prompt building, reply parsing, and `agent.rs` (OpenCode client and unified-diff applier).
+- `crates/jig-ai`: no GPUI, tested on its own. `Provider` trait with Anthropic and OpenAI-compatible implementations (between them nearly every provider; fields a server rejects by name are dropped and retried, `http.rs`), prompt building, reply parsing, and `agent.rs` (OpenCode client and unified-diff applier). `config_file.rs` edits `config.toml` keeping comments and holds the major-provider templates; `keys.rs` stores keys typed in Settings; `models.rs` lists a provider's models (chat models only); `agent::AgentTarget` hands the agent's provider to OpenCode as `OPENCODE_CONFIG_CONTENT`, named `jig-<provider>`.
+- Providers in the app: `providers.rs` holds the config, keys and each provider's model list as a global that workspaces observe. Settings > Model connects the major providers (paste a key, or switch on a local server) and picks each lane's model from what the connected providers list. `agent.rs` restarts the shared OpenCode server when the agent's provider config changes; runs underway keep the old one.
 - `assets/`: built-in commands (`default-commands.toml`), snippets (`default-snippets.toml`), Ember themes, file icons.
 
-Per project: `.jig/run.toml` (run configurations). User files live in `~/.config/jig/`: `commands.toml` (own commands; same name replaces a built-in), `config.toml` (providers, `default`, `agent_model`), `settings.toml`, `snippets.toml` (own snippets; same name replaces a built-in).
+Per project: `.jig/run.toml` (run configurations). User files live in `~/.config/jig/`: `commands.toml` (own commands; same name replaces a built-in), `config.toml` (providers, and `quick` / `agent` as `provider/model`; the agent follows quick when unset; older `default` + `model` and `agent_model` still read), `keys.toml` (API keys, only where there's no system keychain), `settings.toml`, `snippets.toml` (own snippets; same name replaces a built-in).
 
 ## The quick-command contract
 
 - Prompt (`jig-ai/src/prompt.rs`): instruction, optional note, language, file name, `AGENTS.md` as `<project_rules>`, and the file with the region marked `<<<SELECTION>>>…<<<END>>>` or `<<<CURSOR>>>`. Files over 24 KB are cut to whole lines around the region. The reply format is repeated after the file.
 - Reply: `{"replace": "<new text for the region>", "message": "<≤20 words>"}`. Anthropic-format providers must return it through a forced `apply_edit` tool call; OpenAI-format ones use JSON mode. Anything that doesn't parse is an error and never changes the buffer.
 - Thinking is off by default (`thinking: {type: disabled}` / `reasoning_effort: none`); with it on, reasoning models took 30-75 s and sometimes returned nothing. `thinking = true` on a provider turns it back on.
-- Default provider: OpenCode Go `qwen3.8-flash` (Anthropic format, needs `OPENCODE_API_KEY` and an `x-opencode-session` header). API keys only ever come from environment variables named in `config.toml`.
+- Default model for both lanes: OpenCode Go `qwen3.8-flash` (Anthropic format, needs `OPENCODE_API_KEY` and an `x-opencode-session` header). API keys never go in `config.toml`: one typed in Settings goes in the system keychain (macOS Keychain, Windows Credential Manager; elsewhere a 0600 `keys.toml`) and wins over the `api_key_env` variable.
 
 ## Working on Jig
 
@@ -74,4 +75,4 @@ script/bundle-macos.sh           # builds target/Jig.app
 
 ## Not doing (for now)
 
-Git UI, terminal, plugins, LSP beyond go to definition and completion, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, moving API keys to the Keychain (an app opened from Finder doesn't see shell variables), open-sourcing.
+Git UI, terminal, plugins, LSP beyond go to definition and completion, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, open-sourcing.

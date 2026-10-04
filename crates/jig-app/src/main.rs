@@ -15,6 +15,7 @@ mod lsp;
 mod menus;
 mod project;
 mod project_search;
+mod providers;
 mod quick_open;
 mod recent;
 mod run_configs;
@@ -41,6 +42,7 @@ fn main() {
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         let settings_error = settings::init(cx);
+        providers::init(cx);
         recent::init(cx);
         agent::init(cx);
         theme::init(cx);

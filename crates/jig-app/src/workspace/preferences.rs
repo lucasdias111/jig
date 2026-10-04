@@ -8,7 +8,7 @@ use gpui_kit::*;
 use jig_commands::Preset;
 use jig_editor::EditorHandle as _;
 
-use super::{EditModelConfig, Workspace, commands};
+use super::{EditModelConfig, Workspace};
 use crate::settings::{self, EditorSettings, Settings};
 
 /// `presets` without the ones hidden in Settings.
@@ -55,14 +55,11 @@ impl Workspace {
         if new.commands != old.commands {
             self.reload_presets(window, cx);
         }
-        if new.ai != old.ai {
-            self.reload_provider();
-        }
         cx.notify();
     }
 
-    pub(super) fn reload_provider(&mut self) {
-        self.provider = commands::load_provider(self.settings.ai.provider.as_deref());
+    pub(super) fn reload_provider(&mut self, cx: &App) {
+        self.provider = crate::providers::build(cx);
     }
 
     fn config_path(&self) -> Result<PathBuf, String> {

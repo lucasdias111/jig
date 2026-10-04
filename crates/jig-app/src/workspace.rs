@@ -176,7 +176,7 @@ impl Workspace {
             recent_files: Vec::new(),
             new_command: None,
             commands_path: presets::user_commands_path(),
-            provider: commands::load_provider(settings.ai.provider.as_deref()),
+            provider: crate::providers::build(cx),
             config_path: jig_ai::Config::user_path(),
             settings,
             run: None,
@@ -200,6 +200,8 @@ impl Workspace {
         cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx))
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
+            .detach();
+        cx.observe_global::<crate::providers::Providers>(|this, cx| this.reload_provider(cx))
             .detach();
         // A running configuration would outlive Jig otherwise.
         cx.on_app_quit(|this, _| {
@@ -463,7 +465,7 @@ impl Workspace {
             self.reload_presets(window, cx);
         }
         if self.is_config_file() {
-            self.reload_provider();
+            crate::providers::reload(cx);
         }
         self.run_file_saved(path, window, cx);
         // Save As may have added a file.
@@ -2578,11 +2580,7 @@ mod tests {
             "{entries:?}"
         );
         eprintln!("agent answered: {answer:?}");
-        cx.update(|_| {
-            if let Ok(server) = crate::agent::server() {
-                server.stop();
-            }
-        });
+        crate::agent::stop();
     }
 
     #[gpui_kit::test]

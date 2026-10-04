@@ -1,10 +1,22 @@
 //! OpenAI-compatible Chat Completions (`POST {base}/chat/completions`).
-//! Covers Ollama, llama.cpp's server and OpenCode Go's chat models.
+//! Covers OpenAI, Gemini, OpenRouter, Groq, Mistral, DeepSeek, Ollama,
+//! LM Studio, llama.cpp's server and OpenCode Go's chat models.
 
 use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
+use crate::http::{Fallback, Lenient};
 use crate::{Provider, http};
+
+/// What servers that claim OpenAI compatibility still reject: JSON mode,
+/// the reasoning switch, temperature on reasoning models, and `max_tokens`,
+/// which OpenAI's reasoning models want as `max_completion_tokens`.
+const FALLBACKS: &[Fallback] = &[
+    Fallback::Drop("response_format"),
+    Fallback::Drop("reasoning_effort"),
+    Fallback::Drop("temperature"),
+    Fallback::Rename("max_tokens", "max_completion_tokens"),
+];
 
 pub struct OpenAiCompatProvider {
     pub base_url: String,
@@ -20,6 +32,7 @@ pub struct OpenAiCompatProvider {
     /// Sent with every request, e.g. OpenCode Go's session header.
     pub extra_headers: Vec<(String, String)>,
     agent: ureq::Agent,
+    lenient: Lenient,
 }
 
 impl OpenAiCompatProvider {
@@ -39,6 +52,7 @@ impl OpenAiCompatProvider {
             thinking: false,
             extra_headers: Vec::new(),
             agent: http::agent(),
+            lenient: Lenient::new(FALLBACKS),
         }
     }
 
@@ -76,7 +90,7 @@ impl OpenAiCompatProvider {
             )
             .collect();
         let url = format!("{}/chat/completions", self.base_url);
-        http::post_json(&self.agent, &url, &headers, &body)
+        self.lenient.post_json(&self.agent, &url, &headers, body)
     }
 }
 

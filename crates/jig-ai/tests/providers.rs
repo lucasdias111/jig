@@ -69,7 +69,7 @@ fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Recorde
             tx.send(Recorded {
                 request_line: request_line.trim_end().to_string(),
                 headers,
-                body: serde_json::from_slice(&raw).unwrap(),
+                body: serde_json::from_slice(&raw).unwrap_or_default(),
             })
             .unwrap();
         }
@@ -120,6 +120,62 @@ fn openai_compat_round_trip() {
             .unwrap()
             .contains("<<<SELECTION>>>fn a() {}<<<END>>>")
     );
+}
+
+#[test]
+fn rejected_fields_are_dropped_and_stay_dropped() {
+    let ok = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
+    let (url, rx) = serve(vec![
+        (
+            400,
+            r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}"#,
+        ),
+        (
+            400,
+            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#,
+        ),
+        (200, ok),
+        (200, ok),
+    ]);
+    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, true);
+    assert_eq!(provider.complete("s", "u").unwrap(), "hi");
+    let first = rx.recv().unwrap().body;
+    assert_eq!(first["max_tokens"], 1000);
+    let second = rx.recv().unwrap().body;
+    assert!(second.get("max_tokens").is_none());
+    assert_eq!(second["max_completion_tokens"], 1000);
+    let third = rx.recv().unwrap().body;
+    assert!(third.get("reasoning_effort").is_none());
+    assert_eq!(third["response_format"]["type"], "json_object");
+
+    // The next command doesn't hit the same rejections again.
+    assert_eq!(provider.complete("s", "u").unwrap(), "hi");
+    let fourth = rx.recv().unwrap().body;
+    assert!(fourth.get("reasoning_effort").is_none());
+    assert_eq!(fourth["max_completion_tokens"], 1000);
+}
+
+#[test]
+fn an_unnamed_rejection_is_not_retried() {
+    let (url, _rx) = serve_once(400, r#"{"error":{"message":"Bad request"}}"#);
+    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, true);
+    let error = provider.complete("s", "u").unwrap_err();
+    assert_eq!(error.to_string(), "400 Bad Request: Bad request");
+}
+
+#[test]
+fn models_are_listed_with_the_providers_auth() {
+    let (url, rx) = serve_once(200, r#"{"data":[{"id":"claude-b"},{"id":"claude-a"}]}"#);
+    let config = jig_ai::Config::parse(&format!(
+        "default = \"c\"\n[[provider]]\nname = \"c\"\nkind = \"anthropic\"\nbase_url = \"{url}/v1/\"\nmodel = \"\"\n"
+    ))
+    .unwrap();
+    let models = config.providers[0].list_models(Some("k")).unwrap();
+    assert_eq!(models, ["claude-a", "claude-b"]);
+    let sent = rx.recv().unwrap();
+    assert_eq!(sent.request_line, "GET /v1/models HTTP/1.1");
+    assert_eq!(sent.header("x-api-key"), Some("k"));
+    assert_eq!(sent.header("anthropic-version"), Some("2023-06-01"));
 }
 
 #[test]
