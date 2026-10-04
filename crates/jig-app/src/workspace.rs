@@ -14,6 +14,7 @@ mod home;
 mod lsp;
 mod preferences;
 mod run;
+mod selection_button;
 mod sidebar;
 mod snippets;
 mod status_bar;
@@ -127,6 +128,8 @@ pub struct Workspace {
     /// The settings as last applied, to tell what a change touched.
     settings: Settings,
     run: Option<CommandRun>,
+    /// The button beside the selection that opens the command input.
+    selection_button: Entity<selection_button::SelectionButton>,
     next_run_id: u64,
     /// Run configurations, and the one running.
     runs: run::RunState,
@@ -170,7 +173,10 @@ impl Workspace {
             Err(error) => (presets::defaults(), Some(error)),
         };
         let presets = preferences::visible_presets(presets, &settings);
+        let workspace = cx.entity();
+        let selection_button = cx.new(|cx| selection_button::SelectionButton::new(&workspace, cx));
         let mut this = Self {
+            selection_button,
             tabs: Vec::new(),
             active: 0,
             tab_scroll: ScrollHandle::new(),
@@ -693,6 +699,7 @@ impl Render for Workspace {
             .children(self.render_git_panel(window))
             .children(self.render_branch_picker(window))
             .children(self.render_hunk_popup(cx))
+            .child(self.selection_button.clone())
             .when_some(self.run.as_ref(), |this, run| {
                 let floating = self
                     .render_agent_chat(cx)
@@ -1531,6 +1538,72 @@ mod tests {
         vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
         vcx.run_until_parked();
         assert!(vcx.update(|_, cx| workspace.read(cx).palette.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn a_button_beside_the_selection_opens_the_command_input(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = three_files(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        assert!(
+            vcx.debug_bounds("selection-command").is_none(),
+            "nothing selected, no button"
+        );
+
+        let ws = workspace.clone();
+        vcx.update(|window, cx| {
+            ws.update(cx, |this, cx| {
+                this.editor().focus(window, cx);
+                this.editor()
+                    .state()
+                    .update(cx, |s, cx| s.set_selected_range(0..7, cx))
+            });
+            window.render_frame(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx
+            .debug_bounds("selection-command")
+            .expect("the button shows beside the selection");
+        let line = vcx
+            .update(|_, cx| workspace.read(cx).editor().beside_point(0..7, cx))
+            .unwrap();
+        assert!(button.left() >= line.x, "right of the selected text");
+
+        // Settings can turn it off, and back on.
+        vcx.update(|window, cx| {
+            crate::settings::update(cx, |s| s.editor.selection_button = false);
+            window.render_frame(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        assert!(
+            vcx.debug_bounds("selection-command").is_none(),
+            "turned off in Settings"
+        );
+        vcx.update(|window, cx| {
+            crate::settings::update(cx, |s| s.editor.selection_button = true);
+            window.render_frame(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx
+            .debug_bounds("selection-command")
+            .expect("back once turned on");
+
+        vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        assert!(vcx.update(|_, cx| workspace.read(cx).palette.is_some()));
+        assert!(
+            vcx.debug_bounds("selection-command").is_none(),
+            "hidden while the command input is open"
+        );
+        assert_eq!(
+            vcx.update(|_, cx| workspace.read(cx).editor().selection(cx)),
+            0..7,
+            "the click kept the selection"
+        );
     }
 
     #[gpui_kit::test]

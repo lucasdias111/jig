@@ -418,6 +418,12 @@ impl SettingsWindow {
                         "Suggest names while typing, from the language server or words in the file.",
                         |e| e.autocomplete,
                         |e, v| e.autocomplete = v,
+                    ))
+                    .item(editor_switch(
+                        "Command button on selections",
+                        "Show a button beside selected code that opens the command input.",
+                        |e| e.selection_button,
+                        |e, v| e.selection_button = v,
                     )),
             )
     }

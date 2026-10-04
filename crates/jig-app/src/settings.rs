@@ -92,6 +92,8 @@ pub struct EditorSettings {
     pub show_whitespace: bool,
     /// Suggest completions while typing.
     pub autocomplete: bool,
+    /// Show the button beside a selection that opens the command input.
+    pub selection_button: bool,
 }
 
 impl Default for EditorSettings {
@@ -102,6 +104,7 @@ impl Default for EditorSettings {
             indent_guides: true,
             show_whitespace: false,
             autocomplete: true,
+            selection_button: true,
         }
     }
 }

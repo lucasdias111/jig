@@ -14,7 +14,7 @@ use super::agent::AgentRun;
 use super::{OpenCommand, OpenPalette, Workspace};
 
 /// The title bar's button for the command input (Lucide "sparkles").
-const COMMAND_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>"#;
+pub(super) const COMMAND_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>"#;
 
 /// How long an error stays up before it fades on its own.
 const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
@@ -359,7 +359,7 @@ impl Workspace {
     }
 
     /// The command input or the new-command form has the keyboard.
-    fn modal_open(&self) -> bool {
+    pub(super) fn modal_open(&self) -> bool {
         self.palette.is_some()
             || self.new_command.is_some()
             || self.quick_open.is_some()
