@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Jig is a macOS-first code editor where AI works through small commands run at the cursor, not through a chat or an agent somewhere else. You select code, press ⌘K, pick a command or type a prompt, and the change shows inline for you to accept or reject. Jig sends this file with every quick command, and OpenCode reads it for agent commands, so keep it short and current.
+Jig is a macOS-first code editor (it also builds on Linux and Windows) where AI works through small commands run at the cursor, not through a chat or an agent somewhere else. You select code, press ⌘K, pick a command or type a prompt, and the change shows inline for you to accept or reject. Jig sends this file with every quick command, and OpenCode reads it for agent commands, so keep it short and current.
 
 ## The concept
 
@@ -37,13 +37,14 @@ A change goes into the buffer provisionally: highlighted, file read-only, one un
 
 Rust workspace, edition 2024, toolchain pinned in `rust-toolchain.toml`.
 
-- `crates/jig-app`: the binary (`Jig`). Window, workspace, tabs, file tree, Go to File (⌘P), Find in Files (⇧⌘F), menus, settings window, themes. `workspace/commands.rs` runs quick commands; `workspace/agent.rs` runs agent commands and their review; `agent.rs` owns the shared OpenCode server; `project.rs` finds the project root and `AGENTS.md`; `diff.rs` is the preview diff. `lsp.rs` runs language servers (not bundled; one that isn't installed is skipped) for ⌘-click go to definition, with `definitions.rs` guessing declarations when no server answers. `workspace/status_bar.rs` shows cursor position, indentation (`indentation.rs`), encoding and language.
+- `crates/jig-app`: the binary (`Jig`). Window, workspace, tabs, file tree, Go to File (⌘P), Find in Files (⇧⌘F), menus, settings window, themes. `workspace/commands.rs` runs quick commands; `workspace/agent.rs` runs agent commands and their review; `agent.rs` owns the shared OpenCode server; `project.rs` finds the project root and `AGENTS.md`; `diff.rs` is the preview diff. `lsp.rs` runs language servers (not bundled; one that isn't installed is skipped) for ⌘-click go to definition and autocomplete, with `definitions.rs` guessing declarations and `completions.rs` offering words from the file when no server answers. `snippets.rs` adds Jig's snippets to the list, prefix (`for`) and postfix (`users.var`); `workspace/snippets.rs` fills a taken snippet in place by place with Tab and Shift-Tab. `workspace/status_bar.rs` shows cursor position, indentation (`indentation.rs`), encoding and language.
+- Run configurations (IntelliJ-style): `run_configs.rs` loads the project's `.jig/run.toml` (`[[run]]` with `name`, `command` run through `/bin/sh`, optional `cwd`, `env`) and detects Cargo binaries/examples, `package.json` scripts and Go modules; a file entry replaces a detected one of the same name. `run_output.rs` runs one in its own process group (Stop kills what it started), keeps ANSI colours and links `file:line:col`. `run_picker.rs` is the ⌃⌥R picker; `workspace/run.rs` has ⌃R run, ⌘F2 stop, ⌘J output panel, and the title-bar controls. Changed files are saved before a run. No stdin and no debugger yet.
 - `crates/jig-commands`: command presets (TOML), the command palette, the add-command form, the reply bubble, shared panel styling and lane colours (`surface.rs`).
 - `crates/jig-editor`: `EditorHandle`, the only way the command layer touches the editor (text, selection, cursor, screen anchor, one-undo-step edits, highlights). Keeps the door open to replacing GPUI Kit's editor.
 - `crates/jig-ai`: no GPUI, tested on its own. `Provider` trait with Anthropic and OpenAI-compatible implementations, prompt building, reply parsing, and `agent.rs` (OpenCode client and unified-diff applier).
-- `assets/`: built-in commands (`default-commands.toml`), Ember themes, file icons.
+- `assets/`: built-in commands (`default-commands.toml`), snippets (`default-snippets.toml`), Ember themes, file icons.
 
-User files live in `~/.config/jig/`: `commands.toml` (own commands; same name replaces a built-in), `config.toml` (providers, `default`, `agent_model`), `settings.toml`.
+Per project: `.jig/run.toml` (run configurations). User files live in `~/.config/jig/`: `commands.toml` (own commands; same name replaces a built-in), `config.toml` (providers, `default`, `agent_model`), `settings.toml`, `snippets.toml` (own snippets; same name replaces a built-in).
 
 ## The quick-command contract
 
@@ -56,7 +57,7 @@ User files live in `~/.config/jig/`: `commands.toml` (own commands; same name re
 
 ```sh
 cargo run -p jig-app -- <file-or-folder>
-cargo test                       # ~190 tests, including headless UI tests
+cargo test                       # ~210 tests, including headless UI tests
 cargo clippy --all-targets       # keep at zero warnings
 cargo fmt
 script/bundle-macos.sh           # builds target/Jig.app
@@ -66,9 +67,10 @@ script/bundle-macos.sh           # builds target/Jig.app
 - Depend on `gpui-kit` only, pinned exactly (`=0.7.0`). GPUI distributions can't be mixed.
 - UI tests open a real window on GPUI's test platform: `open(cx, path)`, then `step(cx, window, |window, cx| …)` to press keys and let effects settle. Type and press in separate steps when the list needs to refilter in between.
 - Match the surrounding style: doc comments say why, in plain sentences; names over comments; small focused functions. User-facing text is short, plain and specific ("Save the file first, so the agent knows which project it's in.").
+- Cross-platform: GPUI runs on macOS, Linux and Windows, and CI builds all three. Keep macOS-only touches behind `cfg!(target_os = "macos")` with a plain fallback, bind keys with `secondary-` (⌘ on macOS, Ctrl elsewhere), gate Unix APIs (`std::os::unix`, `libc`) with `#[cfg(unix)]`, and put caches and config where each OS expects them.
 - New languages: enable the grammar feature in the root `Cargo.toml` and add it to `languages::BUNDLED`.
 - When a feature lands or changes, update this file if it changes the concept, the layout or the contract.
 
 ## Not doing (for now)
 
-Git UI, terminal, plugins, LSP beyond go to definition, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, moving API keys to the Keychain (an app opened from Finder doesn't see shell variables), open-sourcing.
+Git UI, terminal, plugins, LSP beyond go to definition and completion, project-wide replace, Jig's own editor element. Open: loading grammars at runtime, moving API keys to the Keychain (an app opened from Finder doesn't see shell variables), open-sourcing.

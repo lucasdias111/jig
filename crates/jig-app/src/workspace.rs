@@ -3,13 +3,16 @@
 
 mod agent;
 mod commands;
+mod completions;
 mod definitions;
 mod find;
 mod go_to_file;
 mod home;
 mod lsp;
 mod preferences;
+mod run;
 mod sidebar;
+mod snippets;
 mod status_bar;
 mod tabs;
 mod user_commands;
@@ -52,7 +55,12 @@ actions!(
         NewFile,
         CloseTab,
         NextTab,
-        PreviousTab
+        PreviousTab,
+        RunSelected,
+        ChooseRunConfiguration,
+        StopRun,
+        ToggleRunPanel,
+        EditRunConfigurations
     ]
 );
 
@@ -108,6 +116,8 @@ pub struct Workspace {
     settings: Settings,
     run: Option<CommandRun>,
     next_run_id: u64,
+    /// Run configurations, and the one running.
+    runs: run::RunState,
 }
 
 struct ProjectTree {
@@ -170,6 +180,7 @@ impl Workspace {
             settings,
             run: None,
             next_run_id: 0,
+            runs: Default::default(),
         };
         let tab = this.new_tab(document, window, cx);
         if this.home {
@@ -189,6 +200,12 @@ impl Workspace {
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();
+        // A running configuration would outlive Jig otherwise.
+        cx.on_app_quit(|this, _| {
+            this.stop_process();
+            async {}
+        })
+        .detach();
         // Pick up files added or removed outside Jig.
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -386,6 +403,7 @@ impl Workspace {
         if self.is_config_file() {
             self.reload_provider();
         }
+        self.run_file_saved(path, window, cx);
         // Save As may have added a file.
         self.refresh_tree(cx);
         cx.notify();
@@ -419,6 +437,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-e", FocusFileTree, None),
         KeyBinding::new("secondary-p", GoToFile, None),
         KeyBinding::new("secondary-shift-f", FindInFiles, None),
+        // As in IntelliJ on the Mac.
+        KeyBinding::new("ctrl-r", RunSelected, None),
+        KeyBinding::new("ctrl-alt-r", ChooseRunConfiguration, None),
+        KeyBinding::new("secondary-f2", StopRun, None),
+        KeyBinding::new("secondary-j", ToggleRunPanel, None),
         // In the editor too, where GPUI Kit binds ⇧⌘F to Replace; Replace
         // moves to ⌘R, as in IntelliJ.
         KeyBinding::new("secondary-shift-f", FindInFiles, Some("Input")),
@@ -446,7 +469,7 @@ impl Render for Workspace {
         let sidebar_top = self.render_sidebar_top(cx);
         let title = self.render_title(cx);
         let root = v_flex();
-        self.sidebar_drag_handlers(root, cx)
+        self.run_panel_drag_handlers(self.sidebar_drag_handlers(root, cx), cx)
             .key_context(CONTEXT)
             .relative()
             .size_full()
@@ -471,9 +494,15 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
             .on_action(cx.listener(Self::activate_tab))
+            .on_action(cx.listener(Self::run_selected))
+            .on_action(cx.listener(Self::choose_run_configuration))
+            .on_action(cx.listener(Self::stop_run))
+            .on_action(cx.listener(Self::toggle_run_panel))
+            .on_action(cx.listener(Self::edit_run_configurations))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
+            .capture_action(cx.listener(Self::on_shift_tab))
             .capture_action(cx.listener(Self::on_accept_indent))
             .capture_action(cx.listener(Self::on_undo))
             .child(
@@ -498,7 +527,8 @@ impl Render for Workspace {
                                 .bg(theme.background)
                                 .border_b_1()
                                 .border_color(theme.title_bar_border)
-                                .child(title),
+                                .child(title)
+                                .children(self.render_run_controls(cx)),
                         ),
                     ),
             )
@@ -508,16 +538,15 @@ impl Render for Workspace {
                     .min_h_0()
                     .items_stretch()
                     .children(sidebar)
-                    .when(self.home, |this| {
-                        this.child(div().flex_1().min_w_0().child(self.render_start(cx)))
-                    })
-                    .when(!self.home, |this| {
-                        this.child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .bg(theme.background)
-                                .child(
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .when(self.home, |this| {
+                                this.child(div().flex_1().min_h_0().child(self.render_start(cx)))
+                            })
+                            .when(!self.home, |this| {
+                                this.bg(theme.background).child(
                                     div().flex_1().min_h_0().pl_2().pr_3().pt_1().pb_2().child(
                                         Editor::new(self.editor().state())
                                             .bordered(false)
@@ -528,9 +557,10 @@ impl Render for Workspace {
                                             .size_full(),
                                     ),
                                 )
-                                .child(self.render_status_bar(cx)),
-                        )
-                    }),
+                            })
+                            .children(self.render_run_panel(cx))
+                            .when(!self.home, |this| this.child(self.render_status_bar(cx))),
+                    ),
             )
             .children(self.render_sidebar_handle(cx))
             .when_some(self.new_command.as_ref(), |this, form| {
@@ -553,6 +583,7 @@ impl Render for Workspace {
             })
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
+            .children(self.render_run_picker(window))
             .when_some(self.run.as_ref(), |this, run| {
                 this.child(deferred(
                     anchored()
@@ -2291,6 +2322,236 @@ mod tests {
         assert_eq!(query.as_deref(), Some("alpha"));
     }
 
+    /// Type `text` a character at a time, as completion only follows typing.
+    fn type_slowly(cx: &mut TestAppContext, window: AnyWindowHandle, text: &str) {
+        for c in text.chars() {
+            step(cx, window, move |window, cx| {
+                window.render_frame(cx);
+                window.input(&c.to_string(), cx);
+            });
+        }
+    }
+
+    /// The labels in the completion list, if it's showing.
+    fn completion_labels(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            let state = workspace.read(cx).editor().state().read(cx);
+            let menu = state.completion_menu_state();
+            if !menu.open {
+                return Vec::new();
+            }
+            menu.items.iter().map(|item| item.label.clone()).collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn words_in_the_file_complete_without_a_language_server(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "counter = 1\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(12..12, cx);
+        });
+
+        type_slowly(cx, window, "co");
+        assert!(
+            completion_labels(cx, &workspace).is_empty(),
+            "too short to guess"
+        );
+        type_slowly(cx, window, "u");
+        assert_eq!(completion_labels(cx, &workspace), ["counter"]);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            assert_eq!(editor.text(cx), "counter = 1\ncounter");
+        });
+        assert!(completion_labels(cx, &workspace).is_empty());
+    }
+
+    /// The current tab's text, and what's selected in it.
+    fn text_and_selection(
+        cx: &mut TestAppContext,
+        workspace: &Entity<Workspace>,
+    ) -> (String, String) {
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            let text = editor.text(cx);
+            let selected = text[editor.selection(cx)].to_string();
+            (text, selected)
+        })
+    }
+
+    fn press(cx: &mut TestAppContext, window: AnyWindowHandle, key: &'static str) {
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_snippet_is_filled_in_place_by_place(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {\n    \n}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(16..16, cx);
+        });
+
+        type_slowly(cx, window, "fo");
+        assert_eq!(completion_labels(cx, &workspace)[..2], ["for", "fori"]);
+        press(cx, window, "enter");
+        let (text, selected) = text_and_selection(cx, &workspace);
+        assert_eq!(
+            text,
+            "fn main() {\n    for item in items {\n        \n    }\n}\n"
+        );
+        assert_eq!(selected, "item");
+
+        type_slowly(cx, window, "x");
+        press(cx, window, "tab");
+        assert_eq!(text_and_selection(cx, &workspace).1, "items");
+        press(cx, window, "shift-tab");
+        assert_eq!(text_and_selection(cx, &workspace).1, "x");
+        press(cx, window, "tab");
+        type_slowly(cx, window, "xs");
+        // The last Tab lands in the body and ends the snippet.
+        press(cx, window, "tab");
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(
+                this.editor().text(cx),
+                "fn main() {\n    for x in xs {\n        \n    }\n}\n"
+            );
+            assert_eq!(this.editor().selection(cx), 38..38);
+            assert!(this.tab().snippet.is_none());
+        });
+        // Tab indents again.
+        press(cx, window, "tab");
+        assert_eq!(
+            text_and_selection(cx, &workspace).0,
+            "fn main() {\n    for x in xs {\n            \n    }\n}\n"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn var_after_an_expression_names_it(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.ts");
+        std::fs::write(&path, "getUser(id)\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(11..11, cx);
+        });
+
+        type_slowly(cx, window, ".va");
+        assert_eq!(completion_labels(cx, &workspace), ["var"]);
+        press(cx, window, "enter");
+        let (text, selected) = text_and_selection(cx, &workspace);
+        assert_eq!(text, "const user = getUser(id);\n");
+        assert_eq!(selected, "user");
+        // Escape leaves the snippet; Tab then indents.
+        press(cx, window, "escape");
+        cx.update(|cx| assert!(workspace.read(cx).tab().snippet.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
+        use serde_json::json;
+
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let path = dir.path().join("src/main.rs");
+        std::fs::write(&path, "fn main() {\n    v\n}\n").unwrap();
+        let (client, seen) =
+            crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+                "textDocument/completion" => json!({"isIncomplete": false, "items": [
+                    {"label": "pop", "kind": 2},
+                    {"label": "push", "kind": 2, "detail": "fn(&mut self, T)"},
+                ]}),
+                _ => serde_json::Value::Null,
+            });
+        let server = crate::lsp::server_for("rust").unwrap();
+        let root = crate::lsp::root_for(server, &path);
+        cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(17..17, cx);
+        });
+
+        let wait_for = |cx: &mut TestAppContext, done: &dyn Fn(&mut TestAppContext) -> bool| {
+            for _ in 0..200 {
+                cx.run_until_parked();
+                if done(cx) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        type_slowly(cx, window, ".");
+        wait_for(cx, &|cx| completion_labels(cx, &workspace).len() > 2);
+        // The server's, then Jig's postfix snippets.
+        let labels = completion_labels(cx, &workspace);
+        assert_eq!(labels[..3], ["pop", "push", "for"]);
+        assert!(labels.contains(&"var".to_string()));
+        type_slowly(cx, window, "pu");
+        wait_for(cx, &|cx| completion_labels(cx, &workspace).len() == 1);
+        assert_eq!(completion_labels(cx, &workspace), ["push"]);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            assert_eq!(editor.text(cx), "fn main() {\n    v.push\n}\n");
+        });
+
+        // Each request saw the text it was made for.
+        let messages: Vec<serde_json::Value> = seen.try_iter().collect();
+        let mut text = String::new();
+        for message in &messages {
+            match message["method"].as_str() {
+                Some("textDocument/didChange") => {
+                    text = message["params"]["contentChanges"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                }
+                Some("textDocument/completion") => {
+                    let offset = crate::lsp::offset(
+                        &text,
+                        serde_json::from_value(message["params"]["position"].clone()).unwrap(),
+                        crate::lsp::Encoding::Utf8,
+                    );
+                    assert!(
+                        text[..offset].ends_with(['.', 'p', 'u']),
+                        "{text:?} at {offset}"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|m| m["params"]["context"]
+                    == json!({"triggerKind": 2, "triggerCharacter": "."}))
+        );
+    }
+
     #[gpui_kit::test]
     fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContext) {
         use serde_json::json;
@@ -2458,6 +2719,101 @@ mod tests {
                 "Cmd+click at {point:?} didn't jump"
             );
             assert_eq!(this.editor().selection(cx), 7..12);
+        });
+    }
+
+    /// Let the process threads and the UI catch up until `done`.
+    fn wait_until(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
+        for _ in 0..500 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out");
+    }
+
+    #[gpui_kit::test]
+    fn runs_a_configuration_and_opens_files_from_its_output(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".jig")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();
+        std::fs::write(
+            dir.path().join(".jig/run.toml"),
+            r#"
+[[run]]
+name = "Other"
+command = "true"
+
+[[run]]
+name = "Hello"
+command = "echo hello $GREETING; echo 'src/lib.rs:1:4: here' >&2; exit 2"
+env = { GREETING = "there" }
+"#,
+        )
+        .unwrap();
+        let (window, workspace) = open(cx, dir.path());
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("ctrl-alt-r", cx);
+        });
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_picker_rows(cx))
+                .is_some_and(|rows| rows.len() == 3)
+        });
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).run_picker_rows(cx))
+                .unwrap(),
+            ["Other", "Hello", "Edit run.toml…"]
+        );
+        step(cx, window, |window, cx| window.input("hel", cx));
+        step(cx, window, |window, cx| window.press("enter", cx));
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_output())
+                .is_some_and(|(_, _, ending)| ending.is_some())
+        });
+        let (first, lines, ending) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+        assert_eq!(ending.as_deref(), Some("Process finished with exit code 2"));
+        let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+        assert!(texts[0].starts_with("$ echo hello"));
+        assert!(texts.contains(&"hello there".to_string()), "{texts:?}");
+        assert!(
+            texts
+                .last()
+                .unwrap()
+                .starts_with("Process finished with exit code 2 (")
+        );
+
+        let link = lines
+            .iter()
+            .find_map(|line| line.links.first().cloned())
+            .expect("the file reference is a link");
+        let target = workspace.clone();
+        step(cx, window, move |window, cx| {
+            target.update(cx, |this, cx| this.open_link(&link, window, cx));
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/lib.rs")
+            );
+            assert_eq!(this.editor().selection(cx), 3..3);
+        });
+
+        // ⌃R runs the chosen configuration again.
+        step(cx, window, |window, cx| window.press("ctrl-r", cx));
+        wait_until(cx, |cx| {
+            cx.update(|cx| workspace.read(cx).run_output())
+                .is_some_and(|(id, _, ending)| id != first && ending.is_some())
         });
     }
 }

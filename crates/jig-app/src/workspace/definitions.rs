@@ -317,7 +317,7 @@ impl Workspace {
     }
 
     /// Open `path` with `selection` (in the editor's positions) selected.
-    fn open_at(
+    pub(super) fn open_at(
         &mut self,
         path: &Path,
         selection: lsp_types::Range,
@@ -456,7 +456,7 @@ fn reference_results(
 
 /// What `request` answered, or `None` if it failed or took longer than
 /// `timeout`.
-async fn with_timeout(
+pub(super) async fn with_timeout(
     request: futures::channel::oneshot::Receiver<lsp::Response>,
     timeout: Duration,
     cx: &AsyncApp,

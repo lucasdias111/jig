@@ -8,7 +8,7 @@ use gpui_kit::*;
 use super::Workspace;
 use crate::{indentation, languages};
 
-const HEIGHT: f32 = 24.;
+pub(super) const HEIGHT: f32 = 24.;
 
 /// `Ln 12, Col 5`, for one tab's editor. A view of its own so the cursor
 /// moving repaints just this, not the whole workspace.

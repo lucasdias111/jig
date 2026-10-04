@@ -84,6 +84,8 @@ pub struct EditorSettings {
     pub soft_wrap: bool,
     pub indent_guides: bool,
     pub show_whitespace: bool,
+    /// Suggest completions while typing.
+    pub autocomplete: bool,
 }
 
 impl Default for EditorSettings {
@@ -93,6 +95,7 @@ impl Default for EditorSettings {
             soft_wrap: true,
             indent_guides: true,
             show_whitespace: false,
+            autocomplete: true,
         }
     }
 }

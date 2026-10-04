@@ -21,6 +21,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 ignore = "0.4"
 regex = "1"
+libc = "0.2"
 futures = "0.3"
 # The LSP types GPUI Kit's editor speaks, for go-to-definition.
 lsp-types = "0.97"

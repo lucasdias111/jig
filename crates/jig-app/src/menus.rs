@@ -1,12 +1,14 @@
-//! The macOS menu bar: Jig, File, Edit and View.
+//! The macOS menu bar: Jig, File, Edit, View and Run.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
-    AddCommand, CloseTab, CloseWindow, EditAgentsFile, EditCommands, FindInFiles, FocusFileTree,
-    GoToFile, NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, Save, SaveAs, ToggleSidebar,
+    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, EditAgentsFile, EditCommands,
+    EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile, NewFile, NextTab, Open,
+    OpenCommand, PreviousTab, Quit, RunSelected, Save, SaveAs, StopRun, ToggleRunPanel,
+    ToggleSidebar,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -94,6 +96,18 @@ pub fn init(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Show Next Tab", NextTab),
                 MenuItem::action("Show Previous Tab", PreviousTab),
+                MenuItem::separator(),
+                MenuItem::action("Toggle Run Panel", ToggleRunPanel),
+            ],
+        ),
+        menu(
+            "Run",
+            vec![
+                MenuItem::action("Run", RunSelected),
+                MenuItem::action("Run…", ChooseRunConfiguration),
+                MenuItem::action("Stop", StopRun),
+                MenuItem::separator(),
+                MenuItem::action("Edit Configurations", EditRunConfigurations),
             ],
         ),
     ]);

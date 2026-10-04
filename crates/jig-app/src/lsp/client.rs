@@ -30,8 +30,18 @@ struct State {
     /// How positions count columns, once the server has said.
     encoding: Encoding,
     pending: HashMap<i64, oneshot::Sender<Response>>,
-    /// Open documents: how many editors have each open, and its version.
-    documents: HashMap<String, (usize, i32)>,
+    /// Open documents, by URI.
+    documents: HashMap<String, Document>,
+    /// What typed after a name asks for completions, such as `.`.
+    completion_triggers: Vec<String>,
+}
+
+struct Document {
+    /// How many editors have it open.
+    editors: usize,
+    version: i32,
+    /// A hash of the text last sent, so the same text isn't sent twice.
+    sent: u64,
 }
 
 enum Phase {
@@ -101,6 +111,7 @@ impl Client {
                 encoding: Encoding::Utf16,
                 pending: HashMap::new(),
                 documents: HashMap::new(),
+                completion_triggers: Vec::new(),
             })),
             // 0 is `initialize`.
             next_id: AtomicI64::new(1),
@@ -114,6 +125,11 @@ impl Client {
     /// How the server counts columns. UTF-16 until it says otherwise.
     pub fn encoding(&self) -> Encoding {
         self.state.lock().unwrap().encoding
+    }
+
+    /// What typed after a name asks for completions, such as `.`.
+    pub fn completion_triggers(&self) -> Vec<String> {
+        self.state.lock().unwrap().completion_triggers.clone()
     }
 
     pub fn request(&self, method: &str, params: Value) -> oneshot::Receiver<Response> {
@@ -144,9 +160,13 @@ impl Client {
     pub fn open(&self, uri: &str, language_id: &str, text: &str) {
         let first = {
             let mut state = self.state.lock().unwrap();
-            let (count, _) = state.documents.entry(uri.to_string()).or_insert((0, 0));
-            *count += 1;
-            *count == 1
+            let document = state.documents.entry(uri.to_string()).or_insert(Document {
+                editors: 0,
+                version: 0,
+                sent: hash(text),
+            });
+            document.editors += 1;
+            document.editors == 1
         };
         if first {
             self.notify(
@@ -158,15 +178,20 @@ impl Client {
         }
     }
 
-    /// `uri` now reads `text`.
+    /// `uri` now reads `text`. Nothing is sent if the server already has it.
     pub fn change(&self, uri: &str, text: &str) {
+        let sent = hash(text);
         let version = {
             let mut state = self.state.lock().unwrap();
-            let Some((_, version)) = state.documents.get_mut(uri) else {
+            let Some(document) = state.documents.get_mut(uri) else {
                 return;
             };
-            *version += 1;
-            *version
+            if document.sent == sent {
+                return;
+            }
+            document.sent = sent;
+            document.version += 1;
+            document.version
         };
         self.notify(
             "textDocument/didChange",
@@ -189,8 +214,8 @@ impl Client {
         let last = {
             let mut state = self.state.lock().unwrap();
             match state.documents.get_mut(uri) {
-                Some((count, _)) if *count > 1 => {
-                    *count -= 1;
+                Some(document) if document.editors > 1 => {
+                    document.editors -= 1;
                     false
                 }
                 Some(_) => {
@@ -281,6 +306,14 @@ fn connect(
                 "textDocument": {
                     "synchronization": {"didSave": true, "dynamicRegistration": false},
                     "definition": {"linkSupport": true},
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true,
+                            "deprecatedSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                        },
+                        "contextSupport": true,
+                    },
                     "references": {},
                 },
                 "workspace": {"workspaceFolders": true, "configuration": true},
@@ -328,8 +361,19 @@ fn connect(
                         Some("utf-8") => Encoding::Utf8,
                         _ => Encoding::Utf16,
                     };
+                    let triggers =
+                        result["capabilities"]["completionProvider"]["triggerCharacters"]
+                            .as_array()
+                            .map(|triggers| {
+                                triggers
+                                    .iter()
+                                    .filter_map(|t| Some(t.as_str()?.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                     let mut state = state.lock().unwrap();
                     state.encoding = encoding;
+                    state.completion_triggers = triggers;
                     let initialized =
                         json!({"jsonrpc": "2.0", "method": "initialized", "params": {}})
                             .to_string();
@@ -356,6 +400,13 @@ fn connect(
         }
     }
     die(state);
+}
+
+fn hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// One `Content-Length`-framed message, or `None` once the stream ends.
@@ -408,7 +459,10 @@ pub mod tests {
                 let method = message["method"].as_str().unwrap_or_default().to_string();
                 if let Some(id) = message.get("id") {
                     let result = if method == "initialize" {
-                        json!({"capabilities": {"positionEncoding": "utf-8"}})
+                        json!({"capabilities": {
+                            "positionEncoding": "utf-8",
+                            "completionProvider": {"triggerCharacters": ["."]},
+                        }})
                     } else {
                         answer(&method, &message["params"])
                     };
@@ -432,6 +486,8 @@ pub mod tests {
         );
         client.open("file:///project/a.rs", "rust", "fn a() {}");
         client.change("file:///project/a.rs", "fn b() {}");
+        // The same text again isn't sent.
+        client.change("file:///project/a.rs", "fn b() {}");
         let response =
             futures::executor::block_on(client.request("textDocument/definition", json!({})));
         assert_eq!(
@@ -439,6 +495,7 @@ pub mod tests {
             json!({"echo": "textDocument/definition"})
         );
         assert_eq!(client.encoding(), Encoding::Utf8);
+        assert_eq!(client.completion_triggers(), ["."]);
 
         let methods: Vec<String> = seen
             .iter()

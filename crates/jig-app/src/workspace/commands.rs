@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, Undo};
+use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, OutdentInline, Undo};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
 use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
@@ -362,13 +362,32 @@ impl Workspace {
         self.accept_or_propagate(cx);
     }
 
+    /// Tab accepts a change under review, or moves on in a snippet.
     pub(super) fn on_accept_tab(
         &mut self,
         _: &IndentInline,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.accept_or_propagate(cx);
+        if !self.modal_open() && (self.accept_preview(cx) || self.snippet_step(true, cx)) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
+        }
+    }
+
+    /// Shift-Tab goes back in a snippet.
+    pub(super) fn on_shift_tab(
+        &mut self,
+        _: &OutdentInline,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.modal_open() && self.snippet_step(false, cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
+        }
     }
 
     pub(super) fn on_accept_indent(&mut self, _: &Indent, _: &mut Window, cx: &mut Context<Self>) {
@@ -469,6 +488,12 @@ impl Workspace {
             cx.stop_propagation();
             cx.notify();
         } else {
+            // The first Escape closes the completion list, the next leaves
+            // the snippet.
+            let listing = self.editor().state().read(cx).completion_menu_state().open;
+            if !listing {
+                self.end_snippet();
+            }
             cx.propagate();
         }
     }

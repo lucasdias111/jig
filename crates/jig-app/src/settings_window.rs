@@ -371,6 +371,12 @@ impl SettingsWindow {
                         "Mark spaces and tabs.",
                         |e| e.show_whitespace,
                         |e, v| e.show_whitespace = v,
+                    ))
+                    .item(editor_switch(
+                        "Autocomplete",
+                        "Suggest names while typing, from the language server or words in the file.",
+                        |e| e.autocomplete,
+                        |e, v| e.autocomplete = v,
                     )),
             )
     }

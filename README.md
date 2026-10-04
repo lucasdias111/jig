@@ -1,6 +1,6 @@
 # Jig
 
-A macOS code editor where AI works through small commands at the cursor,
+A macOS-first code editor where AI works through small commands at the cursor,
 not through a chat panel.
 
 Select some code, press **⌘K**, pick a command or type a prompt, and the
@@ -32,14 +32,15 @@ server, and light and dark themes that follow the system.
 
 ## Building
 
-You need macOS and Rust. `rust-toolchain.toml` pins the toolchain, so
+Jig is developed on macOS and also builds on Linux and Windows. You need
+Rust; `rust-toolchain.toml` pins the toolchain, so
 `rustup` installs the right version on the first build.
 
 ```sh
 cargo run -p jig-app -- path/to/file-or-folder
 ```
 
-To build an app bundle at `target/Jig.app`:
+On macOS, to build an app bundle at `target/Jig.app`:
 
 ```sh
 script/bundle-macos.sh
@@ -54,8 +55,8 @@ default provider is OpenCode Go:
 export OPENCODE_API_KEY=...
 ```
 
-An app opened from Finder doesn't see your shell environment, so start it from
-a terminal:
+On macOS, an app opened from Finder doesn't see your shell environment, so
+start it from a terminal:
 
 ```sh
 target/Jig.app/Contents/MacOS/Jig path/to/project

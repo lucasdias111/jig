@@ -29,6 +29,10 @@ pub(super) struct Tab {
     pub(super) cursor: Entity<CursorPosition>,
     /// The file open in its language server, if it has one.
     pub(super) lsp: Option<super::lsp::TabLsp>,
+    /// Snippets just offered in the completion list.
+    pub(super) offers: super::snippets::Offers,
+    /// The snippet being filled in, if any.
+    pub(super) snippet: Option<super::snippets::Session>,
     _events: Subscription,
 }
 
@@ -88,6 +92,7 @@ impl Workspace {
                 .default_value(document.saved_text.clone())
         });
         super::definitions::install(&state, cx);
+        let offers = super::completions::install(&state, cx);
         let events = cx.subscribe_in(
             &state,
             window,
@@ -97,6 +102,7 @@ impl Workspace {
                 {
                     this.refresh_dirty(ix, window, cx);
                     this.lsp_changed(ix, cx);
+                    this.snippet_changed(ix, cx);
                     if ix == this.active {
                         this.on_buffer_changed(cx);
                     }
@@ -116,6 +122,8 @@ impl Workspace {
             indentation,
             cursor,
             lsp,
+            offers,
+            snippet: None,
             _events: events,
         }
     }

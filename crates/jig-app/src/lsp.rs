@@ -189,9 +189,26 @@ fn jdtls_data(root: &Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     root.hash(&mut hasher);
-    let home = std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
-    home.join("Library/Caches/Jig/jdtls")
+    cache_dir()
+        .join("Jig/jdtls")
         .join(format!("{:016x}", hasher.finish()))
+}
+
+/// Where this OS keeps per-user caches, or the temp folder if that's unknown.
+fn cache_dir() -> PathBuf {
+    let var = |name| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let dir = if cfg!(target_os = "macos") {
+        var("HOME").map(|home| home.join("Library/Caches"))
+    } else if cfg!(windows) {
+        var("LOCALAPPDATA")
+    } else {
+        var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|home| home.join(".cache")))
+    };
+    dir.unwrap_or_else(std::env::temp_dir)
 }
 
 fn find_program(name: &str, path: &OsString) -> Option<PathBuf> {
@@ -200,10 +217,11 @@ fn find_program(name: &str, path: &OsString) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// The `PATH` servers are found on and run with. An app opened from the
-/// Finder gets only the system's minimal one, so ask the login shell, as a
-/// terminal would have it, and add where installers usually put things.
-fn search_path() -> &'static OsString {
+/// The `PATH` servers and run configurations are found on and run with. An
+/// app opened from the Finder gets only the system's minimal one, so ask the
+/// login shell, as a terminal would have it, and add where installers
+/// usually put things.
+pub(crate) fn search_path() -> &'static OsString {
     static PATH: OnceLock<OsString> = OnceLock::new();
     PATH.get_or_init(|| {
         let mut dirs: Vec<PathBuf> = Vec::new();

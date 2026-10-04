@@ -1,0 +1,429 @@
+# Jig's built-in snippets. Your own go in ~/.config/jig/snippets.toml, in
+# the same form; one with the same name (and postfix or not) replaces a
+# built-in for the languages it lists.
+#
+# Bodies use the LSP snippet syntax: $1, $2… are the places Tab visits, with
+# ${1:default} text, and $0 is where the cursor ends. A tab is one level of
+# the file's indentation. Postfix snippets go after an expression and a dot
+# (`users.var`); in them $EXPR is the expression and $NAME a name for it.
+
+# Rust
+
+[[snippets]]
+name = "for"
+description = "for item in items"
+languages = ["rust"]
+body = "for ${1:item} in ${2:items} {\n\t$0\n}"
+
+[[snippets]]
+name = "fori"
+description = "for i in 0..n"
+languages = ["rust"]
+body = "for ${1:i} in 0..${2:n} {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+description = "if condition"
+languages = ["rust"]
+body = "if ${1:condition} {\n\t$0\n}"
+
+[[snippets]]
+name = "match"
+description = "match value"
+languages = ["rust"]
+body = "match ${1:value} {\n\t${2:_} => $0,\n}"
+
+[[snippets]]
+name = "fn"
+description = "fn name()"
+languages = ["rust"]
+body = "fn ${1:name}($2) {\n\t$0\n}"
+
+[[snippets]]
+name = "test"
+description = "#[test] fn"
+languages = ["rust"]
+body = "#[test]\nfn ${1:name}() {\n\t$0\n}"
+
+[[snippets]]
+name = "var"
+postfix = true
+description = "let name = expr;"
+languages = ["rust"]
+body = "let ${1:$NAME} = $EXPR;$0"
+
+[[snippets]]
+name = "for"
+postfix = true
+description = "for item in expr"
+languages = ["rust"]
+body = "for ${1:item} in $EXPR {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+postfix = true
+description = "if expr"
+languages = ["rust"]
+body = "if $EXPR {\n\t$0\n}"
+
+[[snippets]]
+name = "not"
+postfix = true
+description = "!expr"
+languages = ["rust"]
+body = "!$EXPR"
+
+[[snippets]]
+name = "match"
+postfix = true
+description = "match expr"
+languages = ["rust"]
+body = "match $EXPR {\n\t${1:_} => $0,\n}"
+
+[[snippets]]
+name = "return"
+postfix = true
+description = "return expr;"
+languages = ["rust"]
+body = "return $EXPR;"
+
+[[snippets]]
+name = "print"
+postfix = true
+description = "println!(\"{:?}\", expr);"
+languages = ["rust"]
+body = "println!(\"{:?}\", $EXPR);"
+
+# TypeScript and JavaScript
+
+[[snippets]]
+name = "for"
+description = "for (const item of items)"
+languages = ["typescript", "tsx", "javascript"]
+body = "for (const ${1:item} of ${2:items}) {\n\t$0\n}"
+
+[[snippets]]
+name = "foreach"
+description = "items.forEach((item) => …)"
+languages = ["typescript", "tsx", "javascript"]
+body = "${1:items}.forEach((${2:item}) => {\n\t$0\n});"
+
+[[snippets]]
+name = "fori"
+description = "for (let i = 0; i < n; i++)"
+languages = ["typescript", "tsx", "javascript"]
+body = "for (let ${1:i} = 0; $1 < ${2:n}; $1++) {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+description = "if (condition)"
+languages = ["typescript", "tsx", "javascript"]
+body = "if (${1:condition}) {\n\t$0\n}"
+
+[[snippets]]
+name = "fn"
+description = "function name()"
+languages = ["typescript", "tsx", "javascript"]
+body = "function ${1:name}($2) {\n\t$0\n}"
+
+[[snippets]]
+name = "try"
+description = "try … catch"
+languages = ["typescript", "tsx", "javascript"]
+body = "try {\n\t$1\n} catch (${2:error}) {\n\t$0\n}"
+
+[[snippets]]
+name = "log"
+description = "console.log()"
+languages = ["typescript", "tsx", "javascript"]
+body = "console.log($1);$0"
+
+[[snippets]]
+name = "var"
+postfix = true
+description = "const name = expr;"
+languages = ["typescript", "tsx", "javascript"]
+body = "const ${1:$NAME} = $EXPR;$0"
+
+[[snippets]]
+name = "let"
+postfix = true
+description = "let name = expr;"
+languages = ["typescript", "tsx", "javascript"]
+body = "let ${1:$NAME} = $EXPR;$0"
+
+[[snippets]]
+name = "for"
+postfix = true
+description = "for (const item of expr)"
+languages = ["typescript", "tsx", "javascript"]
+body = "for (const ${1:item} of $EXPR) {\n\t$0\n}"
+
+[[snippets]]
+name = "foreach"
+postfix = true
+description = "expr.forEach((item) => …)"
+languages = ["typescript", "tsx", "javascript"]
+body = "$EXPR.forEach((${1:item}) => {\n\t$0\n});"
+
+[[snippets]]
+name = "if"
+postfix = true
+description = "if (expr)"
+languages = ["typescript", "tsx", "javascript"]
+body = "if ($EXPR) {\n\t$0\n}"
+
+[[snippets]]
+name = "not"
+postfix = true
+description = "!expr"
+languages = ["typescript", "tsx", "javascript"]
+body = "!$EXPR"
+
+[[snippets]]
+name = "return"
+postfix = true
+description = "return expr;"
+languages = ["typescript", "tsx", "javascript"]
+body = "return $EXPR;"
+
+[[snippets]]
+name = "log"
+postfix = true
+description = "console.log(expr);"
+languages = ["typescript", "tsx", "javascript"]
+body = "console.log($EXPR);"
+
+# Python
+
+[[snippets]]
+name = "for"
+description = "for item in items:"
+languages = ["python"]
+body = "for ${1:item} in ${2:items}:\n\t$0"
+
+[[snippets]]
+name = "fori"
+description = "for i in range(n):"
+languages = ["python"]
+body = "for ${1:i} in range(${2:n}):\n\t$0"
+
+[[snippets]]
+name = "if"
+description = "if condition:"
+languages = ["python"]
+body = "if ${1:condition}:\n\t$0"
+
+[[snippets]]
+name = "def"
+description = "def name():"
+languages = ["python"]
+body = "def ${1:name}($2):\n\t${0:pass}"
+
+[[snippets]]
+name = "try"
+description = "try … except"
+languages = ["python"]
+body = "try:\n\t${1:pass}\nexcept ${2:Exception} as ${3:error}:\n\t${0:raise}"
+
+[[snippets]]
+name = "main"
+description = "if __name__ == \"__main__\":"
+languages = ["python"]
+body = "if __name__ == \"__main__\":\n\t${0:main()}"
+
+[[snippets]]
+name = "var"
+postfix = true
+description = "name = expr"
+languages = ["python"]
+body = "${1:$NAME} = $EXPR$0"
+
+[[snippets]]
+name = "for"
+postfix = true
+description = "for item in expr:"
+languages = ["python"]
+body = "for ${1:item} in $EXPR:\n\t$0"
+
+[[snippets]]
+name = "if"
+postfix = true
+description = "if expr:"
+languages = ["python"]
+body = "if $EXPR:\n\t$0"
+
+[[snippets]]
+name = "not"
+postfix = true
+description = "not expr"
+languages = ["python"]
+body = "not $EXPR"
+
+[[snippets]]
+name = "return"
+postfix = true
+description = "return expr"
+languages = ["python"]
+body = "return $EXPR"
+
+[[snippets]]
+name = "print"
+postfix = true
+description = "print(expr)"
+languages = ["python"]
+body = "print($EXPR)"
+
+# Go
+
+[[snippets]]
+name = "for"
+description = "for _, item := range items"
+languages = ["go"]
+body = "for _, ${1:item} := range ${2:items} {\n\t$0\n}"
+
+[[snippets]]
+name = "fori"
+description = "for i := 0; i < n; i++"
+languages = ["go"]
+body = "for ${1:i} := 0; $1 < ${2:n}; $1++ {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+description = "if condition"
+languages = ["go"]
+body = "if ${1:condition} {\n\t$0\n}"
+
+[[snippets]]
+name = "iferr"
+description = "if err != nil"
+languages = ["go"]
+body = "if err != nil {\n\treturn ${1:err}\n}$0"
+
+[[snippets]]
+name = "func"
+description = "func name()"
+languages = ["go"]
+body = "func ${1:name}($2) {\n\t$0\n}"
+
+[[snippets]]
+name = "var"
+postfix = true
+description = "name := expr"
+languages = ["go"]
+body = "${1:$NAME} := $EXPR$0"
+
+[[snippets]]
+name = "for"
+postfix = true
+description = "for _, item := range expr"
+languages = ["go"]
+body = "for _, ${1:item} := range $EXPR {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+postfix = true
+description = "if expr"
+languages = ["go"]
+body = "if $EXPR {\n\t$0\n}"
+
+[[snippets]]
+name = "not"
+postfix = true
+description = "!expr"
+languages = ["go"]
+body = "!$EXPR"
+
+[[snippets]]
+name = "return"
+postfix = true
+description = "return expr"
+languages = ["go"]
+body = "return $EXPR"
+
+[[snippets]]
+name = "print"
+postfix = true
+description = "fmt.Println(expr)"
+languages = ["go"]
+body = "fmt.Println($EXPR)"
+
+# Java
+
+[[snippets]]
+name = "for"
+description = "for (var item : items)"
+languages = ["java"]
+body = "for (${1:var} ${2:item} : ${3:items}) {\n\t$0\n}"
+
+[[snippets]]
+name = "fori"
+description = "for (int i = 0; i < n; i++)"
+languages = ["java"]
+body = "for (int ${1:i} = 0; $1 < ${2:n}; $1++) {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+description = "if (condition)"
+languages = ["java"]
+body = "if (${1:condition}) {\n\t$0\n}"
+
+[[snippets]]
+name = "sout"
+description = "System.out.println()"
+languages = ["java"]
+body = "System.out.println($1);$0"
+
+[[snippets]]
+name = "main"
+description = "public static void main"
+languages = ["java"]
+body = "public static void main(String[] args) {\n\t$0\n}"
+
+[[snippets]]
+name = "try"
+description = "try … catch"
+languages = ["java"]
+body = "try {\n\t$1\n} catch (${2:Exception} ${3:e}) {\n\t$0\n}"
+
+[[snippets]]
+name = "var"
+postfix = true
+description = "var name = expr;"
+languages = ["java"]
+body = "var ${1:$NAME} = $EXPR;$0"
+
+[[snippets]]
+name = "for"
+postfix = true
+description = "for (var item : expr)"
+languages = ["java"]
+body = "for (var ${1:item} : $EXPR) {\n\t$0\n}"
+
+[[snippets]]
+name = "if"
+postfix = true
+description = "if (expr)"
+languages = ["java"]
+body = "if ($EXPR) {\n\t$0\n}"
+
+[[snippets]]
+name = "not"
+postfix = true
+description = "!expr"
+languages = ["java"]
+body = "!$EXPR"
+
+[[snippets]]
+name = "return"
+postfix = true
+description = "return expr;"
+languages = ["java"]
+body = "return $EXPR;"
+
+[[snippets]]
+name = "sout"
+postfix = true
+description = "System.out.println(expr);"
+languages = ["java"]
+body = "System.out.println($EXPR);"
