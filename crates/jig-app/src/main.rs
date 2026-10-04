@@ -63,41 +63,7 @@ fn main() {
         })
         .detach();
 
-        // A transparent titlebar: the workspace draws its own, so only the
-        // traffic lights and the code remain. On macOS the window is
-        // translucent so the sidebar picks up the desktop's vibrancy, and
-        // the editor as much as the translucency setting lets it.
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1080.), px(760.)), cx)),
-            window_min_size: Some(size(px(480.), px(320.))),
-            titlebar: Some(TitlebarOptions {
-                // Centred in the workspace's taller title bar.
-                traffic_light_position: Some(point(px(16.), px(16.))),
-                ..TitleBar::title_bar_options()
-            }),
-            window_background: if cfg!(target_os = "macos") {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Opaque
-            },
-            ..TitleBar::window_options()
-        };
-        let window = cx
-            .open_window(options, |window, cx| {
-                let workspace = cx.new(|cx| {
-                    let mut workspace = Workspace::new(path, window, cx);
-                    for path in &more {
-                        workspace.open_file(path, window, cx);
-                    }
-                    workspace
-                });
-                // The root would paint the theme's background over the
-                // whole window, hiding the blur behind the sidebar and editor.
-                cx.new(|cx| {
-                    gpui_kit::base::Root::new(workspace, window, cx).bg(transparent_black())
-                })
-            })
-            .expect("failed to open window");
+        let window = open_window(path, &more, cx).expect("failed to open window");
         cx.activate(true);
         if let Some(error) = settings_error {
             window
@@ -115,4 +81,44 @@ fn main() {
                 .ok();
         }
     });
+}
+
+/// Open a Jig window on `path` (a file, a folder or nothing), with `more`
+/// files in tabs of their own.
+pub fn open_window(
+    path: Option<PathBuf>,
+    more: &[PathBuf],
+    cx: &mut App,
+) -> Result<WindowHandle<gpui_kit::base::Root>> {
+    // A transparent titlebar: the workspace draws its own, so only the
+    // traffic lights and the code remain. On macOS the window is
+    // translucent so the sidebar picks up the desktop's vibrancy, and
+    // the editor as much as the translucency setting lets it.
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(1080.), px(760.)), cx)),
+        window_min_size: Some(size(px(480.), px(320.))),
+        titlebar: Some(TitlebarOptions {
+            // Centred in the workspace's taller title bar.
+            traffic_light_position: Some(point(px(16.), px(16.))),
+            ..TitleBar::title_bar_options()
+        }),
+        window_background: if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Opaque
+        },
+        ..TitleBar::window_options()
+    };
+    cx.open_window(options, |window, cx| {
+        let workspace = cx.new(|cx| {
+            let mut workspace = Workspace::new(path, window, cx);
+            for path in more {
+                workspace.open_file(path, window, cx);
+            }
+            workspace
+        });
+        // The root would paint the theme's background over the
+        // whole window, hiding the blur behind the sidebar and editor.
+        cx.new(|cx| gpui_kit::base::Root::new(workspace, window, cx).bg(transparent_black()))
+    })
 }

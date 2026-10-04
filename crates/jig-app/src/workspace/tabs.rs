@@ -197,7 +197,7 @@ impl Workspace {
 
     /// Settle anything floating over the current tab before it goes out of
     /// view: a change under review is kept, a running command is cancelled.
-    fn leave_tab(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn leave_tab(&mut self, cx: &mut Context<Self>) {
         self.palette = None;
         self.accept_preview(cx);
         if self.run.take().is_some() {

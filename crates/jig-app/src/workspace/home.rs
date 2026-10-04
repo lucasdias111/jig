@@ -100,7 +100,7 @@ impl Workspace {
 
     fn open_recent(&mut self, project: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if project.is_dir() {
-            self.open_folder(&project, window, cx);
+            self.open_project(&project, window, cx);
         } else {
             crate::recent::update(cx, |recent| recent.remove(&project));
             self.show_error(
