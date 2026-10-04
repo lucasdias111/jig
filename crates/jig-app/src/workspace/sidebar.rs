@@ -6,7 +6,6 @@ use std::path::Path;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jig_editor::EditorHandle;
 
 use super::tabs::canonical;
 use super::{
@@ -17,6 +16,10 @@ use crate::file_tree::{FileTree, FileTreeEvent};
 impl Workspace {
     /// Show `dir` in the sidebar, opened, as the project.
     pub(super) fn open_folder(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() == 1 && self.tab().is_blank(cx) {
+            // Nothing worth keeping on screen: show the project's page.
+            self.home = true;
+        }
         self.set_tree_root(dir, window, cx);
         self.sidebar_open = true;
         match self.document().path.clone() {
@@ -50,10 +53,11 @@ impl Workspace {
     }
 
     fn set_tree_root(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        crate::recent::update(cx, |recent| recent.push(&canonical(root)));
         let view = cx.new(|cx| FileTree::new(root, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             FileTreeEvent::Open(path) => this.open_file(path, window, cx),
-            FileTreeEvent::Dismissed => this.editor().focus(window, cx),
+            FileTreeEvent::Dismissed => this.focus_main(window, cx),
         });
         self.tree = Some(ProjectTree {
             view,
@@ -73,7 +77,7 @@ impl Workspace {
             .is_some_and(|tree| tree.view.read(cx).is_focused(window))
     }
 
-    fn focus_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn focus_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tree) = &self.tree {
             tree.view.update(cx, |tree, cx| tree.focus(window, cx));
         }
@@ -89,7 +93,7 @@ impl Workspace {
             return;
         }
         if self.sidebar_open && self.tree_focused(window, cx) {
-            self.editor().focus(window, cx);
+            self.focus_main(window, cx);
         }
         self.sidebar_open = !self.sidebar_open;
         cx.notify();
@@ -107,7 +111,7 @@ impl Workspace {
             return;
         }
         if self.tree_focused(window, cx) {
-            self.editor().focus(window, cx);
+            self.focus_main(window, cx);
         } else {
             self.sidebar_open = true;
             self.focus_tree(window, cx);

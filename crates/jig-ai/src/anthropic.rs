@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
 use crate::config::AuthStyle;
-use crate::{Provider, TOOL_LIMIT_REACHED, ToolHost, http};
+use crate::{Provider, http};
 
 pub struct AnthropicProvider {
     pub base_url: String,
@@ -13,6 +13,10 @@ pub struct AnthropicProvider {
     pub model: String,
     pub max_tokens: u32,
     pub auth: AuthStyle,
+    /// Let the model reason before it answers. Off by default: reasoning
+    /// models think for 10-60 s even on a one-line edit, and Jig's commands
+    /// are small enough not to need it.
+    pub thinking: bool,
     /// Sent with every request, e.g. OpenCode Go's session header.
     pub extra_headers: Vec<(String, String)>,
     agent: ureq::Agent,
@@ -32,6 +36,7 @@ impl AnthropicProvider {
             model: model.to_string(),
             max_tokens,
             auth,
+            thinking: false,
             extra_headers: Vec::new(),
             agent: http::agent(),
         }
@@ -42,23 +47,29 @@ impl AnthropicProvider {
         self
     }
 
-    fn send(
-        &self,
-        system: &str,
-        messages: &[Value],
-        tools: Option<(&Value, bool)>,
-    ) -> Result<Value> {
+    pub fn with_thinking(mut self, thinking: bool) -> Self {
+        self.thinking = thinking;
+        self
+    }
+
+    fn send(&self, system: &str, messages: &[Value]) -> Result<Value> {
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
             "system": system,
             "messages": messages,
         });
-        if let Some((tools, allowed)) = tools {
-            body["tools"] = tools.clone();
-            if !allowed {
-                body["tool_choice"] = json!({ "type": "none" });
-            }
+        body["tools"] = json!([{
+            "name": crate::response::REPLY_TOOL,
+            "description": "Apply the edit to the marked region.",
+            "input_schema": crate::response::reply_schema(),
+        }]);
+        if self.thinking {
+            // A forced tool call isn't allowed while thinking.
+            body["tool_choice"] = json!({ "type": "auto" });
+        } else {
+            body["thinking"] = json!({ "type": "disabled" });
+            body["tool_choice"] = json!({ "type": "tool", "name": crate::response::REPLY_TOOL });
         }
         let auth = match self.auth {
             AuthStyle::ApiKey => ("x-api-key", self.api_key.clone()),
@@ -80,64 +91,20 @@ impl AnthropicProvider {
 }
 
 impl Provider for AnthropicProvider {
+    /// The reply as JSON text: the input of the `apply_edit` call, or the
+    /// model's text if it answered without one.
     fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let response = self.send(system, &[json!({ "role": "user", "content": user })], None)?;
-        text_of(&response)
-    }
-
-    fn complete_with_tools(
-        &self,
-        system: &str,
-        user: &str,
-        tools: &dyn ToolHost,
-        max_calls: usize,
-        on_step: &dyn Fn(String),
-    ) -> Result<String> {
-        let specs: Value = tools
-            .specs()
+        let response = self.send(system, &[json!({ "role": "user", "content": user })])?;
+        let call = response["content"]
+            .as_array()
             .into_iter()
-            .map(|spec| {
-                json!({
-                    "name": spec.name,
-                    "description": spec.description,
-                    "input_schema": spec.input_schema,
-                })
-            })
-            .collect();
-        let mut messages = vec![json!({ "role": "user", "content": user })];
-        let mut calls = 0;
-        loop {
-            let allowed = calls < max_calls;
-            let response = self.send(system, &messages, Some((&specs, allowed)))?;
-            let content = response["content"].as_array().cloned().unwrap_or_default();
-            let uses: Vec<&Value> = content
-                .iter()
-                .filter(|block| block["type"] == "tool_use")
-                .collect();
-            if uses.is_empty() {
-                return text_of(&response);
-            }
-            let results: Vec<Value> = uses
-                .iter()
-                .map(|block| {
-                    let (name, input) =
-                        (block["name"].as_str().unwrap_or_default(), &block["input"]);
-                    let output = if calls < max_calls {
-                        calls += 1;
-                        on_step(tools.describe(name, input));
-                        tools.call(name, input)
-                    } else {
-                        TOOL_LIMIT_REACHED.to_string()
-                    };
-                    json!({ "type": "tool_result", "tool_use_id": block["id"], "content": output })
-                })
-                .collect();
-            messages.push(json!({ "role": "assistant", "content": content }));
-            messages.push(json!({ "role": "user", "content": results }));
-            if !allowed {
-                // The model ignored tool_choice: none. Don't loop forever.
-                anyhow::bail!("The model kept calling tools past the limit.");
-            }
+            .flatten()
+            .find(|block| {
+                block["type"] == "tool_use" && block["name"] == crate::response::REPLY_TOOL
+            });
+        match call {
+            Some(call) => Ok(call["input"].to_string()),
+            None => text_of(&response),
         }
     }
 }

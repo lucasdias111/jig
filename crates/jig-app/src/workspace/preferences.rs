@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use gpui_kit::component::input::EditorState;
 use gpui_kit::*;
 use jig_commands::Preset;
+use jig_editor::EditorHandle as _;
 
 use super::{EditModelConfig, Workspace, commands};
 use crate::settings::{self, EditorSettings, Settings};
@@ -39,6 +40,16 @@ impl Workspace {
         if new.editor != old.editor {
             for tab in &self.tabs {
                 apply_editor(tab.editor.state(), &new.editor, window, cx);
+            }
+        }
+        if new.languages != old.languages {
+            for tab in &self.tabs {
+                let language = tab.document.language(&new.languages);
+                if tab.editor.language(cx) != language {
+                    tab.editor
+                        .state()
+                        .update(cx, |state, cx| state.set_highlighter(language, cx));
+                }
             }
         }
         if new.commands != old.commands {

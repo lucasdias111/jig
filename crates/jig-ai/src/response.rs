@@ -8,6 +8,31 @@ use crate::prompt::{CURSOR, SELECTION_END, SELECTION_START};
 
 pub const MAX_MESSAGE_WORDS: usize = 20;
 
+/// The reply as a tool the model must call, for providers that can force
+/// one. A forced tool call always comes back as structured input, so the
+/// model can't drift into prose the way it sometimes does with a big file
+/// or an instruction that doesn't fit the selection.
+pub const REPLY_TOOL: &str = "apply_edit";
+
+/// JSON Schema of [`REPLY_TOOL`]'s input: the same object the prompt asks
+/// for in text.
+pub fn reply_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "replace": {
+                "type": "string",
+                "description": "The complete new text for the marked region, or the text to insert at the cursor."
+            },
+            "message": {
+                "type": "string",
+                "description": "One short plain sentence, at most 20 words."
+            }
+        },
+        "required": ["replace", "message"]
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reply {
     /// The new text for the target range.

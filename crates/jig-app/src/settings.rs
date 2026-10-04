@@ -1,6 +1,7 @@
 //! `~/.config/jig/settings.toml`: the choices made in the Settings window.
 //! Held in a global while Jig runs; every change is written back at once.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -17,7 +18,9 @@ pub struct Settings {
     pub appearance: Appearance,
     pub editor: EditorSettings,
     pub commands: CommandSettings,
+    pub languages: LanguageSettings,
     pub ai: AiSettings,
+    pub colors: ColorSettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,9 +122,65 @@ impl CommandSettings {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct LanguageSettings {
+    /// Languages left unhighlighted, by name.
+    pub off: Vec<String>,
+    /// File extensions per language, as typed, replacing the built-in ones:
+    /// `typescript = "ts, mts"`.
+    pub extensions: BTreeMap<String, String>,
+}
+
+impl LanguageSettings {
+    pub fn is_off(&self, name: &str) -> bool {
+        self.off.iter().any(|off| off == name)
+    }
+
+    pub fn set_off(&mut self, name: &str, off: bool) {
+        self.off.retain(|other| other != name);
+        if off {
+            self.off.push(name.to_string());
+        }
+    }
+
+    /// Set a language's extensions; `None`, or the built-in ones, clears the
+    /// override so a later change to the built-ins applies.
+    pub fn set_extensions(&mut self, name: &str, text: Option<String>, built_in: &str) {
+        match text.filter(|text| text != built_in) {
+            Some(text) => self.extensions.insert(name.to_string(), text),
+            None => self.extensions.remove(name),
+        };
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiSettings {
     /// The provider commands use. `None` keeps `default` from config.toml.
     pub provider: Option<String>,
+}
+
+/// Colors changed in the theme editor, over Ember's own, per variant:
+/// `[colors.dark]` with `"syntax.keyword" = "#FF6188"`. Keys are listed in
+/// `theme::EDITABLE`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorSettings {
+    pub light: BTreeMap<String, String>,
+    pub dark: BTreeMap<String, String>,
+}
+
+impl ColorSettings {
+    pub fn variant(&self, dark: bool) -> &BTreeMap<String, String> {
+        if dark { &self.dark } else { &self.light }
+    }
+
+    pub fn variant_mut(&mut self, dark: bool) -> &mut BTreeMap<String, String> {
+        if dark {
+            &mut self.dark
+        } else {
+            &mut self.light
+        }
+    }
 }
 
 impl Settings {
@@ -230,6 +289,14 @@ mod tests {
         settings.editor.soft_wrap = false;
         settings.commands.set_hidden("Explain", true);
         settings.ai.provider = Some("claude".into());
+        settings.languages.set_off("java", true);
+        settings
+            .languages
+            .set_extensions("typescript", Some("ts".into()), "ts, mts, cts");
+        settings
+            .colors
+            .dark
+            .insert("syntax.keyword".into(), "#FF6188".into());
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
 
@@ -249,6 +316,18 @@ mod tests {
         assert_eq!(commands.hidden.len(), 1);
         commands.set_hidden("add docs", false);
         assert!(!commands.is_hidden("Add docs"));
+    }
+
+    #[test]
+    fn built_in_extensions_clear_the_override() {
+        let mut languages = LanguageSettings::default();
+        languages.set_extensions("go", Some("go, gox".into()), "go");
+        assert_eq!(languages.extensions["go"], "go, gox");
+        languages.set_extensions("go", Some("go".into()), "go");
+        assert!(languages.extensions.is_empty());
+        languages.set_off("go", true);
+        languages.set_off("go", true);
+        assert_eq!(languages.off, ["go"]);
     }
 
     #[test]

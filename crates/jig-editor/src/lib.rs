@@ -31,6 +31,8 @@ pub trait EditorHandle {
         cx: &mut App,
     ) -> Range<usize>;
     fn set_readonly(&self, readonly: bool, cx: &mut App);
+    /// Select `range` (UTF-8 byte offsets) and scroll it into view.
+    fn select(&self, range: Range<usize>, cx: &mut App);
     fn highlight(&self, ranges: Vec<(Range<usize>, Hsla)>, cx: &mut App);
     fn clear_highlights(&self, cx: &mut App);
     fn focus(&self, window: &mut Window, cx: &mut App);
@@ -107,6 +109,11 @@ impl EditorHandle for KitEditor {
     fn set_readonly(&self, readonly: bool, cx: &mut App) {
         self.state
             .update(cx, |state, cx| state.set_readonly(readonly, cx));
+    }
+
+    fn select(&self, range: Range<usize>, cx: &mut App) {
+        self.state
+            .update(cx, |state, cx| state.set_selected_range(range, cx));
     }
 
     fn highlight(&self, ranges: Vec<(Range<usize>, Hsla)>, cx: &mut App) {

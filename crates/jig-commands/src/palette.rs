@@ -15,15 +15,10 @@ use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::ToggleExplore;
 use crate::presets::{self, CommentMode, Invocation, Preset};
 
 const MAX_ROWS: usize = 8;
 const CONTEXT: &str = "JigPalette";
-
-pub fn key_bindings() -> Vec<KeyBinding> {
-    vec![KeyBinding::new("secondary-e", ToggleExplore, Some(CONTEXT))]
-}
 
 pub enum PaletteEvent {
     Run(Invocation),
@@ -56,8 +51,13 @@ pub struct CommandPalette {
     selected: usize,
     has_selection: bool,
     note: Option<NoteStep>,
-    /// Cmd+E: let this run explore the project.
-    explore: bool,
+    /// What a quick command sees besides the instruction, e.g. "AGENTS.md".
+    context: Vec<String>,
+    /// Tab: hand this run to the coding agent.
+    agent: bool,
+    /// The text after a colon that follows a command's name, e.g. "terse"
+    /// in "docs: terse". `None` without a colon or a matching command.
+    inline_note: Option<String>,
     _subscription: Subscription,
 }
 
@@ -79,24 +79,23 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(Self::list_placeholder(has_selection))
+            InputState::new(window, cx).placeholder(Self::list_placeholder(has_selection, false))
         });
-        let subscription =
-            cx.subscribe_in(
-                &input,
-                window,
-                |this, _, event: &InputEvent, _, cx| match event {
-                    InputEvent::Change if this.note.is_none() => this.refilter(cx),
-                    InputEvent::Change => {
-                        if let Some(note) = this.note.as_mut() {
-                            note.missing = false;
-                        }
-                        cx.notify();
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change if this.note.is_none() => this.on_query_changed(window, cx),
+                InputEvent::Change => {
+                    if let Some(note) = this.note.as_mut() {
+                        note.missing = false;
                     }
-                    InputEvent::Blur => cx.emit(PaletteEvent::Dismissed),
-                    _ => {}
-                },
-            );
+                    cx.notify();
+                }
+                InputEvent::Blur => cx.emit(PaletteEvent::Dismissed),
+                _ => {}
+            },
+        );
         input.update(cx, |input, cx| input.focus(window, cx));
         let mut this = Self {
             presets,
@@ -106,36 +105,102 @@ impl CommandPalette {
             selected: 0,
             has_selection,
             note: None,
-            explore: false,
+            context: Vec::new(),
+            agent: false,
+            inline_note: None,
             _subscription: subscription,
         };
         this.refilter(cx);
         this
     }
 
-    fn list_placeholder(has_selection: bool) -> &'static str {
-        if has_selection {
-            "Command for selection…"
-        } else {
-            "Command…"
+    fn list_placeholder(has_selection: bool, agent: bool) -> &'static str {
+        match (agent, has_selection) {
+            (false, true) => "Command for selection…",
+            (false, false) => "Command…",
+            (true, true) => "Ask the agent about the selection…",
+            (true, false) => "Ask the agent…",
         }
+    }
+
+    /// The highlighted command is set to run on the agent, whatever the
+    /// switch says.
+    fn agent_by_command(&self) -> bool {
+        self.note
+            .as_ref()
+            .map(|note| note.preset)
+            .or_else(|| match self.rows.get(self.selected) {
+                Some(Row::Preset(preset)) => Some(*preset),
+                _ => None,
+            })
+            .is_some_and(|preset| self.presets[preset].agent)
+    }
+
+    /// Whether Enter would hand the run to the agent.
+    fn agent_lane(&self) -> bool {
+        self.agent || self.agent_by_command()
     }
 
     pub fn query(&self, cx: &App) -> String {
         self.input.read(cx).value().to_string()
     }
 
+    /// The project files a quick command is sent along with the file, named
+    /// in the footer.
+    pub fn with_context(mut self, context: Vec<String>) -> Self {
+        self.context = context;
+        self
+    }
+
+    fn on_query_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.query(cx);
+        // ":" right after choosing a command with the arrows completes its
+        // name, so the note that follows goes to that command.
+        if let Some(before) = query.strip_suffix(':')
+            && before == self.filtered_query
+            && !before.contains(':')
+            && let Some(Row::Preset(preset)) = self.rows.get(self.selected)
+        {
+            let completed = format!("{}: ", self.presets[*preset].name);
+            self.input
+                .update(cx, |input, cx| input.set_value(completed, window, cx));
+        }
+        self.refilter(cx);
+    }
+
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        self.rows = presets::filter(&self.presets, &query)
-            .into_iter()
-            .map(Row::Preset)
-            .collect();
+        // "docs: terse" is the Add docs command with the note "terse", as
+        // long as something matches "docs".
+        let inline = query.split_once(':').and_then(|(name, note)| {
+            let matches = presets::filter(&self.presets, name);
+            (!name.trim().is_empty() && !matches.is_empty())
+                .then(|| (matches, note.trim().to_string()))
+        });
+        let (matches, named) = match inline {
+            Some((matches, note)) => {
+                self.inline_note = Some(note);
+                (matches, true)
+            }
+            None => {
+                self.inline_note = None;
+                let matches = presets::filter(&self.presets, &query);
+                let named = matches
+                    .first()
+                    .is_some_and(|&first| presets::names(&self.presets[first], &query));
+                (matches, named)
+            }
+        };
+        // The typed text as a prompt first, then the commands it matches.
+        // Enter takes the command only when the text clearly names it.
+        self.rows = Vec::new();
         if !query.trim().is_empty() {
             self.rows.push(Row::Custom(query.trim().to_string()));
         }
+        let has_prompt = !self.rows.is_empty();
+        self.rows.extend(matches.into_iter().map(Row::Preset));
         self.filtered_query = query;
-        self.selected = 0;
+        self.selected = if named && has_prompt { 1 } else { 0 };
         cx.notify();
     }
 
@@ -150,15 +215,22 @@ impl CommandPalette {
     /// Run the row at `index`, or open its note step if the command asks
     /// for one.
     fn choose(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let note = self.inline_note.clone().unwrap_or_default();
         match self.rows.get(index) {
-            Some(Row::Preset(preset)) if self.presets[*preset].comment != CommentMode::None => {
+            Some(Row::Preset(preset))
+                if self.presets[*preset].comment == CommentMode::Required && note.is_empty()
+                    || self.presets[*preset].comment == CommentMode::Optional
+                        && self.inline_note.is_none() =>
+            {
                 self.start_note(*preset, window, cx)
             }
             Some(Row::Preset(preset)) => cx.emit(PaletteEvent::Run(
-                Invocation::preset(&self.presets[*preset]).exploring(self.explore),
+                Invocation::preset(&self.presets[*preset])
+                    .with_comment(&note)
+                    .on_agent(self.agent),
             )),
             Some(Row::Custom(text)) => cx.emit(PaletteEvent::Run(
-                Invocation::custom(text, self.has_selection).exploring(self.explore),
+                Invocation::custom(text, self.has_selection).on_agent(self.agent),
             )),
             None => {}
         }
@@ -186,7 +258,7 @@ impl CommandPalette {
 
     fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(note) = self.note.take() else { return };
-        let placeholder = Self::list_placeholder(self.has_selection);
+        let placeholder = Self::list_placeholder(self.has_selection, self.agent);
         self.input.update(cx, |input, cx| {
             input.set_value(note.query, window, cx);
             input.set_placeholder(placeholder, window, cx);
@@ -216,7 +288,7 @@ impl CommandPalette {
         cx.emit(PaletteEvent::Run(
             Invocation::preset(preset)
                 .with_comment(&text)
-                .exploring(self.explore),
+                .on_agent(self.agent),
         ));
     }
 
@@ -235,17 +307,10 @@ impl CommandPalette {
         }
     }
 
-    /// Tab adds a note to the highlighted command, whatever its setting.
+    /// Tab switches between the quick and the agent lane.
     fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        if self.note.is_none() {
-            self.ensure_filtered(cx);
-        }
-        if self.note.is_none()
-            && let Some(Row::Preset(preset)) = self.rows.get(self.selected)
-        {
-            self.start_note(*preset, window, cx);
-        }
+        self.set_agent(!self.agent, window, cx);
     }
 
     /// Backspace in an empty note goes back to the list.
@@ -256,9 +321,81 @@ impl CommandPalette {
         }
     }
 
-    fn toggle_explore(&mut self, _: &ToggleExplore, _: &mut Window, cx: &mut Context<Self>) {
-        self.explore = !self.explore;
+    fn set_agent(&mut self, agent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent = agent;
+        if self.note.is_none() {
+            let placeholder = Self::list_placeholder(self.has_selection, agent);
+            self.input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
         cx.notify();
+    }
+
+    /// Quick | Agent, as a segmented control.
+    fn render_lane_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let agent = self.agent_lane();
+        let segment = |lane: bool, cx: &mut Context<Self>| {
+            let theme = cx.theme();
+            let accent = crate::surface::lane_accent(lane, cx);
+            let active = lane == agent;
+            h_flex()
+                .id(if lane {
+                    "jig-lane-agent"
+                } else {
+                    "jig-lane-quick"
+                })
+                .gap_1()
+                .px_2()
+                .h(px(22.))
+                .rounded(px(5.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(
+                    crate::surface::lane_icon(lane)
+                        .size(px(12.))
+                        .text_color(if active {
+                            accent
+                        } else {
+                            theme.muted_foreground
+                        }),
+                )
+                .child(crate::surface::lane_name(lane))
+                .when(active, |this| {
+                    this.bg(accent.opacity(0.16)).text_color(accent)
+                })
+                .when(!active, |this| {
+                    this.text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.foreground.opacity(0.06)))
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.set_agent(lane, window, cx);
+                    }),
+                )
+        };
+        let right = if self.agent_by_command() && !self.agent {
+            crate::surface::hint("set by this command", cx)
+        } else {
+            crate::surface::hint("⇥ switch", cx)
+        };
+        h_flex()
+            .px_1()
+            .pb_0p5()
+            .justify_between()
+            .child(
+                h_flex()
+                    .p(px(2.))
+                    .gap(px(2.))
+                    .rounded(px(7.))
+                    .bg(theme.foreground.opacity(0.05))
+                    .child(segment(false, cx))
+                    .child(segment(true, cx)),
+            )
+            .child(right)
     }
 
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
@@ -287,23 +424,52 @@ impl CommandPalette {
     }
 
     fn render_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let selected = index == self.selected;
         let (label, detail): (SharedString, SharedString) = match row {
             Row::Preset(i) => {
                 let preset = &self.presets[*i];
-                let mut detail = match preset.comment {
-                    CommentMode::None if selected => format!("{} · ⇥ note", preset.scope.label()),
+                let detail = match preset.comment {
+                    _ if self.inline_note.is_some() => preset.scope.label().to_string(),
+                    CommentMode::None if selected => {
+                        format!("{} · “:” adds a note", preset.scope.label())
+                    }
                     CommentMode::None => preset.scope.label().to_string(),
                     _ => format!("{} · note", preset.scope.label()),
                 };
-                if preset.explore {
-                    detail.push_str(" · explores");
-                }
                 (preset.name.clone().into(), detail.into())
             }
-            Row::Custom(text) => (format!("Run “{text}”").into(), "⌘↩ save as command".into()),
+            Row::Custom(text) => (
+                format!("“{text}”").into(),
+                if selected {
+                    "⌘↩ save as command".into()
+                } else {
+                    "".into()
+                },
+            ),
         };
+        let row_agent = self.agent || matches!(row, Row::Preset(i) if self.presets[*i].agent);
+        let accent = crate::surface::lane_accent(row_agent, cx);
+        let theme = cx.theme();
+        // Commands that always use the agent say so wherever they're listed.
+        let tag = matches!(row, Row::Preset(i) if self.presets[*i].agent)
+            .then(|| crate::surface::lane_tag(true, cx));
+        // The note typed after the colon, shown with the command it goes to.
+        let note = self
+            .inline_note
+            .clone()
+            .filter(|note| !note.is_empty() && matches!(row, Row::Preset(_)))
+            .map(|note| {
+                div()
+                    .px_1p5()
+                    .rounded(px(4.))
+                    .truncate()
+                    .text_size(px(12.))
+                    .bg(theme.foreground.opacity(0.07))
+                    .when(selected, |this| {
+                        this.bg(theme.primary_foreground.opacity(0.2))
+                    })
+                    .child(note)
+            });
         // Selected like a macOS menu item: accent fill, white text.
         h_flex()
             .id(("jig-command", index))
@@ -315,12 +481,29 @@ impl CommandPalette {
             .text_size(px(13.))
             .text_color(theme.popover_foreground)
             .when(selected, |row| {
-                row.bg(theme.primary).text_color(theme.primary_foreground)
+                row.bg(accent).text_color(theme.primary_foreground)
             })
             .when(!selected, |row| {
                 row.hover(|row| row.bg(theme.foreground.opacity(0.06)))
             })
-            .child(div().truncate().child(label))
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .when(note.is_some(), |this| this.flex_none())
+                            .child(label),
+                    )
+                    .children(note)
+                    .children(tag.map(|tag| {
+                        tag.when(selected, |tag| {
+                            tag.bg(theme.primary_foreground.opacity(0.2))
+                                .text_color(theme.primary_foreground)
+                        })
+                    })),
+            )
             .child(
                 div()
                     .flex_none()
@@ -387,20 +570,62 @@ impl Render for CommandPalette {
                 .enumerate()
                 .skip(first)
                 .take(MAX_ROWS)
-                .map(|(index, row)| self.render_row(index, row, cx).into_any_element())
+                .flat_map(|(index, row)| {
+                    // Label the two kinds of row: the typed prompt, and the
+                    // commands below it.
+                    let section = match row {
+                        Row::Custom(_) => Some("Prompt"),
+                        Row::Preset(_)
+                            if index == 0 || matches!(self.rows[index - 1], Row::Custom(_)) =>
+                        {
+                            Some("Commands")
+                        }
+                        Row::Preset(_) => None,
+                    };
+                    let header = section.map(|title| {
+                        div()
+                            .px_2p5()
+                            .pt_1()
+                            .pb_0p5()
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(title.to_uppercase())
+                            .into_any_element()
+                    });
+                    header
+                        .into_iter()
+                        .chain([self.render_row(index, row, cx).into_any_element()])
+                })
                 .collect()
         };
         let header = self
             .note
             .as_ref()
             .map(|note| self.render_note_header(note, cx).into_any_element());
+        let switch = self.render_lane_switch(cx).into_any_element();
+        let agent = self.agent_lane();
+        let accent = crate::surface::lane_accent(agent, cx);
         let theme = cx.theme();
+        let footer = if agent {
+            "Works across the project · you review every edit".to_string()
+        } else {
+            let target = if self.has_selection {
+                "the selection"
+            } else {
+                "the cursor"
+            };
+            let sees = std::iter::once("this file")
+                .chain(self.context.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Quick edit of {target} · sees {sees}")
+        };
 
         let palette = crate::surface::panel(cx)
             .flex()
             .flex_col()
             .key_context(CONTEXT)
-            .on_action(cx.listener(Self::toggle_explore))
             .capture_action(cx.listener(Self::on_enter))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_up))
@@ -410,13 +635,21 @@ impl Render for CommandPalette {
             .w(px(420.))
             .p_1p5()
             .gap_0p5()
+            .when(agent, |this| this.border_color(accent.opacity(0.55)))
+            .child(switch)
             .children(header)
-            // Spotlight-sized input.
+            // Spotlight-sized input, marked with the lane it runs on.
             .child(
-                div()
-                    .px_1()
-                    .text_size(px(15.))
-                    .child(Input::new(&self.input).appearance(false).cleanable(false)),
+                div().px_1().text_size(px(15.)).child(
+                    Input::new(&self.input)
+                        .appearance(false)
+                        .cleanable(false)
+                        .prefix(
+                            crate::surface::lane_icon(agent)
+                                .size(px(15.))
+                                .text_color(accent),
+                        ),
+                ),
             )
             .when(self.note.is_some(), |this| {
                 this.child(
@@ -442,16 +675,12 @@ impl Render for CommandPalette {
                     .pt_1()
                     .pb_0p5()
                     .text_size(px(11.))
-                    .text_color(if self.explore {
-                        theme.primary
+                    .text_color(if agent {
+                        accent
                     } else {
                         theme.muted_foreground
                     })
-                    .child(if self.explore {
-                        "Explores the project this run · ⌘E to turn off"
-                    } else {
-                        "⌘E to let this run explore the project"
-                    }),
+                    .child(footer),
             );
         crate::motion::pop_in(palette, "jig-palette")
     }
@@ -496,7 +725,6 @@ mod tests {
     ) -> (gpui_kit::AnyWindowHandle, Entity<Host>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            cx.bind_keys(super::key_bindings());
         });
         let handles = cx.update(|cx| {
             let options = WindowOptions {
@@ -575,7 +803,7 @@ mod tests {
                 invocation,
                 Invocation {
                     comment: None,
-                    explore: false,
+                    agent: false,
                     name: None,
                     instruction: "add".into(),
                     scope: Scope::Cursor
@@ -688,14 +916,47 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn tab_adds_a_note_to_any_command(cx: &mut TestAppContext) {
+    fn a_loose_match_runs_the_prompt(cx: &mut TestAppContext) {
         let (window, host) = open_with(cx, true, note_presets());
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            window.input("simplify", cx);
-            window.press("tab", cx);
+            // A subsequence of "Simplify", but not its name: a prompt.
+            window.input("smp", cx);
+            window.press("enter", cx);
         });
-        assert!(in_note_step(cx, &host));
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name, None);
+        assert_eq!(invocation.instruction, "smp");
+    }
+
+    #[gpui_kit::test]
+    fn the_command_is_one_arrow_below_the_prompt(cx: &mut TestAppContext) {
+        let (window, host) = open_with(cx, true, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("smp", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.press("down", cx);
+            window.press("enter", cx);
+        });
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name.as_deref(), Some("Simplify"));
+    }
+
+    #[gpui_kit::test]
+    fn a_colon_completes_the_command_chosen_with_the_arrows(cx: &mut TestAppContext) {
+        let (window, host) = open_with(cx, true, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("smp", cx);
+        });
+        // The prompt is highlighted; ↓ picks Simplify.
+        step(cx, window, |window, cx| window.press("down", cx));
+        step(cx, window, |window, cx| window.input(":", cx));
+        cx.update(|cx| {
+            assert_eq!(host.read(cx).palette.read(cx).query(cx), "Simplify: ");
+        });
         step(cx, window, |window, cx| {
             window.input("keep the early return", cx);
             window.press("enter", cx);
@@ -703,6 +964,45 @@ mod tests {
         let invocation = events(cx, &host)[0].clone().unwrap();
         assert_eq!(invocation.name.as_deref(), Some("Simplify"));
         assert_eq!(invocation.comment.as_deref(), Some("keep the early return"));
+    }
+
+    #[gpui_kit::test]
+    fn a_colon_adds_a_note_to_any_command(cx: &mut TestAppContext) {
+        let (window, host) = open_with(cx, true, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("simplify: keep the early return", cx);
+            window.press("enter", cx);
+        });
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name.as_deref(), Some("Simplify"));
+        assert_eq!(invocation.comment.as_deref(), Some("keep the early return"));
+    }
+
+    #[gpui_kit::test]
+    fn a_colon_note_answers_a_command_that_asks_for_one(cx: &mut TestAppContext) {
+        let (window, host) = open_with(cx, false, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("controller: Invoice", cx);
+            window.press("enter", cx);
+        });
+        assert!(!in_note_step(cx, &host), "the note is already there");
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.comment.as_deref(), Some("Invoice"));
+    }
+
+    #[gpui_kit::test]
+    fn a_colon_without_a_matching_command_is_just_text(cx: &mut TestAppContext) {
+        let (window, host) = open_with(cx, true, note_presets());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("zzz: qqq", cx);
+            window.press("enter", cx);
+        });
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name, None);
+        assert_eq!(invocation.instruction, "zzz: qqq");
     }
 
     #[gpui_kit::test]
@@ -735,40 +1035,44 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn cmd_e_lets_one_run_explore(cx: &mut TestAppContext) {
-        let mut presets = note_presets();
-        presets[2].explore = false;
-        let (window, host) = open_with(cx, true, presets);
-        // Off by default.
+    fn tab_switches_lanes(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            window.input("simplify", cx);
-            window.press("enter", cx);
+            window.press("tab", cx);
+            window.press("tab", cx);
         });
-        assert!(!events(cx, &host)[0].clone().unwrap().explore);
-
-        let (window, host) = open_with(cx, true, note_presets());
+        cx.update(|cx| assert!(!host.read(cx).palette.read(cx).agent_lane()));
+        step(cx, window, |window, cx| window.press("tab", cx));
+        cx.update(|cx| {
+            assert!(host.read(cx).palette.read(cx).agent_lane());
+        });
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            window.press("secondary-e", cx);
-            window.input("simplify", cx);
+            window.input("rename things", cx);
             window.press("enter", cx);
         });
-        assert!(events(cx, &host)[0].clone().unwrap().explore);
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert!(invocation.agent);
+        assert_eq!(invocation.instruction, "rename things");
     }
 
     #[gpui_kit::test]
-    fn exploring_commands_explore(cx: &mut TestAppContext) {
-        let presets = presets::parse(
-            "[[command]]\nname = \"Create controller\"\nprompt = \"p\"\nexplore = true\n",
-        )
-        .unwrap();
+    fn an_agent_command_shows_the_agent_lane(cx: &mut TestAppContext) {
+        let presets =
+            presets::parse("[[command]]\nname = \"Refactor\"\nprompt = \"p\"\nagent = true\n")
+                .unwrap();
         let (window, host) = open_with(cx, false, presets);
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            window.input("controller", cx);
-            window.press("enter", cx);
+            window.input("refactor", cx);
         });
-        assert!(events(cx, &host)[0].clone().unwrap().explore);
+        cx.update(|cx| {
+            let palette = host.read(cx).palette.read(cx);
+            assert!(!palette.agent, "the switch itself stays put");
+            assert!(palette.agent_lane(), "but the command runs on the agent");
+        });
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert!(events(cx, &host)[0].clone().unwrap().agent);
     }
 }

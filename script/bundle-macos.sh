@@ -4,7 +4,7 @@
 # Run the bundled binary from a terminal so it keeps your environment
 # (API keys); apps opened from Finder don't read your shell profile:
 #
-#     target/Jig.app/Contents/MacOS/jig path/to/file.rs
+#     target/Jig.app/Contents/MacOS/Jig path/to/file.rs
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -14,7 +14,7 @@ app=target/Jig.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
-cp target/release/jig "$app/Contents/MacOS/jig"
+cp target/release/Jig "$app/Contents/MacOS/Jig"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,7 +23,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Jig</string>
   <key>CFBundleDisplayName</key><string>Jig</string>
   <key>CFBundleIdentifier</key><string>dev.jig.editor</string>
-  <key>CFBundleExecutable</key><string>jig</string>
+  <key>CFBundleExecutable</key><string>Jig</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>

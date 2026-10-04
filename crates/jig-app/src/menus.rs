@@ -5,8 +5,8 @@ use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
-    AddCommand, CloseTab, CloseWindow, EditCommands, EditProjectRules, FocusFileTree, NewFile,
-    NextTab, Open, OpenCommand, PreviousTab, Quit, Save, SaveAs, ToggleSidebar,
+    AddCommand, CloseTab, CloseWindow, EditAgentsFile, EditCommands, FindInFiles, FocusFileTree,
+    GoToFile, NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, Save, SaveAs, ToggleSidebar,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -58,6 +58,7 @@ pub fn init(cx: &mut App) {
             vec![
                 MenuItem::action("New File", NewFile),
                 MenuItem::action("Open…", Open),
+                MenuItem::action("Go to File…", GoToFile),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Save As…", SaveAs),
@@ -77,10 +78,12 @@ pub fn init(cx: &mut App) {
                 MenuItem::os_action("Paste", Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
+                MenuItem::action("Find in Files…", FindInFiles),
+                MenuItem::separator(),
                 MenuItem::action("Run Command…", OpenCommand),
                 MenuItem::action("Add Command…", AddCommand),
                 MenuItem::action("Edit Commands File", EditCommands),
-                MenuItem::action("Edit Project Rules (JIG.md)", EditProjectRules),
+                MenuItem::action("Edit AGENTS.md", EditAgentsFile),
             ],
         ),
         menu(

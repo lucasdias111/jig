@@ -17,11 +17,13 @@ pub enum Bubble {
     /// Waiting for the model. `started` drives the elapsed-time counter.
     Running {
         label: String,
+        /// Running on the agent rather than as a quick command.
+        agent: bool,
         started: Instant,
-        /// Project rules (`JIG.md`) went with the request.
-        with_rules: bool,
-        /// What an exploring command is looking at, updated from the
-        /// request's thread. `None` for commands that don't explore.
+        /// Project files that went with the request, e.g. "AGENTS.md".
+        context: Vec<String>,
+        /// What the agent is doing, updated from its thread. `None` for
+        /// quick commands.
         step: Option<LiveStep>,
     },
     /// A change is in the buffer awaiting accept or reject. `removed` is the
@@ -29,9 +31,13 @@ pub enum Bubble {
     Preview {
         message: String,
         removed: String,
+        /// An edit the agent proposed; it carries on once this is settled.
+        agent: bool,
     },
     /// A reply that changes nothing, e.g. an explanation.
     Message(String),
+    /// The agent finished; its closing sentence.
+    AgentDone(String),
     Error(String),
 }
 
@@ -88,11 +94,12 @@ impl RenderOnce for Bubble {
         let bubble = match self {
             Bubble::Running {
                 label,
+                agent,
                 started,
-                with_rules,
+                context,
                 step,
             } => {
-                let accent = theme.primary;
+                let accent = crate::surface::lane_accent(agent, cx);
                 let elapsed = started.elapsed().as_secs();
                 let step = step.map(|step| step.get());
                 container
@@ -107,6 +114,7 @@ impl RenderOnce for Bubble {
                                     .font_weight(FontWeight::MEDIUM),
                             )
                             .child(div().flex_1())
+                            .child(crate::surface::lane_tag(agent, cx))
                             // The spinner animates every frame, so this stays current.
                             .child(
                                 div()
@@ -117,7 +125,7 @@ impl RenderOnce for Bubble {
                     )
                     .when_some(step, |this, step| {
                         let text = if step.is_empty() {
-                            "Exploring the project".to_string()
+                            "Working".to_string()
                         } else {
                             step
                         };
@@ -130,17 +138,47 @@ impl RenderOnce for Bubble {
                         )
                     })
                     .child(progress_bar(accent, theme.muted))
-                    .child(hint(if with_rules {
-                        "with JIG.md · esc to cancel"
-                    } else {
-                        "esc to cancel"
-                    }))
+                    .child({
+                        let cancel = if agent {
+                            "esc to stop the agent"
+                        } else {
+                            "esc to cancel"
+                        };
+                        crate::surface::hint(
+                            if context.is_empty() {
+                                cancel.to_string()
+                            } else {
+                                format!("with {} · {cancel}", context.join(", "))
+                            },
+                            cx,
+                        )
+                    })
             }
             Bubble::Error(message) => {
                 container.child(div().text_color(theme.danger).child(message))
             }
             Bubble::Message(message) => container.child(message).child(hint("esc to close")),
-            Bubble::Preview { message, removed } => {
+            Bubble::AgentDone(message) => {
+                let accent = crate::surface::lane_accent(true, cx);
+                container
+                    .border_color(accent.opacity(0.45))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Agent finished")
+                            .child(div().flex_1())
+                            .child(crate::surface::lane_tag(true, cx)),
+                    )
+                    .child(message)
+                    .child(hint("esc to close"))
+            }
+            Bubble::Preview {
+                message,
+                removed,
+                agent,
+            } => {
                 let lines: Vec<&str> = removed.lines().collect();
                 let shown = lines
                     .iter()
@@ -149,8 +187,28 @@ impl RenderOnce for Bubble {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let hidden = lines.len().saturating_sub(REMOVED_LINES);
+                let accent = crate::surface::lane_accent(agent, cx);
                 container
-                    .when(!message.is_empty(), |this| this.child(message))
+                    .when(agent, |this| {
+                        // Which file, so an edit in another tab isn't a surprise.
+                        this.border_color(accent.opacity(0.45)).child(
+                            h_flex()
+                                .gap_2()
+                                .child("Wants to edit")
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .rounded(px(4.))
+                                        .bg(theme.foreground.opacity(0.06))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_xs()
+                                        .child(message.clone()),
+                                )
+                                .child(div().flex_1())
+                                .child(crate::surface::lane_tag(true, cx)),
+                        )
+                    })
+                    .when(!agent && !message.is_empty(), |this| this.child(message))
                     .when(!removed.trim().is_empty(), |this| {
                         this.child(
                             v_flex()
@@ -167,7 +225,11 @@ impl RenderOnce for Bubble {
                                 }),
                         )
                     })
-                    .child(hint("tab or enter to accept · esc to reject"))
+                    .child(hint(if agent {
+                        "tab or enter to accept · esc to reject · the agent then carries on"
+                    } else {
+                        "tab or enter to accept · esc to reject"
+                    }))
             }
         };
         crate::motion::pop_in(bubble, "jig-bubble")

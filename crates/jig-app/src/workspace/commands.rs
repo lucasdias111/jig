@@ -8,9 +8,10 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, Undo};
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Provider, Reply};
-use jig_commands::{Bubble, CommandPalette, Invocation, LiveStep, PaletteEvent};
+use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
 use jig_editor::EditorHandle;
 
+use super::agent::AgentRun;
 use super::{OpenCommand, OpenPalette, Workspace};
 
 /// How long an error stays up before it fades on its own.
@@ -24,13 +25,13 @@ fn working_color(cx: &App) -> Hsla {
 }
 
 /// Background of code a command just wrote, while it awaits review.
-fn added_color(cx: &App) -> Hsla {
+pub(super) fn added_color(cx: &App) -> Hsla {
     cx.theme().success.opacity(0.18)
 }
 
 /// One command from the moment it's chosen until its bubble goes away.
 pub(super) struct CommandRun {
-    id: u64,
+    pub(super) id: u64,
     pub(super) bubble: Bubble,
     pub(super) anchor: Point<Pixels>,
     /// The buffer when the command started. A reply for a buffer that has
@@ -39,7 +40,9 @@ pub(super) struct CommandRun {
     pub(super) target: Range<usize>,
     /// Set while the change sits in the buffer awaiting accept or reject.
     pub(super) preview: Option<Preview>,
-    _task: Option<Task<()>>,
+    /// Set for a command handed to the agent.
+    pub(super) agent: Option<AgentRun>,
+    pub(super) _task: Option<Task<()>>,
 }
 
 pub(super) struct Preview {
@@ -56,7 +59,7 @@ pub(super) fn load_provider(choice: Option<&str>) -> Result<Arc<dyn Provider>, S
 
 impl Workspace {
     /// Where floating UI opens: just below the cursor or selection.
-    fn floating_anchor(&self, cx: &App) -> Point<Pixels> {
+    pub(super) fn floating_anchor(&self, cx: &App) -> Point<Pixels> {
         self.editor()
             .anchor_point(cx)
             .map(|point| point + gpui_kit::point(px(-8.), px(4.)))
@@ -70,9 +73,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.palette.is_some() {
+        if self.palette.is_some() || self.home {
             return;
         }
+        self.quick_open = None;
+        self.find_in_files = None;
         // A new command replaces whatever the last one left on screen; a
         // pending change counts as accepted.
         self.accept_preview(cx);
@@ -81,7 +86,10 @@ impl Workspace {
         let has_selection = !self.editor().selection(cx).is_empty();
         let anchor = self.floating_anchor(cx);
         let presets = self.presets.clone();
-        let view = cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
+        let context = self.context_names();
+        let view = cx.new(|cx| {
+            CommandPalette::new(presets, has_selection, window, cx).with_context(context)
+        });
         let events = cx.subscribe_in(
             &view,
             window,
@@ -128,35 +136,12 @@ impl Workspace {
         self.next_run_id += 1;
         let id = self.next_run_id;
 
-        let provider = match &self.provider {
-            Ok(provider) => provider.clone(),
-            Err(error) => {
-                let error = error.clone();
-                self.run = Some(CommandRun {
-                    id,
-                    bubble: Bubble::Running {
-                        label: String::new(),
-                        started: std::time::Instant::now(),
-                        with_rules: false,
-                        step: None,
-                    },
-                    anchor,
-                    snapshot: text,
-                    target,
-                    preview: None,
-                    _task: None,
-                });
-                self.fail(id, error, window, cx);
-                return;
-            }
-        };
-
         let request = PromptRequest {
             instruction: invocation.instruction.clone(),
             language: self.editor().language(cx),
             file_name: self.document().path.as_deref().map(|path| {
-                // Relative to the project, so an exploring model knows
-                // where the file sits.
+                // Relative to the project, so the model knows where the
+                // file sits.
                 let root = crate::project::root_for(path);
                 path.strip_prefix(&root)
                     .unwrap_or(path)
@@ -166,35 +151,61 @@ impl Workspace {
             text: text.clone(),
             target: target.clone(),
             comment: invocation.comment.clone(),
+            // The agent reads AGENTS.md itself.
             project_rules: self
                 .document()
                 .path
                 .as_deref()
-                .and_then(crate::project::rules_for),
+                .filter(|_| !invocation.agent)
+                .and_then(crate::project::agents_for),
         };
-        let with_rules = request.project_rules.is_some();
-        // Exploring needs a saved file, to know which project to look in.
-        let tools = self
-            .document()
-            .path
-            .as_deref()
-            .filter(|_| invocation.explore)
-            .and_then(|path| jig_ai::ProjectTools::new(&crate::project::root_for(path)).ok());
-        let step = tools.as_ref().map(|_| LiveStep::default());
-        let live = step.clone();
+        if invocation.agent {
+            self.editor()
+                .highlight(vec![(target.clone(), working_color(cx))], cx);
+            self.run = Some(CommandRun {
+                id,
+                bubble: Bubble::Message(String::new()),
+                anchor,
+                snapshot: text,
+                target,
+                preview: None,
+                agent: None,
+                _task: None,
+            });
+            let label = invocation.name.unwrap_or_else(|| "Agent".into());
+            self.run_agent(id, label, request, window, cx);
+            return;
+        }
+        let provider = match &self.provider {
+            Ok(provider) => provider.clone(),
+            Err(error) => {
+                let error = error.clone();
+                self.run = Some(CommandRun {
+                    id,
+                    bubble: Bubble::Running {
+                        label: String::new(),
+                        agent: false,
+                        started: std::time::Instant::now(),
+                        context: Vec::new(),
+                        step: None,
+                    },
+                    anchor,
+                    snapshot: text,
+                    target,
+                    preview: None,
+                    agent: None,
+                    _task: None,
+                });
+                self.fail(id, error, window, cx);
+                return;
+            }
+        };
+
+        let context = self.context_names();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    match (&tools, &live) {
-                        (Some(tools), Some(live)) => {
-                            jig_ai::run_exploring(provider.as_ref(), &request, tools, &|text| {
-                                live.set(text)
-                            })
-                        }
-                        _ => jig_ai::run(provider.as_ref(), &request),
-                    }
-                })
+                .spawn(async move { jig_ai::run(provider.as_ref(), &request) })
                 .await;
             this.update_in(cx, |this, window, cx| this.finish(id, result, window, cx))
                 .ok();
@@ -208,14 +219,16 @@ impl Workspace {
             id,
             bubble: Bubble::Running {
                 label,
+                agent: false,
                 started: std::time::Instant::now(),
-                with_rules,
-                step,
+                context,
+                step: None,
             },
             anchor,
             snapshot: text,
             target,
             preview: None,
+            agent: None,
             _task: Some(task),
         });
         cx.notify();
@@ -262,28 +275,51 @@ impl Workspace {
             cx.notify();
             return;
         }
+        // Only what changed: the edit leaves identical text alone, the new
+        // lines are highlighted and only lines really removed are listed.
+        let edit = crate::diff::preview_edit(&original, &reply.replace, run.target.start);
         // Mark the preview first so the edit's change event doesn't dismiss it.
         run.preview = Some(Preview {
-            range: run.target.clone(),
+            range: edit.range.clone(),
         });
         run.bubble = Bubble::Preview {
             message: reply.message,
-            removed: original,
+            removed: edit.removed,
+            agent: false,
         };
-        let target = run.target.clone();
-        let range = self.editor().apply_edit(target, &reply.replace, window, cx);
+        let range = self
+            .editor()
+            .apply_edit(edit.range, edit.replacement, window, cx);
         self.editor().set_readonly(true, cx);
-        self.editor()
-            .highlight(vec![(range.clone(), added_color(cx))], cx);
+        let color = added_color(cx);
+        self.editor().highlight(
+            edit.highlights
+                .into_iter()
+                .map(|range| (range, color))
+                .collect(),
+            cx,
+        );
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
             preview.range = range;
         }
         cx.notify();
     }
 
+    /// The project files commands are sent with, e.g. "AGENTS.md", by name.
+    pub(super) fn context_names(&self) -> Vec<String> {
+        self.document()
+            .path
+            .as_deref()
+            .map(crate::project::context_names)
+            .unwrap_or_default()
+    }
+
     /// The command input or the new-command form has the keyboard.
     fn modal_open(&self) -> bool {
-        self.palette.is_some() || self.new_command.is_some()
+        self.palette.is_some()
+            || self.new_command.is_some()
+            || self.quick_open.is_some()
+            || self.find_in_files.is_some()
     }
 
     pub(super) fn previewing(&self) -> bool {
@@ -294,6 +330,9 @@ impl Workspace {
     pub(super) fn accept_preview(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.previewing() {
             return false;
+        }
+        if self.settle_agent_edit(true, None, cx) {
+            return true;
         }
         self.run = None;
         self.editor().clear_highlights(cx);
@@ -307,6 +346,9 @@ impl Workspace {
     fn reject_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.previewing() {
             return false;
+        }
+        if self.settle_agent_edit(false, Some(window), cx) {
+            return true;
         }
         self.run = None;
         self.editor().clear_highlights(cx);
@@ -366,6 +408,7 @@ impl Workspace {
             snapshot: String::new(),
             target: 0..0,
             preview: None,
+            agent: None,
             _task: Some(cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(ERROR_TIMEOUT).await;
                 this.update(cx, |this, cx| {
@@ -381,7 +424,13 @@ impl Workspace {
     }
 
     /// Show `error` in the run's bubble and dismiss it after a few seconds.
-    fn fail(&mut self, id: u64, error: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn fail(
+        &mut self,
+        id: u64,
+        error: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.run.as_ref().is_some_and(|run| run.id == id) {
             return;
         }
@@ -409,6 +458,8 @@ impl Workspace {
             // command input), so the floating window can't hear Escape.
             self.palette = None;
             self.new_command = None;
+            self.quick_open = None;
+            self.find_in_files = None;
             cx.stop_propagation();
             cx.notify();
         } else if self.modal_open() {

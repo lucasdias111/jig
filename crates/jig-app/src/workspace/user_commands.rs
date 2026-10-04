@@ -7,7 +7,7 @@ use gpui_kit::*;
 use jig_commands::{NewCommandEvent, NewCommandForm, Scope, presets};
 use jig_editor::EditorHandle;
 
-use super::{AddCommand, EditCommands, EditProjectRules, Workspace};
+use super::{AddCommand, EditAgentsFile, EditCommands, Workspace};
 use crate::project;
 
 pub(super) struct OpenForm {
@@ -100,11 +100,11 @@ impl Workspace {
         self.open_file(&path, window, cx);
     }
 
-    /// Open the `JIG.md` that applies to the current file, creating one at
-    /// the project root if there is none.
-    pub(super) fn edit_project_rules(
+    /// Open the `AGENTS.md` that applies to the current file, creating one
+    /// at the project root if there is none.
+    pub(super) fn edit_agents_file(
         &mut self,
-        _: &EditProjectRules,
+        _: &EditAgentsFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -115,10 +115,10 @@ impl Workspace {
                 cx,
             );
         };
-        let path = project::rules_path(&file)
-            .unwrap_or_else(|| project::root_for(&file).join(project::RULES_FILE));
+        let path = project::agents_path(&file)
+            .unwrap_or_else(|| project::root_for(&file).join(project::AGENTS_FILE));
         if !path.exists()
-            && let Err(error) = std::fs::write(&path, project::RULES_TEMPLATE)
+            && let Err(error) = std::fs::write(&path, project::AGENTS_TEMPLATE)
         {
             return self.show_error(
                 &format!("Couldn't create {}: {error}", path.display()),

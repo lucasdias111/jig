@@ -23,16 +23,13 @@ Rules for "replace":
 
 Rules for "message": at most 20 words, plain text, no greetings, no follow-up questions."#;
 
-/// Added to the system prompt when the command may explore the project.
-pub const EXPLORE: &str = "You can call read-only tools to look at other files in the project (paths are relative to the project root). Use them only when the instruction needs something that isn't in the file, such as a type, a function signature or a convention defined elsewhere. The file you are editing is already included in full above; don't read it again. Look at as little as you need, then reply with the JSON object described above.";
-
 /// Everything the model needs for one command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptRequest {
     pub instruction: String,
     /// The user's note for this run, refining the instruction.
     pub comment: Option<String>,
-    /// The project's conventions, from its `JIG.md`.
+    /// The project's conventions, from its `AGENTS.md`.
     pub project_rules: Option<String>,
     pub language: String,
     pub file_name: Option<String>,
@@ -47,20 +44,63 @@ impl PromptRequest {
     }
 }
 
+/// Files longer than this are sent as a window around the region: a model
+/// reading a huge file is slower and more likely to forget the reply format.
+const MAX_FILE_BYTES: usize = 24 * 1024;
+
+/// Repeated after the file, where the model reads it last.
+const REMINDER: &str = "Reply with the JSON object only: {\"replace\": ..., \"message\": ...}. No prose before or after it.";
+
+/// The part of `text` to send for `range`: all of it when it's small,
+/// otherwise whole lines around `range`, about [`MAX_FILE_BYTES`] in all.
+fn window(text: &str, range: &Range<usize>) -> Range<usize> {
+    if text.len() <= MAX_FILE_BYTES {
+        return 0..text.len();
+    }
+    let spare = MAX_FILE_BYTES.saturating_sub(range.len());
+    let start = range.start.saturating_sub(spare / 2);
+    let end = (range.end + spare - (range.start - start)).min(text.len());
+    // Whole lines only.
+    let start = match text[..start].rfind('\n') {
+        Some(newline) if start > 0 => newline + 1,
+        _ => 0,
+    };
+    let start = start.min(range.start);
+    let end = text[end..]
+        .find('\n')
+        .map_or(text.len(), |newline| end + newline + 1);
+    start..end.max(range.end)
+}
+
 /// The system and user messages for `request`.
 pub fn build(request: &PromptRequest) -> (String, String) {
     let text = &request.text;
     let range = request.target.clone();
+    let shown = window(text, &range);
+    let above = text[..shown.start].matches('\n').count();
+    let below = text[shown.end..].matches('\n').count();
+    let (before, after) = (&text[shown.start..range.start], &text[range.end..shown.end]);
     let marked = if range.is_empty() {
-        format!("{}{CURSOR}{}", &text[..range.start], &text[range.start..])
+        format!("{before}{CURSOR}{after}")
     } else {
         format!(
-            "{}{SELECTION_START}{}{SELECTION_END}{}",
-            &text[..range.start],
-            &text[range.clone()],
-            &text[range.end..]
+            "{before}{SELECTION_START}{}{SELECTION_END}{after}",
+            &text[range.clone()]
         )
     };
+    let marked = format!(
+        "{}{marked}{}",
+        if above > 0 {
+            format!("[{above} lines above not shown]\n")
+        } else {
+            String::new()
+        },
+        if below > 0 {
+            format!("\n[{below} lines below not shown]")
+        } else {
+            String::new()
+        }
+    );
     let file = request.file_name.as_deref().unwrap_or("untitled");
     let note = request
         .comment
@@ -73,7 +113,7 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         .map(|rules| format!("<project_rules>\n{}\n</project_rules>\n\n", rules.trim()))
         .unwrap_or_default();
     let user = format!(
-        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>",
+        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
         request.language, request.instruction
     );
     (SYSTEM.to_string(), user)
@@ -123,6 +163,32 @@ mod tests {
             "<project_rules>\nUse thiserror for errors.\n</project_rules>\n\nLanguage: rust"
         ));
         assert!(!build(&request(10..19)).1.contains("project_rules"));
+    }
+
+    #[test]
+    fn a_big_file_is_cut_to_the_lines_around_the_region() {
+        let text: String = (0..5000).map(|n| format!("line {n}\n")).collect();
+        let start = text.find("line 2500\n").unwrap();
+        let mut big = request(start..start + "line 2500".len());
+        big.text = text.clone();
+        let (_, user) = build(&big);
+        assert!(user.len() < MAX_FILE_BYTES + 2000, "{}", user.len());
+        assert!(user.contains("<<<SELECTION>>>line 2500<<<END>>>"));
+        assert!(
+            user.contains("line 2499\n<<<SELECTION>>>"),
+            "keeps the lines around it"
+        );
+        assert!(user.contains("lines above not shown]\n"));
+        assert!(user.contains("lines below not shown]"));
+        // Whole lines on both edges.
+        let file = &user[user.find("<file>\n").unwrap() + 7..];
+        let first = file.lines().nth(1).unwrap();
+        assert!(first.starts_with("line "), "{first}");
+
+        // A small file goes whole, with the format repeated at the end.
+        let (_, user) = build(&request(10..19));
+        assert!(!user.contains("not shown"));
+        assert!(user.ends_with(REMINDER));
     }
 
     #[test]

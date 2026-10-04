@@ -1,9 +1,21 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
+mod agent;
+mod definitions;
+mod diff;
 mod document;
+mod file_icons;
 mod file_tree;
+mod find_in_files;
+mod fuzzy;
+mod indentation;
+mod languages;
+mod lsp;
 mod menus;
 mod project;
+mod project_search;
+mod quick_open;
+mod recent;
 mod settings;
 mod settings_window;
 mod theme;
@@ -24,11 +36,14 @@ fn main() {
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         let settings_error = settings::init(cx);
+        recent::init(cx);
+        agent::init(cx);
         theme::init(cx);
         theme::apply(None, cx);
         cx.bind_keys(workspace::key_bindings());
-        menus::init(cx);
+        // Before the menus: they show only shortcuts bound by then.
         settings_window::init(cx);
+        menus::init(cx);
         // Reached only when no window handles Quit (e.g. none is open).
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Settings alone can't open a file, so it doesn't keep Jig running.

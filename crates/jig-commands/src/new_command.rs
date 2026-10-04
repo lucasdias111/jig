@@ -11,7 +11,6 @@ use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::ToggleExplore;
 use crate::presets::{CommentMode, Preset, Scope};
 
 actions!(
@@ -36,7 +35,6 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-4", NoteNone, Some(CONTEXT)),
         KeyBinding::new("secondary-5", NoteOptional, Some(CONTEXT)),
         KeyBinding::new("secondary-6", NoteRequired, Some(CONTEXT)),
-        KeyBinding::new("secondary-e", ToggleExplore, Some(CONTEXT)),
     ]
 }
 
@@ -51,7 +49,8 @@ pub struct NewCommandForm {
     hint: Entity<InputState>,
     scope: Scope,
     comment: CommentMode,
-    explore: bool,
+    /// Runs on the agent rather than as a quick command.
+    agent: bool,
     error: Option<SharedString>,
 }
 
@@ -91,7 +90,7 @@ impl NewCommandForm {
             hint,
             scope,
             comment: CommentMode::None,
-            explore: false,
+            agent: false,
             error: None,
         }
     }
@@ -117,7 +116,7 @@ impl NewCommandForm {
                 scope: self.scope,
                 prompt,
                 comment: self.comment,
-                explore: self.explore,
+                agent: self.agent,
                 comment_hint: (asks && !hint.is_empty()).then_some(hint),
             }));
         }
@@ -187,8 +186,8 @@ impl NewCommandForm {
         cx.notify();
     }
 
-    fn toggle_explore(&mut self, _: &ToggleExplore, _: &mut Window, cx: &mut Context<Self>) {
-        self.explore = !self.explore;
+    fn set_agent(&mut self, agent: bool, cx: &mut Context<Self>) {
+        self.agent = agent;
         cx.notify();
     }
 
@@ -272,17 +271,23 @@ impl Render for NewCommandForm {
                 )
             })
             .collect();
-        let explore = chip(
-            ("jig-explore", 0),
-            "explore project",
-            "⌘E".into(),
-            self.explore,
-            cx,
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, cx| this.toggle_explore(&ToggleExplore, window, cx)),
-        );
+        let lanes: Vec<_> = [false, true]
+            .into_iter()
+            .enumerate()
+            .map(|(ix, agent)| {
+                chip(
+                    ("jig-lane", ix),
+                    crate::surface::lane_name(agent),
+                    String::new(),
+                    agent == self.agent,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| this.set_agent(agent, cx)),
+                )
+            })
+            .collect();
         let focused = self.focused(window, cx);
         let theme = cx.theme();
         let label = |text: &'static str| {
@@ -318,7 +323,6 @@ impl Render for NewCommandForm {
             .on_action(cx.listener(|this, _: &NoteRequired, _, cx| {
                 this.set_comment(CommentMode::Required, cx)
             }))
-            .on_action(cx.listener(Self::toggle_explore))
             .w(px(460.))
             .p_4()
             .gap_2()
@@ -340,12 +344,18 @@ impl Render for NewCommandForm {
             .when(self.comment != CommentMode::None, |this| {
                 this.child(Input::new(&self.hint))
             })
+            .child(label("Runs on"))
             .child(
-                h_flex().gap_2().child(explore).child(
+                h_flex().gap_1p5().children(lanes).child(
                     div()
+                        .pl_1()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Reads other project files first. Slower."),
+                        .child(if self.agent {
+                            "Works across the project; you review every edit."
+                        } else {
+                            "One quick edit; sees this file and AGENTS.md."
+                        }),
                 ),
             )
             .when_some(self.error.clone(), |this, error| {

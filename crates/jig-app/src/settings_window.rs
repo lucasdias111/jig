@@ -1,23 +1,30 @@
-//! The Settings window (⌘,): Appearance, Commands and Model.
+//! The Settings window (⌘,): Appearance, Colors, Languages, Commands and
+//! Model.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_commands::{Preset, presets};
 
+use crate::languages::{self, Language};
 use crate::settings::{
     self, DEFAULT_FONT_SIZE, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, ThemeChoice,
 };
+use crate::theme::{self, EDITABLE, Section};
 use crate::workspace::{AddCommand, EditCommands, EditModelConfig};
 
 actions!(jig, [OpenSettings]);
 
 const PALETTE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="black"/><circle cx="17.5" cy="10.5" r=".5" fill="black"/><circle cx="6.5" cy="12.5" r=".5" fill="black"/><circle cx="8.5" cy="7.5" r=".5" fill="black"/></svg>"#;
 const COMMAND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>"#;
+const CODE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>"#;
+const SWATCHES: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"/><path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"/><path d="M7 17h.01"/><path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"/></svg>"#;
 const SPARKLES: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg>"#;
 
 /// Longest prompt shown under a command's name.
@@ -83,6 +90,41 @@ fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
     });
 }
 
+/// A color as the theme shows it now: the user's, or Ember's own.
+fn color_in_use(key: &str, cx: &App) -> Option<Hsla> {
+    let dark = cx.theme().is_dark();
+    settings::get(cx)
+        .colors
+        .variant(dark)
+        .get(key)
+        .and_then(|hex| theme::parse_hex(hex))
+        .or_else(|| theme::default_color(key, dark))
+}
+
+/// Whether the user has changed a color in the variant in use.
+fn is_changed(key: &str, cx: &App) -> bool {
+    settings::get(cx)
+        .colors
+        .variant(cx.theme().is_dark())
+        .contains_key(key)
+}
+
+/// Change a color in the variant in use; `None`, or Ember's own color,
+/// goes back to Ember's.
+fn set_color(key: &str, color: Option<Hsla>, cx: &mut App) {
+    let dark = cx.theme().is_dark();
+    let hex = color
+        .map(theme::to_hex)
+        .filter(|hex| theme::default_color(key, dark).map(theme::to_hex).as_ref() != Some(hex));
+    settings::update(cx, |s| {
+        let colors = s.colors.variant_mut(dark);
+        match hex {
+            Some(hex) => colors.insert(key.to_string(), hex),
+            None => colors.remove(key),
+        };
+    });
+}
+
 /// A command as the Commands page lists it.
 #[derive(Clone)]
 struct CommandRow {
@@ -127,6 +169,8 @@ pub struct SettingsWindow {
     built_in_commands: Vec<CommandRow>,
     commands_error: Option<SharedString>,
     providers: Result<Providers, SharedString>,
+    /// One per entry of `theme::EDITABLE`, in the same order.
+    color_pickers: Vec<Entity<ColorPickerState>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -144,12 +188,31 @@ impl SettingsWindow {
                 }
             }),
         ];
+        let mut subscriptions = subscriptions;
+        let color_pickers = EDITABLE
+            .iter()
+            .map(|editable| {
+                let picker = cx.new(|cx| ColorPickerState::new(window, cx));
+                let key = editable.key;
+                subscriptions.push(cx.subscribe_in(
+                    &picker,
+                    window,
+                    move |_, _, event: &ColorPickerEvent, _, cx| {
+                        if let ColorPickerEvent::Change(Some(color)) = event {
+                            set_color(key, Some(*color), cx);
+                        }
+                    },
+                ));
+                picker
+            })
+            .collect();
         window.set_window_title("Settings");
         let mut this = Self {
             user_commands: Vec::new(),
             built_in_commands: Vec::new(),
             commands_error: None,
             providers: Err(SharedString::default()),
+            color_pickers,
             _subscriptions: subscriptions,
         };
         this.reload();
@@ -260,7 +323,7 @@ impl SettingsWindow {
                             )
                             .default_value(ThemeChoice::System.key()),
                         )
-                        .description("OneNord Light or OneNord, or follow the system."),
+                        .description("Ember Light or Ember, or follow the system."),
                     )
                     .item(
                         SettingItem::new(
@@ -309,6 +372,171 @@ impl SettingsWindow {
                         |e| e.show_whitespace,
                         |e, v| e.show_whitespace = v,
                     )),
+            )
+    }
+
+    /// Show each picker the color in use, unless it's being picked.
+    fn sync_color_pickers(&self, window: &mut Window, cx: &mut App) {
+        for (editable, picker) in EDITABLE.iter().zip(&self.color_pickers) {
+            let Some(color) = color_in_use(editable.key, cx) else {
+                continue;
+            };
+            let state = picker.read(cx);
+            if state.is_open() || state.value().map(theme::to_hex) == Some(theme::to_hex(color)) {
+                continue;
+            }
+            picker.update(cx, |state, cx| state.set_value(color, window, cx));
+        }
+    }
+
+    fn colors_page(&self, cx: &App) -> SettingPage {
+        let variant = if cx.theme().is_dark() {
+            "Ember"
+        } else {
+            "Ember Light"
+        };
+        let color_item = |(editable, picker): (&theme::Editable, &Entity<ColorPickerState>)| {
+            let key = editable.key;
+            let picker = picker.clone();
+            SettingItem::new(
+                editable.label,
+                SettingField::render(move |_, _, cx| {
+                    let hex = color_in_use(key, cx).map(theme::to_hex).unwrap_or_default();
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_color(cx.theme().muted_foreground)
+                                .child(hex),
+                        )
+                        .child(ColorPicker::new(&picker).small().anchor(Anchor::TopRight))
+                })
+                .on_reset(
+                    move |cx| is_changed(key, cx),
+                    move |_, cx| set_color(key, None, cx),
+                ),
+            )
+            .keywords([key])
+        };
+        let section = |section: Section| {
+            EDITABLE
+                .iter()
+                .zip(&self.color_pickers)
+                .filter(move |(editable, _)| editable.section == section)
+                .map(color_item)
+        };
+
+        let intro = SettingItem::render(move |_, _, cx| {
+            let any_changed = EDITABLE.iter().any(|editable| is_changed(editable.key, cx));
+            v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "Changes apply to {variant}, the variant in use. Switch \
+                             Appearance to edit the other."
+                        )),
+                )
+                .when(any_changed, |this| {
+                    this.child(
+                        h_flex().child(
+                            Button::new("reset-colors")
+                                .label(format!("Reset All of {variant}"))
+                                .small()
+                                .outline()
+                                .on_click(|_, _, cx| {
+                                    let dark = cx.theme().is_dark();
+                                    settings::update(cx, |s| s.colors.variant_mut(dark).clear())
+                                }),
+                        ),
+                    )
+                })
+        })
+        .keywords(["theme", "color", "scheme", "reset"]);
+
+        SettingPage::new("Colors")
+            .icon(Icon::default().data(SWATCHES))
+            .group(
+                SettingGroup::new()
+                    .variant(GroupBoxVariant::Normal)
+                    .item(intro),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Code")
+                    .items(section(Section::Code)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Editor")
+                    .items(section(Section::Editor)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Interface")
+                    .items(section(Section::Interface)),
+            )
+    }
+
+    fn languages_page(&self) -> SettingPage {
+        let highlight_item = |language: &'static Language| {
+            SettingItem::new(
+                language.label,
+                SettingField::switch(
+                    |cx| !settings::get(cx).languages.is_off(language.name),
+                    |on, cx| settings::update(cx, |s| s.languages.set_off(language.name, !on)),
+                )
+                .default_value(true),
+            )
+        };
+        let extensions_item = |language: &'static Language| {
+            let built_in = languages::format_extensions(language.extensions);
+            let shown = built_in.clone();
+            SettingItem::new(
+                language.label,
+                SettingField::input(
+                    move |cx| {
+                        settings::get(cx)
+                            .languages
+                            .extensions
+                            .get(language.name)
+                            .cloned()
+                            .unwrap_or_else(|| shown.clone())
+                            .into()
+                    },
+                    move |text: SharedString, cx| {
+                        let text = Some(text.to_string());
+                        settings::update(cx, |s| {
+                            s.languages.set_extensions(language.name, text, &built_in)
+                        })
+                    },
+                )
+                .default_value(languages::format_extensions(language.extensions)),
+            )
+            .keywords([language.name])
+        };
+
+        SettingPage::new("Languages")
+            .icon(Icon::default().data(CODE))
+            .group(
+                SettingGroup::new()
+                    .title("Highlighting")
+                    .description("Languages turned off open as plain text.")
+                    .items(languages::BUNDLED.iter().map(highlight_item)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("File extensions")
+                    .description(
+                        "Which files each language applies to, separated by commas. \
+                         Where two languages share one, the higher wins.",
+                    )
+                    .items(languages::BUNDLED.iter().map(extensions_item)),
             )
     }
 
@@ -509,7 +737,9 @@ impl SettingsWindow {
 }
 
 impl Render for SettingsWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_color_pickers(window, cx);
+        let colors_page = self.colors_page(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -535,6 +765,8 @@ impl Render for SettingsWindow {
                         .with_group_variant(GroupBoxVariant::Outline)
                         .pages([
                             self.appearance_page(),
+                            colors_page,
+                            self.languages_page(),
                             self.commands_page(),
                             self.model_page(),
                         ]),
@@ -549,7 +781,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
     use jig_commands::Preset;
 
-    use super::{CommandRow, MAX_PROMPT_CHARS, init, is_settings_window, open};
+    use super::{CommandRow, MAX_PROMPT_CHARS, init, is_settings_window, open, set_color};
     use crate::settings::{self, ThemeChoice};
 
     #[test]
@@ -585,5 +817,29 @@ mod tests {
         cx.update_window(windows[0], |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
         assert!(cx.update(|cx| cx.theme().is_dark()));
+    }
+
+    #[gpui_kit::test]
+    fn picking_ember_s_own_color_clears_the_change(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init(cx);
+            settings::update(cx, |s| s.appearance.theme = ThemeChoice::Dark);
+        });
+        cx.update(|cx| {
+            set_color("syntax.keyword", crate::theme::parse_hex("#FF0000"), cx);
+            assert_eq!(settings::get(cx).colors.dark["syntax.keyword"], "#FF0000");
+            assert!(
+                settings::get(cx).colors.light.is_empty(),
+                "only the variant in use"
+            );
+
+            set_color(
+                "syntax.keyword",
+                crate::theme::default_color("syntax.keyword", true),
+                cx,
+            );
+            assert!(settings::get(cx).colors.dark.is_empty());
+        });
     }
 }

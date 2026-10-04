@@ -3,12 +3,13 @@
 
 use std::path::Path;
 
-use gpui_kit::component::input::{EditorState, InputEvent};
+use gpui_kit::component::input::{EditorState, InputEvent, TabSize};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::{EditorHandle, KitEditor};
 
+use super::status_bar::CursorPosition;
 use super::{ActivateTab, CloseTab, NewFile, NextTab, PreviousTab, Workspace};
 use crate::document::Document;
 
@@ -23,6 +24,11 @@ pub(super) struct Tab {
     pub(super) document: Document,
     pub(super) editor: KitEditor,
     pub(super) dirty: bool,
+    /// Detected from the file when it was opened; what Tab inserts.
+    pub(super) indentation: TabSize,
+    pub(super) cursor: Entity<CursorPosition>,
+    /// The file open in its language server, if it has one.
+    pub(super) lsp: Option<super::lsp::TabLsp>,
     _events: Subscription,
 }
 
@@ -33,7 +39,7 @@ impl Tab {
     }
 
     /// An Untitled tab nobody has typed into, which opening a file reuses.
-    fn is_blank(&self, cx: &App) -> bool {
+    pub(super) fn is_blank(&self, cx: &App) -> bool {
         self.document.path.is_none() && !self.dirty && self.editor.text(cx).is_empty()
     }
 }
@@ -70,15 +76,18 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Tab {
         let editor = &self.settings.editor;
+        let indentation = crate::indentation::detect(&document.saved_text);
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
-                .language(document.language())
+                .language(document.language(&self.settings.languages))
+                .tab_size(indentation)
                 .line_number(editor.line_numbers)
                 .soft_wrap(editor.soft_wrap)
                 .indent_guides(editor.indent_guides)
                 .show_whitespaces(editor.show_whitespace)
                 .default_value(document.saved_text.clone())
         });
+        super::definitions::install(&state, cx);
         let events = cx.subscribe_in(
             &state,
             window,
@@ -87,6 +96,7 @@ impl Workspace {
                     && let Some(ix) = this.tabs.iter().position(|tab| tab.editor.state() == state)
                 {
                     this.refresh_dirty(ix, window, cx);
+                    this.lsp_changed(ix, cx);
                     if ix == this.active {
                         this.on_buffer_changed(cx);
                     }
@@ -94,10 +104,18 @@ impl Workspace {
                 cx.notify();
             },
         );
+        let cursor = cx.new(|cx| CursorPosition::new(state.clone(), cx));
+        let lsp = document.path.as_deref().and_then(|path| {
+            let language = document.language(&self.settings.languages);
+            super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
+        });
         Tab {
             document,
             editor: KitEditor::new(state, cx),
             dirty: false,
+            indentation,
+            cursor,
+            lsp,
             _events: events,
         }
     }
@@ -111,7 +129,7 @@ impl Workspace {
         }
     }
 
-    fn tab_for(&self, path: &Path) -> Option<usize> {
+    pub(super) fn tab_for(&self, path: &Path) -> Option<usize> {
         let path = canonical(path);
         self.tabs.iter().position(|tab| {
             tab.document
@@ -132,6 +150,7 @@ impl Workspace {
             Ok(document) => document,
             Err(error) => return self.show_error(&format!("{error:#}"), window, cx),
         };
+        self.leave_home(cx);
         let tab = self.new_tab(document, window, cx);
         self.leave_tab(cx);
         if self.tab().is_blank(cx) {
@@ -183,12 +202,19 @@ impl Workspace {
         self.tab_scroll.scroll_to_item(self.active);
         self.update_title(window);
         if let Some(path) = self.document().path.clone() {
+            self.note_recent_file(&path);
             self.show_in_tree(&path, window, cx);
         }
         cx.notify();
     }
 
     pub(super) fn new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home {
+            // The blank tab behind the home page is the new file.
+            self.leave_home(cx);
+            self.enter_tab(window, cx);
+            return;
+        }
         let tab = self.new_tab(Document::default(), window, cx);
         self.leave_tab(cx);
         self.active += 1;
@@ -200,11 +226,12 @@ impl Workspace {
         self.close_tab_at(self.active, window, cx);
     }
 
-    /// Close the tab at `ix`, asking first if it has unsaved changes. Closing
-    /// the last, empty tab closes the window.
+    /// Close the tab at `ix`, asking first if it has unsaved changes.
+    /// Closing the last tab shows the start page; closing that closes the
+    /// window.
     fn close_tab_at(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(ix) else { return };
-        if self.tabs.len() == 1 && tab.is_blank(cx) {
+        if self.home {
             window.remove_window();
             return;
         }
@@ -214,7 +241,7 @@ impl Workspace {
         });
     }
 
-    fn remove_tab(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn remove_tab(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.tabs.iter().position(|tab| tab.id() == id) else {
             return;
         };
@@ -225,6 +252,15 @@ impl Workspace {
         if self.tabs.is_empty() {
             let tab = self.new_tab(Document::default(), window, cx);
             self.tabs.push(tab);
+            self.home = true;
+            if self.tree.is_some() {
+                self.focus_tree(window, cx);
+            } else {
+                self.focus_main(window, cx);
+            }
+            self.update_title(window);
+            cx.notify();
+            return;
         }
         // The tab to the right takes the closed one's place, or the one to
         // the left when it was last.
@@ -290,7 +326,17 @@ impl Workspace {
     /// tabs open, the tabs themselves, Safari-style.
     pub(super) fn render_title(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        if self.tabs.len() < 2 {
+        if self.home || self.tabs.len() < 2 {
+            let title = if self.home {
+                self.project_root(cx)
+                    .and_then(|root| {
+                        root.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "Jig".into())
+            } else {
+                self.document().title()
+            };
             return h_flex()
                 .flex_1()
                 .min_w_0()
@@ -302,7 +348,7 @@ impl Workspace {
                         .truncate()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground.opacity(0.85))
-                        .child(self.document().title()),
+                        .child(title),
                 )
                 .when(self.tab().dirty, |this| {
                     this.child(
@@ -314,6 +360,7 @@ impl Workspace {
                 })
                 .into_any_element();
         }
+        let languages = crate::settings::get(cx).languages;
         let tabs = self
             .tabs
             .iter()
@@ -392,6 +439,31 @@ impl Workspace {
                             .min_w_0()
                             .flex()
                             .justify_center()
+                            .items_center()
+                            .gap_1p5()
+                            .children(
+                                tab.document
+                                    .path
+                                    .as_deref()
+                                    .and_then(|path| {
+                                        crate::file_icons::for_path(
+                                            path,
+                                            &languages,
+                                            theme.is_dark(),
+                                        )
+                                    })
+                                    .map(|(svg, color)| {
+                                        Icon::default()
+                                            .data(svg)
+                                            .size(px(11.))
+                                            .flex_none()
+                                            .text_color(if active {
+                                                color
+                                            } else {
+                                                color.opacity(0.7)
+                                            })
+                                    }),
+                            )
                             .child(div().truncate().child(label)),
                     )
                     // Balances the close button so the name stays centred.

@@ -48,6 +48,8 @@ const CONFIG_HEADER: &str = "\
 # api_key_env, never from this file.
 #
 # kind: \"anthropic\" or \"openai\" (any OpenAI-compatible server).
+# thinking = true: let the model reason before answering. Off by default;
+# it makes reasoning models take 10-60 s instead of 2-5 s.
 
 ";
 
@@ -57,6 +59,9 @@ pub struct Config {
     pub default: String,
     #[serde(rename = "provider")]
     pub providers: Vec<ProviderConfig>,
+    /// The model agent commands use, as OpenCode names it (`provider/model`).
+    #[serde(default)]
+    pub agent_model: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -95,6 +100,12 @@ pub struct ProviderConfig {
     /// OpenAI-compatible only: request `response_format: json_object`.
     #[serde(default = "default_true")]
     pub json_mode: bool,
+    /// Let the model reason before answering. Off unless set: it makes
+    /// reasoning models take 10-60 s instead of 2-5 s. Turned off with
+    /// `thinking: {type: disabled}` (Anthropic format) or
+    /// `reasoning_effort: none` (OpenAI format).
+    #[serde(default)]
+    pub thinking: bool,
 }
 
 fn default_max_tokens() -> u32 {
@@ -206,7 +217,8 @@ impl ProviderConfig {
                     self.max_tokens,
                     self.json_mode,
                 )
-                .with_headers(headers),
+                .with_headers(headers)
+                .with_thinking(self.thinking),
             ),
             ProviderKind::Anthropic => Arc::new(
                 AnthropicProvider::new(
@@ -216,7 +228,8 @@ impl ProviderConfig {
                     self.max_tokens,
                     self.auth,
                 )
-                .with_headers(headers),
+                .with_headers(headers)
+                .with_thinking(self.thinking),
             ),
         })
     }

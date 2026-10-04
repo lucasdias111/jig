@@ -86,10 +86,10 @@ pub struct Preset {
     /// Placeholder for the note, e.g. "Entity name".
     #[serde(default)]
     pub comment_hint: Option<String>,
-    /// Let the model look at other files in the project (read-only) before
-    /// it answers. Slower, so off unless a command needs it.
+    /// Hand the command to the coding agent, which may read and edit the
+    /// whole project (each edit still needs the user's accept).
     #[serde(default)]
-    pub explore: bool,
+    pub agent: bool,
 }
 
 /// What the user chose to run from the command input.
@@ -101,8 +101,8 @@ pub struct Invocation {
     pub scope: Scope,
     /// The user's note for this run, sent alongside the instruction.
     pub comment: Option<String>,
-    /// The model may explore the project before answering.
-    pub explore: bool,
+    /// Run on the coding agent instead of a single model call.
+    pub agent: bool,
 }
 
 impl Invocation {
@@ -112,13 +112,13 @@ impl Invocation {
             instruction: preset.prompt.clone(),
             scope: preset.scope,
             comment: None,
-            explore: preset.explore,
+            agent: preset.agent,
         }
     }
 
-    /// Turn exploring on for this run, whatever the command's setting.
-    pub fn exploring(mut self, explore: bool) -> Self {
-        self.explore |= explore;
+    /// Hand this run to the agent, whatever the command's setting.
+    pub fn on_agent(mut self, agent: bool) -> Self {
+        self.agent |= agent;
         self
     }
 
@@ -139,7 +139,7 @@ impl Invocation {
         };
         Self {
             comment: None,
-            explore: false,
+            agent: false,
             name: None,
             instruction: text.trim().to_string(),
             scope,
@@ -201,7 +201,8 @@ pub const USER_FILE_HEADER: &str = "\
 # the cursor) or \"file\" (the whole file).
 # comment: \"none\" (default), \"optional\" or \"required\": ask for a note
 # that is sent along with the prompt. comment_hint: placeholder for it.
-# explore = true: let the model read other files in the project first.
+# agent = true: hand the command to the coding agent (OpenCode), which may
+# read and edit the whole project; you review every edit.
 #
 # [[command]]
 # name = \"Create controller\"
@@ -259,8 +260,8 @@ pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
     if preset.comment != CommentMode::None {
         entry.push_str(&format!("comment = {}\n", quote(preset.comment.label())));
     }
-    if preset.explore {
-        entry.push_str("explore = true\n");
+    if preset.agent {
+        entry.push_str("agent = true\n");
     }
     if let Some(hint) = preset
         .comment_hint
@@ -292,6 +293,16 @@ pub fn filter(presets: &[Preset], query: &str) -> Vec<usize> {
         .collect();
     matches.sort();
     matches.into_iter().map(|(_, index)| index).collect()
+}
+
+/// `query` clearly names `preset`: its name, or one of the words in it,
+/// starts with the query. A looser match only suggests the command.
+pub fn names(preset: &Preset, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    let name = preset.name.to_lowercase();
+    !query.is_empty()
+        && (name.starts_with(&query)
+            || name.split_whitespace().any(|word| word.starts_with(&query)))
 }
 
 /// Lower is better: prefix, then substring, then a subsequence ranked by how
@@ -533,7 +544,7 @@ mod tests {
             prompt: "p".into(),
             comment: CommentMode::Optional,
             comment_hint: Some("Entity".into()),
-            explore: true,
+            agent: true,
             ..Default::default()
         };
         add_user_preset(&path, &preset).unwrap();
@@ -572,5 +583,13 @@ mod tests {
             Invocation::custom(" make it async ", true).instruction,
             "make it async"
         );
+    }
+
+    #[test]
+    fn old_explore_setting_is_ignored() {
+        let presets =
+            parse("[[command]]\nname = \"Old\"\nprompt = \"p\"\nexplore = true\n").unwrap();
+        assert_eq!(presets[0].name, "Old");
+        assert!(!presets[0].agent);
     }
 }

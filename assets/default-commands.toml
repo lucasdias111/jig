@@ -6,11 +6,11 @@
 # comment: "none" (default), "optional" or "required". Asks for a note that
 # is sent along with the prompt, e.g. the entity a controller is for.
 # comment_hint: placeholder text for that note.
-# explore = true: the model may look at other files in the project (read-only)
-# before answering. Slower; for commands that need context from elsewhere.
+# agent = true: run on the coding agent (OpenCode), which works across the
+# project; you review every edit.
 #
-# Tab on any command in the command input adds a one-off note, and Cmd+E
-# lets any command explore for one run.
+# In the command input, Tab switches between Quick and Agent, and a colon
+# adds a one-off note: "docs: terse" runs Add docs with the note "terse".
 
 [[command]]
 name = "Add docs"

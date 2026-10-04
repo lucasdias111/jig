@@ -1,9 +1,16 @@
 //! The one window: open files in tabs, with the project's files in a
 //! sidebar.
 
+mod agent;
 mod commands;
+mod definitions;
+mod find;
+mod go_to_file;
+mod home;
+mod lsp;
 mod preferences;
 mod sidebar;
+mod status_bar;
 mod tabs;
 mod user_commands;
 
@@ -11,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::input::Editor;
+use gpui_kit::component::input::{Editor, GoToDefinition, Replace};
 use gpui_kit::component::{ActiveTheme as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -36,10 +43,12 @@ actions!(
         OpenCommand,
         AddCommand,
         EditCommands,
-        EditProjectRules,
+        EditAgentsFile,
         EditModelConfig,
         ToggleSidebar,
         FocusFileTree,
+        GoToFile,
+        FindInFiles,
         NewFile,
         CloseTab,
         NextTab,
@@ -74,8 +83,20 @@ pub struct Workspace {
     sidebar_width: Pixels,
     /// Set while the sidebar's edge is being dragged.
     resizing_sidebar: bool,
+    /// A start page is showing in place of the editor, because no file is
+    /// open: the home page, or with a project open, the project's. The one
+    /// tab behind it is blank.
+    home: bool,
+    home_focus: FocusHandle,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
+    quick_open: Option<go_to_file::OpenQuickOpen>,
+    find_in_files: Option<find::OpenFindInFiles>,
+    last_find: find::LastFind,
+    /// The project's files as last walked, for Go to File to show at once.
+    file_index: Option<go_to_file::FileIndex>,
+    /// Files shown in this window, most recent first, for Go to File.
+    recent_files: Vec<PathBuf>,
     new_command: Option<user_commands::OpenForm>,
     /// The user's commands file, `~/.config/jig/commands.toml`.
     commands_path: Option<PathBuf>,
@@ -103,6 +124,13 @@ struct OpenPalette {
 
 impl Workspace {
     pub fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // `jig .` or `jig ../x`: everything after works with full paths, as
+        // language servers need them.
+        let path = path.map(|path| {
+            path.canonicalize()
+                .or_else(|_| std::path::absolute(&path))
+                .unwrap_or(path)
+        });
         let folder = path.as_deref().filter(|path| path.is_dir());
         let (document, error) = match path.as_deref().filter(|_| folder.is_none()) {
             Some(path) => match Document::open(path) {
@@ -126,8 +154,15 @@ impl Workspace {
             sidebar_open: false,
             sidebar_width: px(240.),
             resizing_sidebar: false,
+            home: path.is_none() || folder.is_some(),
+            home_focus: cx.focus_handle(),
             presets: Rc::new(presets),
             palette: None,
+            quick_open: None,
+            find_in_files: None,
+            last_find: Default::default(),
+            file_index: None,
+            recent_files: Vec::new(),
             new_command: None,
             commands_path: presets::user_commands_path(),
             provider: commands::load_provider(settings.ai.provider.as_deref()),
@@ -137,7 +172,11 @@ impl Workspace {
             next_run_id: 0,
         };
         let tab = this.new_tab(document, window, cx);
-        tab.editor.focus(window, cx);
+        if this.home {
+            this.home_focus.focus(window, cx);
+        } else {
+            tab.editor.focus(window, cx);
+        }
         this.tabs.push(tab);
         if let Some(folder) = folder {
             this.open_folder(folder, window, cx);
@@ -176,13 +215,17 @@ impl Workspace {
 
         if let Some(error) = error {
             this.show_error(&format!("{error:#}"), window, cx);
-        } else if path.is_none() {
-            this.prompt_open(window, cx);
         }
         this
     }
 
     fn update_title(&self, window: &mut Window) {
+        if self.home {
+            window.set_window_title("Jig");
+            window.set_window_edited(false);
+            window.set_document_path(None);
+            return;
+        }
         let title = self.document().title();
         let marker = if self.tab().dirty { " •" } else { "" };
         window.set_window_title(&format!("{title}{marker}"));
@@ -252,9 +295,10 @@ impl Workspace {
         });
     }
 
-    fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Ask for a folder, or with `files`, a file or folder, and open it.
+    fn prompt_open(&mut self, files: bool, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
+            files,
             directories: true,
             multiple: false,
             prompt: None,
@@ -279,10 +323,13 @@ impl Workspace {
     }
 
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
-        self.prompt_open(window, cx);
+        self.prompt_open(true, window, cx);
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home {
+            return;
+        }
         match self.document().path.clone() {
             Some(path) => self.save_to(&path, window, cx),
             None => self.prompt_save_as(window, cx),
@@ -290,6 +337,9 @@ impl Workspace {
     }
 
     fn save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home {
+            return;
+        }
         self.prompt_save_as(window, cx);
     }
 
@@ -316,7 +366,9 @@ impl Workspace {
 
     fn save_to(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor().text(cx);
-        let language_changed = crate::document::language_for(path) != self.document().language();
+        let languages = &self.settings.languages;
+        let language_changed =
+            crate::languages::language_for(path, languages) != self.document().language(languages);
         if let Err(error) = self.tab_mut().document.save(path, &text) {
             self.show_error(&format!("Could not save: {error:#}"), window, cx);
             return;
@@ -326,6 +378,7 @@ impl Workspace {
             self.reload_tab(path, window, cx);
         }
         self.tab_mut().dirty = false;
+        self.lsp_saved(cx);
         self.update_title(window);
         if self.is_commands_file() {
             self.reload_presets(window, cx);
@@ -364,6 +417,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-k", AddCommand, None),
         KeyBinding::new("secondary-b", ToggleSidebar, None),
         KeyBinding::new("secondary-shift-e", FocusFileTree, None),
+        KeyBinding::new("secondary-p", GoToFile, None),
+        KeyBinding::new("secondary-shift-f", FindInFiles, None),
+        // In the editor too, where GPUI Kit binds ⇧⌘F to Replace; Replace
+        // moves to ⌘R, as in IntelliJ.
+        KeyBinding::new("secondary-shift-f", FindInFiles, Some("Input")),
+        KeyBinding::new("secondary-r", Replace, Some("Input")),
+        // Cmd+click does the same.
+        KeyBinding::new("f12", GoToDefinition, Some("Input")),
     ]
     .into_iter()
     // Scoped to the workspace so that forms using Cmd+digits keep them.
@@ -372,8 +433,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
             .map(|n| KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))),
     )
     .chain(crate::file_tree::key_bindings())
+    .chain(crate::find_in_files::key_bindings())
     .chain(jig_commands::new_command::key_bindings())
-    .chain(jig_commands::palette::key_bindings())
     .collect()
 }
 
@@ -399,10 +460,12 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_command))
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
-            .on_action(cx.listener(Self::edit_project_rules))
+            .on_action(cx.listener(Self::edit_agents_file))
             .on_action(cx.listener(Self::edit_model_config))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::focus_file_tree))
+            .on_action(cx.listener(Self::go_to_file))
+            .on_action(cx.listener(Self::find_in_files))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::next_tab))
@@ -445,24 +508,29 @@ impl Render for Workspace {
                     .min_h_0()
                     .items_stretch()
                     .children(sidebar)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .bg(theme.background)
-                            .pl_2()
-                            .pr_3()
-                            .pt_1()
-                            .pb_2()
-                            .child(
-                                Editor::new(self.editor().state())
-                                    .bordered(false)
-                                    // Locked while a command's change awaits review.
-                                    // The element re-applies this every frame.
-                                    .readonly(self.previewing())
-                                    .size_full(),
-                            ),
-                    ),
+                    .when(self.home, |this| {
+                        this.child(div().flex_1().min_w_0().child(self.render_start(cx)))
+                    })
+                    .when(!self.home, |this| {
+                        this.child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .bg(theme.background)
+                                .child(
+                                    div().flex_1().min_h_0().pl_2().pr_3().pt_1().pb_2().child(
+                                        Editor::new(self.editor().state())
+                                            .bordered(false)
+                                            // Locked while a command's change awaits
+                                            // review. The element re-applies this
+                                            // every frame.
+                                            .readonly(self.previewing())
+                                            .size_full(),
+                                    ),
+                                )
+                                .child(self.render_status_bar(cx)),
+                        )
+                    }),
             )
             .children(self.render_sidebar_handle(cx))
             .when_some(self.new_command.as_ref(), |this, form| {
@@ -483,6 +551,8 @@ impl Render for Workspace {
                         .child(palette.view.clone()),
                 ))
             })
+            .children(self.render_quick_open(window))
+            .children(self.render_find_in_files(window))
             .when_some(self.run.as_ref(), |this, run| {
                 this.child(deferred(
                     anchored()
@@ -603,6 +673,124 @@ mod tests {
         cx.run_until_parked();
     }
 
+    /// A window as Jig opens with nothing to show.
+    fn open_empty(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys(key_bindings());
+        });
+        let handles = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Workspace::new(None, window, cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        handles
+    }
+
+    #[gpui_kit::test]
+    fn starts_on_the_home_page_and_new_file_leaves_it(cx: &mut TestAppContext) {
+        let (window, workspace) = open_empty(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            let this = workspace.read(cx);
+            assert!(this.home);
+            assert!(this.home_focus.is_focused(window));
+            window.press("secondary-k", cx);
+        });
+        assert!(
+            cx.update(|cx| workspace.read(cx).palette.is_none()),
+            "no commands without a file"
+        );
+        step(cx, window, |window, cx| window.press("secondary-n", cx));
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(!this.home);
+            assert_eq!(this.tabs.len(), 1, "the blank tab is the new file");
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_project_with_no_file_open_shows_its_page(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lib.rs"), ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, dir.path());
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.home, "no Untitled tab");
+            assert_eq!(this.tabs.len(), 1);
+        });
+        assert!(tree_focused(cx, window, &workspace));
+
+        // Open lib.rs from the tree, then close it.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        assert!(!cx.update(|cx| workspace.read(cx).home));
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+        step(cx, window, |window, cx| window.press("secondary-w", cx));
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.home, "back to the project's page");
+            assert_eq!(this.tabs.len(), 1);
+            assert!(this.document().path.is_none());
+        });
+        assert!(tree_focused(cx, window, &workspace));
+
+        // Cmd+S has nothing to save there.
+        step(cx, window, |window, cx| window.press("secondary-s", cx));
+        assert!(!cx.has_pending_prompt());
+    }
+
+    #[gpui_kit::test]
+    fn opened_folders_become_recent_projects(cx: &mut TestAppContext) {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (window, workspace) = open_empty(cx);
+        let ws = workspace.clone();
+        let (a, b) = (first.path().to_path_buf(), second.path().to_path_buf());
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                this.open_folder(&a, window, cx);
+                this.open_folder(&b, window, cx);
+            })
+        });
+        assert!(
+            cx.update(|cx| workspace.read(cx).home),
+            "on the project's page: no file is open yet"
+        );
+        assert_eq!(
+            cx.update(|cx| crate::recent::get(cx)),
+            [
+                second.path().canonicalize().unwrap(),
+                first.path().canonicalize().unwrap()
+            ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn language_settings_rehighlight_open_tabs(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.ts");
+        std::fs::write(&path, "const a = 1;\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        step(cx, window, |_, cx| {
+            assert_eq!(workspace.read(cx).editor().language(cx), "typescript");
+            crate::settings::update(cx, |s| s.languages.set_off("typescript", true));
+        });
+        step(cx, window, |_, cx| {
+            assert_eq!(workspace.read(cx).editor().language(cx), "text");
+            crate::settings::update(cx, |s| s.languages.set_off("typescript", false));
+        });
+        step(cx, window, |_, cx| {
+            assert_eq!(workspace.read(cx).editor().language(cx), "typescript");
+        });
+    }
+
     #[gpui_kit::test]
     fn edit_marks_dirty_and_save_writes_file(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -690,15 +878,22 @@ mod tests {
             assert_eq!(run.target, 0..9);
             assert_eq!(
                 run.preview.as_ref().unwrap().range,
-                0..21,
-                "the new code's range"
+                0..12,
+                "only the added doc line, not the untouched function"
             );
             assert_eq!(
                 run.bubble,
                 Bubble::Preview {
                     message: "Added a doc comment.".into(),
-                    removed: "fn a() {}".into()
-                }
+                    removed: String::new(),
+                    agent: false,
+                },
+                "nothing was removed"
+            );
+            assert_eq!(
+                this.editor().highlighted_ranges(cx),
+                vec![0..12],
+                "only the new line is highlighted"
             );
             assert_eq!(
                 this.editor().text(cx),
@@ -1041,7 +1236,6 @@ mod tests {
             window.press("tab", cx);
             window.input("Insert a REST controller at the cursor.", cx);
             window.press("secondary-2", cx);
-            window.press("secondary-e", cx);
             window.press("secondary-enter", cx);
         });
 
@@ -1051,7 +1245,7 @@ mod tests {
         assert_eq!(saved[0].name, "Create controller");
         assert_eq!(saved[0].prompt, "Insert a REST controller at the cursor.");
         assert_eq!(saved[0].scope, jig_commands::Scope::Cursor);
-        assert!(saved[0].explore, "Cmd+E turned exploring on");
+        assert!(!saved[0].agent, "quick unless chosen otherwise");
         assert!(
             preset_names(cx, &workspace).contains(&"Create controller".to_string()),
             "available in ⌘K at once"
@@ -1272,11 +1466,11 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn project_rules_go_with_every_command(cx: &mut TestAppContext) {
+    fn agents_md_goes_with_every_quick_command(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("JIG.md"), "Use thiserror for errors.\n").unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Use thiserror for errors.\n").unwrap();
         let path = dir.path().join("src/lib.rs");
         std::fs::write(&path, ORIGINAL).unwrap();
         let (window, workspace) = open(cx, &path);
@@ -1291,9 +1485,9 @@ mod tests {
             "{first}"
         );
 
-        // Edits to JIG.md apply to the next command without a restart.
+        // Edits to AGENTS.md apply to the next command without a restart.
         step(cx, window, |window, cx| window.press("escape", cx));
-        std::fs::write(dir.path().join("JIG.md"), "Prefer anyhow.\n").unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Prefer anyhow.\n").unwrap();
         run_preset(cx, window, &workspace, 0..9, "docs");
         let second = provider.0.lock().unwrap()[1].clone();
         assert!(second.contains("Prefer anyhow."), "{second}");
@@ -1372,6 +1566,190 @@ mod tests {
             ["src", "  ui", "  lib.rs", "README.md"],
             "an empty folder expands to nothing"
         );
+    }
+
+    fn quick_open_rows(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            let open = workspace.read(cx).quick_open.as_ref().unwrap();
+            open.view.read(cx).row_paths()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn go_to_file_finds_and_opens_files(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/ui")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();
+        std::fs::write(dir.path().join("src/ui/button.rs"), "").unwrap();
+        std::fs::write(dir.path().join("target/lib.rs"), "").unwrap();
+        std::fs::write(dir.path().join("README.md"), "# hi\n").unwrap();
+        let (window, workspace) = open(cx, dir.path());
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-p", cx);
+        });
+        assert_eq!(
+            quick_open_rows(cx, &workspace),
+            [".gitignore", "README.md", "src/lib.rs", "src/ui/button.rs"],
+            "ignored files are left out"
+        );
+
+        step(cx, window, |window, cx| window.input("lib", cx));
+        assert_eq!(quick_open_rows(cx, &workspace), ["src/lib.rs"]);
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert!(cx.update(|cx| workspace.read(cx).quick_open.is_none()));
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+
+        // Open a second file; the first is now the most recent other one.
+        step(cx, window, |window, cx| {
+            window.press("secondary-p", cx);
+            window.input("btn", cx);
+            window.press("enter", cx);
+        });
+        step(cx, window, |window, cx| window.press("secondary-p", cx));
+        assert_eq!(
+            quick_open_rows(cx, &workspace)[0],
+            "src/lib.rs",
+            "recent files come first, without the current one"
+        );
+        step(cx, window, |window, cx| window.press("escape", cx));
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(this.quick_open.is_none());
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/ui/button.rs")
+            );
+        });
+    }
+
+    fn find_results(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.update(|cx| {
+            let open = workspace.read(cx).find_in_files.as_ref().unwrap();
+            let view = open.view.read(cx);
+            assert!(!view.is_searching());
+            view.result_lines()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn find_in_files_searches_the_project_and_opens_the_match(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    let x = 1;\n    lib::alpha();\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("target/out.rs"), "alpha").unwrap();
+        let (window, workspace) = open(cx, dir.path());
+
+        // Into the editor on lib.rs, with `alpha` selected.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            // Typed and chosen before the project's first walk is done.
+            window.press("secondary-p", cx);
+            window.input("lib", cx);
+            window.press("enter", cx);
+        });
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(7..12, cx);
+        });
+
+        // ⇧⌘F from the editor, which GPUI Kit binds to Replace.
+        step(cx, window, |window, cx| {
+            window.press("secondary-shift-f", cx)
+        });
+        assert_eq!(
+            cx.update(|cx| workspace
+                .read(cx)
+                .find_in_files
+                .as_ref()
+                .unwrap()
+                .view
+                .read(cx)
+                .query(cx)),
+            "alpha",
+            "the selection is the query"
+        );
+        assert_eq!(
+            find_results(cx, &workspace),
+            [
+                "src/lib.rs:1: pub fn alpha() {}",
+                "src/main.rs:3: lib::alpha();"
+            ],
+            "ignored files aren't searched"
+        );
+
+        step(cx, window, |window, cx| {
+            window.press("down", cx);
+            window.press("enter", cx);
+        });
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(this.find_in_files.is_none());
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/main.rs")
+            );
+            let text = this.editor().text(cx);
+            assert_eq!(&text[this.editor().selection(cx)], "alpha");
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
+        });
+
+        // Reopening starts from the last search; options narrow it.
+        step(cx, window, |window, cx| {
+            window.press("secondary-shift-f", cx)
+        });
+        step(cx, window, |window, cx| window.input("let", cx));
+        assert_eq!(find_results(cx, &workspace), ["src/main.rs:2: let x = 1;"]);
+        step(cx, window, |window, cx| {
+            window.press("secondary-a", cx);
+            window.input("ALPHA", cx);
+            window.press("alt-c", cx);
+        });
+        assert!(find_results(cx, &workspace).is_empty(), "match case is on");
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert!(cx.update(|cx| workspace.read(cx).find_in_files.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn find_in_files_keeps_the_file_name_in_view(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let long = format!("let needle = \"{}\";\n", "x".repeat(400));
+        std::fs::write(dir.path().join("long_file_name.rs"), long).unwrap();
+        let (window, workspace) = open(cx, dir.path());
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-f", cx);
+        });
+        step(cx, window, |window, cx| window.input("needle", cx));
+        assert_eq!(find_results(cx, &workspace).len(), 1);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            let row = window.find(("find-in-files-row", 0usize)).bounds();
+            let file = window.find(("find-in-files-file", 0usize)).bounds();
+            let width = px(crate::find_in_files::WIDTH);
+            assert!(row.size.width < width, "the row {row:?} fits the panel");
+            assert!(
+                file.right() <= row.right() && file.size.width > px(0.),
+                "file name {file:?} outside its row {row:?}"
+            );
+        });
     }
 
     fn start_new(
@@ -1523,75 +1901,6 @@ mod tests {
             window.press("secondary-b", cx);
         });
         assert!(!cx.update(|cx| workspace.read(cx).sidebar_open));
-    }
-
-    /// Reads `src/models.rs` through the tools and writes code that uses it.
-    struct ExploringProvider(std::sync::Mutex<Vec<String>>);
-
-    impl Provider for ExploringProvider {
-        fn complete(&self, _: &str, _: &str) -> anyhow::Result<String> {
-            anyhow::bail!("expected the tool path")
-        }
-
-        fn complete_with_tools(
-            &self,
-            system: &str,
-            user: &str,
-            tools: &dyn jig_ai::ToolHost,
-            _: usize,
-            on_step: &dyn Fn(String),
-        ) -> anyhow::Result<String> {
-            assert!(system.contains("read-only tools"));
-            self.0.lock().unwrap().push(user.to_string());
-            let input = serde_json::json!({ "path": "src/models.rs" });
-            on_step(tools.describe("read_file", &input));
-            let model = tools.call("read_file", &input);
-            let secret = tools.call("read_file", &serde_json::json!({ "path": ".env" }));
-            assert!(
-                secret.starts_with("Error:"),
-                "secrets stay hidden: {secret}"
-            );
-            let replace = format!("// uses: {}", model.trim());
-            Ok(serde_json::json!({ "replace": replace, "message": "Used the model." }).to_string())
-        }
-    }
-
-    #[gpui_kit::test]
-    fn exploring_command_reads_the_project(cx: &mut TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/models.rs"), "pub struct User;\n").unwrap();
-        std::fs::write(dir.path().join(".env"), "KEY=secret").unwrap();
-        let path = dir.path().join("src/lib.rs");
-        std::fs::write(&path, ORIGINAL).unwrap();
-        let (window, workspace) = open(cx, &path);
-        let provider = Arc::new(ExploringProvider(Default::default()));
-        let provider_for_ws: Arc<dyn Provider> = provider.clone();
-        cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(provider_for_ws)));
-
-        step(cx, window, |window, cx| {
-            window.render_frame(cx);
-            workspace.update(cx, |this, cx| {
-                this.editor()
-                    .state()
-                    .update(cx, |s, cx| s.set_selected_range(0..9, cx))
-            });
-            window.press("secondary-k", cx);
-        });
-        step(cx, window, |window, cx| {
-            window.render_frame(cx);
-            window.press("secondary-e", cx);
-            window.input("simplify", cx);
-            window.press("enter", cx);
-        });
-
-        assert_eq!(text(cx, &workspace), "// uses: pub struct User;\n");
-        let user = provider.0.lock().unwrap()[0].clone();
-        assert!(
-            user.contains("File: src/lib.rs"),
-            "the path is project-relative: {user}"
-        );
     }
 
     fn tab_titles(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
@@ -1848,5 +2157,284 @@ mod tests {
         cx.simulate_prompt_answer("Cancel");
         cx.run_until_parked();
         assert_eq!(tab_titles(cx, &workspace), ["a.rs", "b.rs"]);
+    }
+
+    /// Wait in real time for the agent, letting the window handle what it
+    /// sends, until `done` holds.
+    fn wait_for_agent(
+        cx: &mut TestAppContext,
+        workspace: &Entity<Workspace>,
+        what: &str,
+        done: impl Fn(&Option<Bubble>) -> bool,
+    ) -> Option<Bubble> {
+        for _ in 0..240 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(500));
+            cx.run_until_parked();
+            let bubble = bubble(cx, workspace);
+            if done(&bubble) {
+                return bubble;
+            }
+        }
+        panic!("timed out waiting for {what}: {:?}", bubble(cx, workspace));
+    }
+
+    /// Talks to a real OpenCode: `cargo test -p jig-app agent_live -- --ignored`.
+    #[gpui_kit::test]
+    #[ignore = "needs OpenCode and network access"]
+    fn agent_live_edit_is_reviewed_then_written(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-k", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("tab", cx);
+            window.input("Add a one-line doc comment to add. Nothing else.", cx);
+            window.press("enter", cx);
+        });
+        let started = bubble(cx, &workspace);
+        assert!(
+            matches!(started, Some(Bubble::Running { .. })),
+            "{started:?}"
+        );
+
+        let preview = wait_for_agent(cx, &workspace, "an edit", |b| {
+            matches!(b, Some(Bubble::Preview { .. } | Bubble::Error(_)))
+        });
+        assert!(
+            matches!(preview, Some(Bubble::Preview { .. })),
+            "{preview:?}"
+        );
+        assert!(
+            text(cx, &workspace).contains("///"),
+            "the edit is shown in the buffer"
+        );
+        assert!(
+            !std::fs::read_to_string(&path).unwrap().contains("///"),
+            "nothing is written before the user accepts"
+        );
+
+        step(cx, window, |window, cx| window.press("enter", cx));
+        let done = wait_for_agent(cx, &workspace, "the agent to finish", |b| {
+            matches!(
+                b,
+                Some(Bubble::AgentDone(_) | Bubble::Error(_) | Bubble::Preview { .. })
+            )
+        });
+        assert!(matches!(done, Some(Bubble::AgentDone(_))), "{done:?}");
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(disk.contains("///"), "accepted edit is on disk: {disk}");
+        assert_eq!(text(cx, &workspace), disk);
+        assert!(!cx.update(|cx| workspace.read(cx).tab().dirty));
+        eprintln!("agent said: {done:?}");
+        cx.update(|_| {
+            if let Ok(server) = crate::agent::server() {
+                server.stop();
+            }
+        });
+    }
+
+    #[gpui_kit::test]
+    fn f12_goes_to_a_definition_in_another_file_then_to_usages(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    alpha();\n}\n",
+        )
+        .unwrap();
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &dir.path().join("src/main.rs"));
+
+        // On the call: to the function in lib.rs.
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(18..18, cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f12", cx);
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/lib.rs")
+            );
+            assert_eq!(this.editor().selection(cx), 7..12);
+        });
+
+        // On the declaration: its usages.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f12", cx);
+        });
+        let query = cx.update(|cx| {
+            let this = workspace.read(cx);
+            this.find_in_files
+                .as_ref()
+                .map(|open| open.view.read(cx).query(cx))
+        });
+        assert_eq!(query.as_deref(), Some("alpha"));
+    }
+
+    #[gpui_kit::test]
+    fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContext) {
+        use serde_json::json;
+
+        // The fake server runs on real threads.
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        // Not where a guess would go: only the server knows.
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    renamed();\n}\n",
+        )
+        .unwrap();
+        let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
+        let main = crate::lsp::file_uri(&dir.path().join("src/main.rs"));
+        let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
+        let (client, _seen) =
+            crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+                "textDocument/definition" => json!({"uri": lib, "range": at(0, 7, 12)}),
+                "textDocument/references" => json!([
+                    {"uri": lib, "range": at(0, 7, 12)},
+                    {"uri": main, "range": at(1, 4, 11)},
+                ]),
+                _ => serde_json::Value::Null,
+            });
+        let main_path = dir.path().join("src/main.rs");
+        let server = crate::lsp::server_for("rust").unwrap();
+        let root = crate::lsp::root_for(server, &main_path);
+        cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &main_path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(18..18, cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f12", cx);
+        });
+        // The server answers on its own thread.
+        let wait_for = |cx: &mut TestAppContext, done: &dyn Fn(&gpui_kit::App) -> bool| {
+            for _ in 0..200 {
+                cx.run_until_parked();
+                if cx.update(|cx| done(cx)) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        wait_for(cx, &|cx| {
+            workspace
+                .read(cx)
+                .document()
+                .path
+                .as_ref()
+                .unwrap()
+                .ends_with("src/lib.rs")
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/lib.rs")
+            );
+            assert_eq!(this.editor().selection(cx), 7..12);
+        });
+
+        // The server says this is the declaration: its references.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f12", cx);
+        });
+        wait_for(cx, &|cx| workspace.read(cx).find_in_files.is_some());
+        assert_eq!(
+            find_results(cx, &workspace),
+            [
+                "src/lib.rs:1: pub fn alpha() {}",
+                "src/main.rs:2: renamed();"
+            ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn cmd_click_goes_to_the_definition(cx: &mut TestAppContext) {
+        use serde_json::json;
+
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    renamed();\n}\n",
+        )
+        .unwrap();
+        let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
+        let (client, _seen) =
+            crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+                "textDocument/definition" => json!({"uri": lib, "range": {
+                    "start": {"line": 0, "character": 7}, "end": {"line": 0, "character": 12}}}),
+                _ => serde_json::Value::Null,
+            });
+        let main_path = dir.path().join("src/main.rs");
+        let server = crate::lsp::server_for("rust").unwrap();
+        let root = crate::lsp::root_for(server, &main_path);
+        cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &main_path);
+        step(cx, window, |window, cx| window.render_frame(cx));
+        let point = cx.update(|cx| {
+            let state = workspace.read(cx).editor().state().clone();
+            let bounds = state.read(cx).range_to_bounds(&(18..20)).unwrap();
+            bounds.center()
+        });
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.simulate_mouse_move(point, None, gpui_kit::Modifiers::secondary_key());
+        for _ in 0..100 {
+            vcx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.simulate_click(point, gpui_kit::Modifiers::secondary_key());
+        for _ in 0..50 {
+            vcx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert!(this.find_in_files.is_none(), "searched instead of jumping");
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/lib.rs")
+            );
+            assert_eq!(this.editor().selection(cx), 7..12);
+        });
     }
 }

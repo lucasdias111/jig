@@ -9,7 +9,20 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # The only GPUI dependency. Pinned exactly: GPUI distributions cannot be mixed.
-gpui-kit = { version = "=0.7.0", features = ["tree-sitter-rust"] }
+# Each grammar is a feature; JSON comes with any of them. Keep in step with
+# `jig-app`'s `languages::BUNDLED`.
+gpui-kit = { version = "=0.7.0", features = [
+    "tree-sitter-rust",
+    "tree-sitter-typescript",
+    "tree-sitter-tsx",
+    "tree-sitter-javascript",
+    "tree-sitter-java",
+    "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-toml",
+    "tree-sitter-markdown",
+    "tree-sitter-markdown-inline",
+] }
 jig-editor = { path = "crates/jig-editor" }
 jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }

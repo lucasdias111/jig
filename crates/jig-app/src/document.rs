@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
+use crate::languages::language_for;
+use crate::settings::LanguageSettings;
+
 #[derive(Debug, Default)]
 pub struct Document {
     /// `None` until the buffer is first saved.
@@ -43,16 +46,29 @@ impl Document {
             .unwrap_or_else(|| "Untitled".into())
     }
 
-    pub fn language(&self) -> &'static str {
-        self.path.as_deref().map_or("text", language_for)
+    /// The language to highlight the file with; see [`language_for`].
+    pub fn language(&self, settings: &LanguageSettings) -> &'static str {
+        self.path
+            .as_deref()
+            .map_or("text", |path| language_for(path, settings))
     }
-}
 
-/// The tree-sitter language name for a file. Only Rust is highlighted in v1.
-pub fn language_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("rs") => "rust",
-        _ => "text",
+    /// The file's line endings as last saved: `"CRLF"` if its first line
+    /// ends that way, otherwise `"LF"`.
+    pub fn line_ending(&self) -> &'static str {
+        match self.saved_text.find('\n') {
+            Some(ix) if self.saved_text[..ix].ends_with('\r') => "CRLF",
+            _ => "LF",
+        }
+    }
+
+    /// Files are only ever read as UTF-8; a byte order mark is kept.
+    pub fn encoding(&self) -> &'static str {
+        if self.saved_text.starts_with('\u{feff}') {
+            "UTF-8 with BOM"
+        } else {
+            "UTF-8"
+        }
     }
 }
 
@@ -90,13 +106,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn language_from_extension() {
-        assert_eq!(language_for(Path::new("src/main.rs")), "rust");
-        assert_eq!(language_for(Path::new("notes.md")), "text");
-        assert_eq!(language_for(Path::new("Makefile")), "text");
-    }
-
-    #[test]
     fn save_round_trip_and_dirty_tracking() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.rs");
@@ -104,7 +113,7 @@ mod tests {
 
         let mut doc = Document::open(&path).unwrap();
         assert_eq!(doc.title(), "a.rs");
-        assert_eq!(doc.language(), "rust");
+        assert_eq!(doc.language(&LanguageSettings::default()), "rust");
         assert!(!doc.is_dirty("fn a() {}\n"));
         assert!(doc.is_dirty("fn b() {}\n"));
 
@@ -135,6 +144,19 @@ mod tests {
     fn untitled_document() {
         let doc = Document::default();
         assert_eq!(doc.title(), "Untitled");
-        assert_eq!(doc.language(), "text");
+        assert_eq!(doc.language(&LanguageSettings::default()), "text");
+        assert_eq!(doc.line_ending(), "LF");
+        assert_eq!(doc.encoding(), "UTF-8");
+    }
+
+    #[test]
+    fn line_endings_and_bom() {
+        let doc = |text: &str| Document {
+            path: None,
+            saved_text: text.into(),
+        };
+        assert_eq!(doc("a\r\nb\r\n").line_ending(), "CRLF");
+        assert_eq!(doc("a\nb\r\n").line_ending(), "LF");
+        assert_eq!(doc("\u{feff}a\n").encoding(), "UTF-8 with BOM");
     }
 }

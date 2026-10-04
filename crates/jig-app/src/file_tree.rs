@@ -25,6 +25,7 @@ const FILE_PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 const FOLDER_PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>"#;
 const FOLDER: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.88a2 2 0 0 1 1.42.59L12.2 6H18.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>"#;
 const FILE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.75" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>"#;
+const SEARCH: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>"#;
 const CHEVRON_DOWN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
 actions!(
@@ -603,6 +604,13 @@ impl Render for FileTree {
             .unwrap_or_default();
         let naming_at = self.naming_index();
         let rows = self.model.rows().len() + usize::from(naming_at.is_some());
+        let go_to_file = header_button(
+            "go-to-file",
+            SEARCH,
+            "Go to File (⌘P)",
+            cx,
+            |_, window, cx| window.dispatch_action(Box::new(crate::workspace::GoToFile), cx),
+        );
         let new_file = header_button("new-file", FILE_PLUS, "New File", cx, |this, window, cx| {
             this.start_new(NewEntry::File, window, cx)
         });
@@ -620,6 +628,7 @@ impl Render for FileTree {
                 "file-tree-rows",
                 rows,
                 cx.processor(move |this, range: Range<usize>, _, cx| {
+                    let languages = crate::settings::get(cx).languages;
                     let theme = cx.theme();
                     range
                         .map(|list_ix| {
@@ -706,13 +715,41 @@ impl Render for FileTree {
                                         .justify_center()
                                         .children(chevron),
                                 )
-                                .child(
-                                    Icon::default()
-                                        .data(if row.is_dir { FOLDER } else { FILE })
+                                .child({
+                                    let logo = (!row.is_dir)
+                                        .then(|| {
+                                            crate::file_icons::for_path(
+                                                &row.path,
+                                                &languages,
+                                                theme.is_dark(),
+                                            )
+                                        })
+                                        .flatten();
+                                    let (data, icon_color) = match logo {
+                                        // The selection's fill keeps every icon white.
+                                        Some((svg, _)) if highlighted || row.ignored => {
+                                            (svg, icon_color)
+                                        }
+                                        Some((svg, color)) => (svg, color),
+                                        None if row.is_dir => (FOLDER, icon_color),
+                                        None => (FILE, icon_color),
+                                    };
+                                    // Logos fill their square, so they're drawn a
+                                    // little smaller than the outlined file.
+                                    let size = if logo.is_some() { 13. } else { 15. };
+                                    div()
                                         .size(px(15.))
                                         .flex_none()
-                                        .text_color(icon_color),
-                                )
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::default()
+                                                .data(data)
+                                                .size(px(size))
+                                                .text_color(icon_color),
+                                        )
+                                })
                                 .child(div().pl_0p5().truncate().child(row.name.clone()))
                                 // Select on press, as Finder does. Pressing focuses
                                 // the tree, which would otherwise light up the
@@ -769,6 +806,7 @@ impl Render for FileTree {
                             .truncate()
                             .child(root_name),
                     )
+                    .child(go_to_file)
                     .child(new_file)
                     .child(new_folder),
             )
