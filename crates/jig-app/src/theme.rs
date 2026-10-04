@@ -88,9 +88,17 @@ pub const EDITABLE: &[Editable] = &[
     editable("background", "Background", Section::Interface),
     editable("foreground", "Text", Section::Interface),
     editable("muted.foreground", "Secondary text", Section::Interface),
-    editable("primary.background", "Accent and Quick lane", Section::Interface),
+    editable(
+        "primary.background",
+        "Accent and Quick lane",
+        Section::Interface,
+    ),
     editable("info.background", "Agent lane", Section::Interface),
-    editable("success.background", "Success, Run and Debug", Section::Interface),
+    editable(
+        "success.background",
+        "Success, Run and Debug",
+        Section::Interface,
+    ),
     editable("sidebar.background", "Sidebar", Section::Interface),
     editable(
         "sidebar.primary.background",
