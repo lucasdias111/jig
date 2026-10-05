@@ -207,6 +207,15 @@ impl InputBaseState<EditorMode> {
     }
 
     pub fn hover_popover(&self) -> Option<&HoverPopoverState> {
+        if self.extras.lsp.own_hover_popover {
+            return None;
+        }
+        self.extras.hover_popover.as_ref()
+    }
+
+    /// Jig patch: the hover for the symbol under the pointer, whoever draws
+    /// it.
+    pub fn hovered_symbol(&self) -> Option<&HoverPopoverState> {
         self.extras.hover_popover.as_ref()
     }
 

@@ -40,6 +40,9 @@ pub(super) struct Tab {
     pub(super) marks: super::breakpoints::Marks,
     /// What the language server reports about the file.
     pub(super) problems: super::diagnostics::Problems,
+    /// What the language server says about the name under the pointer and
+    /// the call being typed.
+    pub(super) hover: Entity<super::hover::CodeHover>,
     _events: Subscription,
 }
 
@@ -127,6 +130,7 @@ impl Workspace {
         let marks = self.install_marks(&state, &document, cx);
         self.install_git(&state, &document, cx);
         let problems = super::diagnostics::Problems::new(&state, document.path.as_deref(), cx);
+        let hover = super::hover::install(&state, &problems.hover, cx);
         let lsp = document.path.as_deref().and_then(|path| {
             let language = document.language(&self.settings.languages);
             super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
@@ -142,6 +146,7 @@ impl Workspace {
             snippet: None,
             marks,
             problems,
+            hover,
             _events: events,
         }
     }

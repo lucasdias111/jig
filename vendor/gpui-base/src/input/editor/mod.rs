@@ -108,6 +108,12 @@ impl InputModeKind for EditorMode {
         cx: &mut gpui::Context<InputBaseState<Self>>,
     ) {
         state.handle_completion_trigger(range, text, window, cx);
+        // Jig patch: typing puts the hover away, and the host hears what
+        // was typed.
+        state.clear_hover_state(cx);
+        if let Some(on_typed) = state.extras.lsp.on_typed.clone() {
+            on_typed(text, window, cx);
+        }
     }
 
     fn clear_inline_completion(

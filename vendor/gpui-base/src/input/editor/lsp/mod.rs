@@ -33,6 +33,10 @@ pub use semantic_tokens::*;
 pub type ShowDocumentHandler =
     Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut Window, &mut App) -> bool>;
 
+/// Jig patch: told about text typed into the editor, after it is in.
+/// Called while the editor is updating, so it mustn't touch the editor.
+pub type TypedHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
 /// LSP ServerCapabilities
 ///
 /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#serverCapabilities
@@ -57,6 +61,14 @@ pub struct Lsp {
 
     /// Display options for the completion popover.
     pub completion_menu: CompletionMenuOptions,
+    /// Jig patch: how long the pointer rests on a symbol before the hover
+    /// provider is asked.
+    pub hover_delay: std::time::Duration,
+    /// Jig patch: the host draws the hover itself, from
+    /// [`InputBaseState::hovered_symbol`], instead of the default popover.
+    pub own_hover_popover: bool,
+    /// Jig patch: see [`TypedHandler`].
+    pub on_typed: Option<TypedHandler>,
 
     pub(crate) document_colors: Vec<(lsp_types::Range, Hsla)>,
     /// Cached semantic tokens as absolute position ranges + theme token-type
@@ -78,6 +90,9 @@ impl Default for Lsp {
             definition_provider: None,
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
+            hover_delay: std::time::Duration::from_millis(150),
+            own_hover_popover: false,
+            on_typed: None,
             semantic_tokens_provider: None,
             show_document: None,
             document_colors: vec![],

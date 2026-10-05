@@ -259,6 +259,15 @@ pub const ALL: &[Shortcut] = &[
         ANYWHERE,
         PreviousProblem
     ),
+    // ⌘I as in VS Code's ⌘K ⌘I, without the ⌘K that runs jigs here.
+    shortcut!(
+        "show_hover",
+        "Show hover",
+        Navigation,
+        ["secondary-i"],
+        IN_CODE,
+        ShowHover
+    ),
     shortcut!(
         "next_tab",
         "Next tab",

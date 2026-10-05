@@ -343,6 +343,15 @@ fn connect(
                         "contextSupport": true,
                     },
                     "references": {},
+                    "hover": {"contentFormat": ["markdown", "plaintext"]},
+                    "signatureHelp": {
+                        "signatureInformation": {
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "parameterInformation": {"labelOffsetSupport": true},
+                            "activeParameterSupport": true,
+                        },
+                        "contextSupport": true,
+                    },
                 },
                 "workspace": {"workspaceFolders": true, "configuration": true},
                 "window": {"workDoneProgress": false},

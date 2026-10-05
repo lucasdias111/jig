@@ -17,6 +17,7 @@ mod find_panel;
 mod fuzzy;
 mod git;
 mod git_panel;
+mod hover;
 mod indentation;
 mod languages;
 mod lines;

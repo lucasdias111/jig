@@ -40,5 +40,8 @@ anyhow = "1"
 # - Diagnostics move with edits instead of being cleared, can be set from
 #   byte ranges, and Jig draws the hovered one in its own panel
 #   (input/editor/diagnostics.rs, input/editor/mod.rs, input/base/state.rs).
+# - Jig draws the hover itself, after a delay it sets, and hears what is
+#   typed, which also puts the hover away (input/editor/lsp/mod.rs, hover.rs,
+#   overlay.rs, input/editor/mod.rs).
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }

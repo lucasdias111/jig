@@ -420,7 +420,7 @@ impl Workspace {
 
     /// Whether the review keys belong to something else: a modal, or the
     /// find panel, where Enter goes to the next match and Esc closes it.
-    fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
+    pub(super) fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
         self.modal_open() || self.find_panel_focused(window, cx)
     }
 
@@ -557,6 +557,7 @@ impl Workspace {
             || self.stop_agent_turn(window, cx)
             || self.close_hunk_popup(cx)
             || self.close_find_panel(cx)
+            || self.close_code_hover(cx)
             || self.close_problem(cx)
         {
             cx.stop_propagation();

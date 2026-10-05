@@ -316,6 +316,48 @@ fn severity_color(severity: DiagnosticSeverity, cx: &App) -> Hsla {
     }
 }
 
+/// A problem's icon, message and origin, as its panel and the hover show
+/// it.
+pub(super) fn problem_row(entry: &DiagnosticEntry, cx: &App) -> Div {
+    let theme = cx.theme();
+    let color = severity_color(entry.severity, cx);
+    let icon = match entry.severity {
+        DiagnosticSeverity::Error => ERROR_ICON,
+        DiagnosticSeverity::Warning => WARNING_ICON,
+        DiagnosticSeverity::Info | DiagnosticSeverity::Hint => INFO_ICON,
+    };
+    let origin: Vec<SharedString> = [entry.source.clone(), entry.code.clone()]
+        .into_iter()
+        .flatten()
+        .collect();
+    div()
+        .flex()
+        .items_start()
+        .gap_2()
+        .child(
+            Icon::default()
+                .data(icon)
+                .size(px(13.))
+                .flex_none()
+                .mt(px(2.))
+                .text_color(color),
+        )
+        .child(
+            v_flex()
+                .min_w_0()
+                .gap_0p5()
+                .child(entry.message.clone())
+                .when(!origin.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.muted_foreground)
+                            .child(origin.join(" ")),
+                    )
+                }),
+        )
+}
+
 /// The message of the problem under the pointer, or the one the keys went
 /// to, in a small panel below it. A view of its own, so hovering repaints
 /// only this.
@@ -341,7 +383,7 @@ impl ProblemHover {
         cx.notify();
     }
 
-    fn unpin(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn unpin(&mut self, cx: &mut Context<Self>) -> bool {
         let pinned = self.pinned.take().is_some();
         if pinned {
             cx.notify();
@@ -374,6 +416,10 @@ impl Render for ProblemHover {
             return Empty.into_any_element();
         };
         let state = self.editor.read(cx);
+        // The hover shows it, above what the server says about the symbol.
+        if state.hovered_symbol().is_some() {
+            return Empty.into_any_element();
+        }
         let start = entry.range.start;
         // Below the line it starts on, or failing that (scrolled off), the
         // one it ends on.
@@ -383,49 +429,14 @@ impl Render for ProblemHover {
         else {
             return Empty.into_any_element();
         };
-        let theme = cx.theme();
-        let color = severity_color(entry.severity, cx);
-        let icon = match entry.severity {
-            DiagnosticSeverity::Error => ERROR_ICON,
-            DiagnosticSeverity::Warning => WARNING_ICON,
-            DiagnosticSeverity::Info | DiagnosticSeverity::Hint => INFO_ICON,
-        };
-        let origin: Vec<SharedString> = [entry.source.clone(), entry.code.clone()]
-            .into_iter()
-            .flatten()
-            .collect();
         let panel = jig_commands::surface::panel(cx)
             .id("problem")
             .debug_selector(|| "problem".into())
             .max_w(px(PANEL_MAX_WIDTH))
             .px_2p5()
             .py_1p5()
-            .flex()
-            .items_start()
-            .gap_2()
             .text_size(px(12.5))
-            .child(
-                Icon::default()
-                    .data(icon)
-                    .size(px(13.))
-                    .flex_none()
-                    .mt(px(2.))
-                    .text_color(color),
-            )
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_0p5()
-                    .child(entry.message.clone())
-                    .when(!origin.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme.muted_foreground)
-                                .child(origin.join(" ")),
-                        )
-                    }),
-            );
+            .child(problem_row(&entry, cx));
         deferred(
             anchored()
                 .position(point(line.left() - px(10.), line.bottom() + px(4.)))
