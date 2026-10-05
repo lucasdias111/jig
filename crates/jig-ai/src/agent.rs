@@ -215,6 +215,12 @@ pub fn prompt(request: &PromptRequest) -> String {
     if let Some(note) = &request.comment {
         out.push_str(&format!("\nNote: {note}"));
     }
+    if !request.diagnostics.is_empty() {
+        out.push_str("\nThe language server reports:");
+        for diagnostic in &request.diagnostics {
+            out.push_str(&format!("\n- {}", diagnostic.describe()));
+        }
+    }
     let file = request.file_name.as_deref().unwrap_or("an unsaved file");
     let line = |offset: usize| request.text[..offset].matches('\n').count() + 1;
     let range = request.target.clone();
@@ -678,6 +684,7 @@ mod tests {
             file_name: Some("src/lib.rs".into()),
             target: 10..20,
             text,
+            diagnostics: Vec::new(),
         };
         assert_eq!(
             prompt(&request),
@@ -689,6 +696,17 @@ mod tests {
             ..request
         };
         assert!(prompt(&at_cursor).ends_with("cursor on line 3. New code goes there."));
+        let with_problems = PromptRequest {
+            diagnostics: vec![crate::prompt::Diagnostic {
+                line: 3,
+                severity: "error".into(),
+                message: "expected `;`".into(),
+            }],
+            ..at_cursor
+        };
+        assert!(prompt(&with_problems).starts_with(
+            "Add docs\nThe language server reports:\n- line 3, error: expected `;`\n\n"
+        ));
     }
 
     #[test]

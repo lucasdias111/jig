@@ -242,6 +242,23 @@ pub const ALL: &[Shortcut] = &[
         IN_INPUT,
         FindReferences
     ),
+    // F8 alone is the debugger's step over.
+    shortcut!(
+        "next_problem",
+        "Next problem",
+        Navigation,
+        ["alt-f8"],
+        ANYWHERE,
+        NextProblem
+    ),
+    shortcut!(
+        "previous_problem",
+        "Previous problem",
+        Navigation,
+        ["alt-shift-f8"],
+        ANYWHERE,
+        PreviousProblem
+    ),
     shortcut!(
         "next_tab",
         "Next tab",

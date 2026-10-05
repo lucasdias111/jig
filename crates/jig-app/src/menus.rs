@@ -8,10 +8,10 @@ use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
     DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, Find,
     FindAndReplace, FindInFiles, FindReferences, FocusFileTree, GoToFile, GoToLine, MoveLineDown,
-    MoveLineUp, NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, RenameSymbol, ResetZoom,
-    Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
-    SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
-    ToggleSidebar, ZoomIn, ZoomOut,
+    MoveLineUp, NewFile, NextProblem, NextTab, Open, OpenCommand, PreviousProblem, PreviousTab,
+    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto,
+    StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment,
+    ToggleRunPanel, ToggleSidebar, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -93,6 +93,8 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Find and Replace…", FindAndReplace),
                 MenuItem::action("Find in Files…", FindInFiles),
                 MenuItem::action("Find All References", FindReferences),
+                MenuItem::action("Next Problem", NextProblem),
+                MenuItem::action("Previous Problem", PreviousProblem),
                 MenuItem::action("Rename Symbol…", RenameSymbol),
                 MenuItem::action("Toggle Line Comment", ToggleLineComment),
                 MenuItem::separator(),

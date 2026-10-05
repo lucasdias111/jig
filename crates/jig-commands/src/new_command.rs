@@ -117,6 +117,7 @@ impl NewCommandForm {
                 prompt,
                 comment: self.comment,
                 agent: self.agent,
+                diagnostics: false,
                 comment_hint: (asks && !hint.is_empty()).then_some(hint),
             }));
         }

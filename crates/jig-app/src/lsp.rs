@@ -7,6 +7,7 @@
 //! Cmd+click falls back to [`crate::definitions`].
 
 mod client;
+pub mod diagnostics;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -133,6 +134,9 @@ pub fn root_for(server: &Server, file: &Path) -> PathBuf {
 #[derive(Default)]
 pub struct Registry {
     clients: HashMap<(&'static str, PathBuf), Arc<Client>>,
+    /// Where every server's problems go, on their way to
+    /// [`diagnostics::Diagnostics`].
+    diagnostics: Option<futures::channel::mpsc::UnboundedSender<diagnostics::Published>>,
 }
 
 impl Global for Registry {}
@@ -140,9 +144,30 @@ impl Global for Registry {}
 /// Use `client` for `server`'s files under `root`, for tests.
 #[cfg(test)]
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
+    client.on_diagnostics(diagnostics_sink(cx));
     cx.default_global::<Registry>()
         .clients
         .insert((server, root), client);
+}
+
+/// The channel servers' threads send problems down, read on the main thread
+/// into [`diagnostics::Diagnostics`].
+fn diagnostics_sink(
+    cx: &mut App,
+) -> futures::channel::mpsc::UnboundedSender<diagnostics::Published> {
+    if let Some(sink) = &cx.default_global::<Registry>().diagnostics {
+        return sink.clone();
+    }
+    let (sink, mut reports) = futures::channel::mpsc::unbounded();
+    cx.spawn(async move |cx| {
+        use futures::StreamExt as _;
+        while let Some(published) = reports.next().await {
+            cx.update(|cx| diagnostics::publish(published, cx));
+        }
+    })
+    .detach();
+    cx.default_global::<Registry>().diagnostics = Some(sink.clone());
+    sink
 }
 
 /// The client for `file`, starting its server if it isn't running. `None`
@@ -169,6 +194,7 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
         command_for(server, &command_root)
     });
     registry.clients.insert(key, client.clone());
+    client.on_diagnostics(diagnostics_sink(cx));
     (!client.is_dead()).then_some(client)
 }
 

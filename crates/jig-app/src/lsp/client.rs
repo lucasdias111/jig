@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use futures::channel::oneshot;
+use futures::channel::{mpsc as channel, oneshot};
 use serde_json::{Value, json};
 
 use super::Encoding;
+use super::diagnostics::Published;
 
 /// What a request answers with: the result, or the error in words.
 pub type Response = Result<Value, String>;
@@ -38,6 +39,8 @@ struct State {
     init_options: Value,
     /// The server said it has loaded the project, as jdtls does.
     service_ready: bool,
+    /// Where the problems it reports go.
+    diagnostics: Option<channel::UnboundedSender<Published>>,
 }
 
 struct Document {
@@ -119,6 +122,7 @@ impl Client {
                 completion_triggers: Vec::new(),
                 init_options,
                 service_ready: false,
+                diagnostics: None,
             })),
             // 0 is `initialize`.
             next_id: AtomicI64::new(1),
@@ -133,6 +137,11 @@ impl Client {
     /// Whether the server has said it loaded the project. Only some say so.
     pub fn is_service_ready(&self) -> bool {
         self.state.lock().unwrap().service_ready
+    }
+
+    /// Send the problems the server reports to `sink`.
+    pub fn on_diagnostics(&self, sink: channel::UnboundedSender<Published>) {
+        self.state.lock().unwrap().diagnostics = Some(sink);
     }
 
     pub fn is_dead(&self) -> bool {
@@ -419,11 +428,35 @@ fn connect(
             (None, Some("language/status")) if message["params"]["type"] == "ServiceReady" => {
                 state.lock().unwrap().service_ready = true;
             }
-            // Other notifications: diagnostics, progress, logs. Not used yet.
+            (None, Some("textDocument/publishDiagnostics")) => {
+                let state = state.lock().unwrap();
+                if let Some(published) =
+                    super::diagnostics::parse(&message["params"], state.encoding)
+                    && let Some(sink) = &state.diagnostics
+                    && !is_stale(&state, &published)
+                {
+                    let _ = sink.unbounded_send(published);
+                }
+            }
+            // Other notifications: progress, logs. Not used.
             _ => {}
         }
     }
     die(state);
+}
+
+/// Whether `published` is about text that has changed since: the server
+/// sends again for the newer text, and these would land in the wrong
+/// places. Reports without a version are always taken.
+fn is_stale(state: &State, published: &Published) -> bool {
+    let Some(version) = published.version else {
+        return false;
+    };
+    state
+        .documents
+        .iter()
+        .find(|(uri, _)| super::diagnostics::uri_key(uri) == published.key)
+        .is_some_and(|(_, document)| document.version > version)
 }
 
 fn hash(text: &str) -> u64 {
@@ -564,6 +597,79 @@ pub mod tests {
                 "ping"
             ]
         );
+    }
+
+    /// Answers `test/publish` by first sending its params as a
+    /// `publishDiagnostics`, so they've been read once the answer is.
+    fn publishing_server() -> Arc<Client> {
+        let (client_reader, mut server_writer) = std::io::pipe().unwrap();
+        let (server_reader, client_writer) = std::io::pipe().unwrap();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(server_reader);
+            let mut write = |message: Value| {
+                let body = message.to_string();
+                let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+                server_writer.write_all(framed.as_bytes())
+            };
+            while let Some(message) = read_message(&mut reader) {
+                let Some(id) = message.get("id") else {
+                    continue;
+                };
+                if message["method"] == "test/publish" {
+                    let notification = json!({
+                        "jsonrpc": "2.0",
+                        "method": "textDocument/publishDiagnostics",
+                        "params": message["params"],
+                    });
+                    if write(notification).is_err() {
+                        break;
+                    }
+                }
+                let result = if message["method"] == "initialize" {
+                    json!({"capabilities": {}})
+                } else {
+                    Value::Null
+                };
+                if write(json!({"jsonrpc": "2.0", "id": id, "result": result})).is_err() {
+                    break;
+                }
+            }
+        });
+        Client::connect(PathBuf::from("/project"), client_reader, client_writer)
+    }
+
+    #[test]
+    fn reports_diagnostics_and_drops_stale_ones() {
+        let client = publishing_server();
+        let (sink, mut reports) = channel::unbounded();
+        client.on_diagnostics(sink);
+        let uri = "file:///project/a.rs";
+        let problem = json!([{
+            "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 4}},
+            "severity": 1,
+            "message": "expected `;`",
+        }]);
+        let publish = |params: Value| {
+            futures::executor::block_on(client.request("test/publish", params))
+                .unwrap()
+                .unwrap();
+        };
+        client.open(uri, "rust", "fn a");
+        publish(json!({"uri": uri, "version": 0, "diagnostics": problem}));
+        let published = reports.try_recv().unwrap();
+        assert_eq!(published.key, super::super::diagnostics::uri_key(uri));
+        assert_eq!(published.items[0].message, "expected `;`");
+        assert_eq!(published.encoding, Encoding::Utf16);
+
+        // About text from before the latest change: dropped.
+        client.change(uri, "fn a()");
+        publish(json!({"uri": uri, "version": 0, "diagnostics": problem}));
+        assert!(reports.try_recv().is_err(), "nothing waiting");
+        // Without a version, or for the current one: taken. Empty clears.
+        publish(json!({"uri": uri, "diagnostics": []}));
+        assert!(reports.try_recv().unwrap().items.is_empty());
+        publish(json!({"uri": uri, "version": 1, "diagnostics": problem}));
+        assert_eq!(reports.try_recv().unwrap().version, Some(1));
     }
 
     #[test]

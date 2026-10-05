@@ -90,6 +90,10 @@ pub struct Preset {
     /// whole project (each edit still needs the user's accept).
     #[serde(default)]
     pub agent: bool,
+    /// Send the problems the language server reports on the target's lines
+    /// along with the prompt, for jigs that fix them.
+    #[serde(default)]
+    pub diagnostics: bool,
 }
 
 /// What the user chose to run from the command input.
@@ -103,6 +107,8 @@ pub struct Invocation {
     pub comment: Option<String>,
     /// Run on the coding agent instead of a single model call.
     pub agent: bool,
+    /// Send the language server's problems on the target's lines.
+    pub diagnostics: bool,
 }
 
 impl Invocation {
@@ -113,6 +119,7 @@ impl Invocation {
             scope: preset.scope,
             comment: None,
             agent: preset.agent,
+            diagnostics: preset.diagnostics,
         }
     }
 
@@ -140,6 +147,7 @@ impl Invocation {
         Self {
             comment: None,
             agent: false,
+            diagnostics: false,
             name: None,
             instruction: text.trim().to_string(),
             scope,
@@ -219,6 +227,8 @@ pub const USER_FILE_HEADER: &str = "\
 # that is sent along with the prompt. comment_hint: placeholder for it.
 # agent = true: hand the jig to the coding agent (OpenCode), which may
 # read and edit the whole project; you review every edit.
+# diagnostics = true: send the problems the language server reports on
+# the lines it works on, as the built-in Fix does.
 #
 # [[jig]]
 # name = \"Create controller\"
@@ -278,6 +288,9 @@ pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
     }
     if preset.agent {
         entry.push_str("agent = true\n");
+    }
+    if preset.diagnostics {
+        entry.push_str("diagnostics = true\n");
     }
     if let Some(hint) = preset
         .comment_hint
@@ -371,6 +384,11 @@ mod tests {
                 .any(|p| p.name == "Add docs" && p.scope == Scope::Selection)
         );
         assert!(presets.iter().any(|p| p.scope == Scope::Cursor));
+        // Fix sends the language server's problems; the others don't.
+        let fix = presets.iter().find(|p| p.name == "Fix").unwrap();
+        assert!(fix.diagnostics);
+        assert!(Invocation::preset(fix).diagnostics);
+        assert_eq!(presets.iter().filter(|p| p.diagnostics).count(), 1);
     }
 
     #[test]
@@ -558,6 +576,7 @@ mod tests {
             comment: CommentMode::Optional,
             comment_hint: Some("Entity".into()),
             agent: true,
+            diagnostics: true,
             ..Default::default()
         };
         add_user_preset(&path, &preset).unwrap();

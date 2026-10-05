@@ -46,6 +46,7 @@ pub fn check(provider: &dyn Provider) -> anyhow::Result<Reply> {
         file_name: Some("area.rs".into()),
         text: text.into(),
         target: 0..text.len(),
+        diagnostics: Vec::new(),
     };
     run(provider, &request)
 }

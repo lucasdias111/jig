@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         target,
         comment: None,
         project_rules: None,
+        diagnostics: Vec::new(),
     };
     let started = std::time::Instant::now();
     let reply = if std::env::var_os("JIG_RAW").is_some() {

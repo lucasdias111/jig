@@ -804,6 +804,7 @@ mod tests {
                 Invocation {
                     comment: None,
                     agent: false,
+                    diagnostics: false,
                     name: None,
                     instruction: "add".into(),
                     scope: Scope::Cursor

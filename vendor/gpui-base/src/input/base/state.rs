@@ -442,6 +442,9 @@ pub struct InputBaseState<M: InputModeKind> {
 
     /// Diagnostic currently requested by pointer hover; applications render it.
     pub(super) diagnostic_popover: Option<Rc<crate::input::DiagnosticEntry>>,
+    /// Jig patch: the application draws the hovered diagnostic itself, so
+    /// [`Self::diagnostic_popover`] reports none to the default popover.
+    pub(super) own_diagnostic_popover: bool,
 
     context_menu_handler: Option<
         Rc<dyn Fn(NativeMenu, InputContextMenuCapabilities, Point<Pixels>, &mut Window, &mut App)>,
@@ -565,7 +568,21 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub fn diagnostic_popover(&self) -> Option<Rc<crate::input::DiagnosticEntry>> {
+        if self.own_diagnostic_popover {
+            return None;
+        }
         self.diagnostic_popover.clone()
+    }
+
+    /// Jig patch: the diagnostic under the pointer, whoever draws it.
+    pub fn hovered_diagnostic(&self) -> Option<Rc<crate::input::DiagnosticEntry>> {
+        self.diagnostic_popover.clone()
+    }
+
+    /// Jig patch: draw the hovered diagnostic yourself, from
+    /// [`Self::hovered_diagnostic`], instead of in the default popover.
+    pub fn set_own_diagnostic_popover(&mut self, own: bool) {
+        self.own_diagnostic_popover = own;
     }
 
     pub fn presentation(&self) -> InputPresentation {
@@ -759,6 +776,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_style: InputEditorStyle::default(),
             projected_editor_style: InputEditorStyle::default(),
             diagnostic_popover: None,
+            own_diagnostic_popover: false,
             context_menu_handler: None,
             pending_context_menu: None,
             enable_context_menu: true,
@@ -3788,7 +3806,8 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // One observable update per batch instead of one per edit.
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
-            diagnostics.reset(&self.text)
+            // Jig patch: kept, moved by `adjust_annotations`, not cleared.
+            diagnostics.set_text(&self.text)
         }
         M::refresh_language_features(self, window, cx);
         self.update_search(cx);
@@ -4135,7 +4154,8 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             );
         }
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
-            diagnostics.reset(&self.text)
+            // Jig patch: kept, moved by `adjust_annotations`, not cleared.
+            diagnostics.set_text(&self.text)
         }
         // Adjust folds before updating wrap map: remove overlapping folds and shift others
         self.display_map
@@ -4253,7 +4273,8 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
 
         M::adjust_annotations(self, &range, new_text.len());
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
-            diagnostics.reset(&self.text)
+            // Jig patch: kept, moved by `adjust_annotations`, not cleared.
+            diagnostics.set_text(&self.text)
         }
         // Adjust folds before updating wrap map: remove overlapping folds and shift others
         self.display_map

@@ -164,7 +164,9 @@ impl sum_tree::Summary for DiagnosticSummary {
 
     fn add_summary(&mut self, other: &Self, _: Self::Context<'_>) {
         self.start = other.start;
-        self.end = other.end;
+        // Jig patch: the furthest end so far, not the last one, so seeking
+        // never skips a long diagnostic followed by shorter ones.
+        self.end = self.end.max(other.end);
         self.count += other.count;
     }
 }
@@ -223,6 +225,97 @@ impl DiagnosticSet {
         for diagnostic in diagnostics {
             self.push(diagnostic.into());
         }
+    }
+
+    /// Jig patch: replace every diagnostic with `entries`, whose byte
+    /// ranges in `text` are already worked out (a language server counts
+    /// columns its own way). Positions are filled in from the ranges.
+    pub fn set_entries(&mut self, text: &Rope, entries: Vec<(Range<usize>, Diagnostic)>) {
+        self.text = text.clone();
+        let entries = entries
+            .into_iter()
+            .map(|(range, diagnostic)| {
+                let end = range.end.min(text.len());
+                DiagnosticEntry {
+                    range: range.start.min(end)..end,
+                    diagnostic,
+                }
+            })
+            .collect();
+        self.rebuild(entries);
+    }
+
+    /// Jig patch: `range` (bytes) was replaced by `new_len` bytes of text.
+    /// Diagnostics after it move with the text, ones around it stretch or
+    /// shrink, and ones whose text was replaced entirely go. Call
+    /// [`Self::set_text`] once the edits are done.
+    pub fn adjust_for_edit(&mut self, range: &Range<usize>, new_len: usize) {
+        if self.is_empty() {
+            return;
+        }
+        let shift = |offset: usize| offset - range.end + range.start + new_len;
+        let entries = self
+            .diagnostics
+            .iter()
+            .filter_map(|entry| {
+                let Range { start, end } = entry.range;
+                // A point keeps its place unless its spot was replaced.
+                if start == end {
+                    let at = if start <= range.start {
+                        start
+                    } else if start >= range.end {
+                        shift(start)
+                    } else {
+                        return None;
+                    };
+                    return Some(DiagnosticEntry {
+                        range: at..at,
+                        diagnostic: entry.diagnostic.clone(),
+                    });
+                }
+                // Text typed right before it isn't in it; text replaced
+                // inside it is.
+                let new_start = if start < range.start {
+                    start
+                } else if start >= range.end {
+                    shift(start)
+                } else {
+                    range.start + new_len
+                };
+                let new_end = if end <= range.start {
+                    end
+                } else if end >= range.end {
+                    shift(end)
+                } else {
+                    range.start
+                };
+                (new_start < new_end).then(|| DiagnosticEntry {
+                    range: new_start..new_end,
+                    diagnostic: entry.diagnostic.clone(),
+                })
+            })
+            .collect();
+        self.rebuild(entries);
+    }
+
+    /// Jig patch: the text after edits, so positions match it again.
+    pub fn set_text(&mut self, text: &Rope) {
+        self.text = text.clone();
+        let entries = self.diagnostics.iter().cloned().collect();
+        self.rebuild(entries);
+    }
+
+    /// Jig patch: the tree from `entries` in order, with positions from
+    /// their byte ranges.
+    fn rebuild(&mut self, mut entries: Vec<DiagnosticEntry>) {
+        entries.sort_by_key(|entry| (entry.range.start, entry.range.end));
+        let text = &self.text;
+        for entry in &mut entries {
+            let start = entry.range.start.min(text.len());
+            let end = entry.range.end.min(text.len());
+            entry.diagnostic.range = text.offset_to_position(start)..text.offset_to_position(end);
+        }
+        self.diagnostics = SumTree::from_iter(entries, &());
     }
 
     pub fn len(&self) -> usize {
@@ -307,6 +400,19 @@ mod tests {
         let item = diagnostics.for_offset(46).unwrap();
         assert_eq!(item.message.as_str(), "Syntax error");
 
+        // Jig patch: a long diagnostic before a short one is still found.
+        let mut nested = DiagnosticSet::new(&text);
+        nested.push(Diagnostic::new(
+            Position::new(0, 0)..Position::new(2, 4),
+            "Long",
+        ));
+        nested.push(Diagnostic::new(
+            Position::new(0, 1)..Position::new(0, 2),
+            "Short",
+        ));
+        let found = nested.range(40..41).next().unwrap();
+        assert_eq!(found.message.as_str(), "Long");
+
         diagnostics.push(
             Diagnostic::new(Position::new(1, 5)..Position::new(1, 7), "Info message")
                 .with_severity(DiagnosticSeverity::Info),
@@ -315,5 +421,60 @@ mod tests {
 
         diagnostics.clear();
         assert_eq!(diagnostics.len(), 0);
+    }
+
+    /// Jig patch: diagnostics follow edits.
+    #[test]
+    fn test_adjust_for_edit() {
+        use ropey::Rope;
+
+        use super::{Diagnostic, DiagnosticSet};
+
+        let text = Rope::from("let a = b;\nlet c = d;\n");
+        let mut set = DiagnosticSet::new(&text);
+        let entries = |set: &DiagnosticSet| {
+            set.iter()
+                .map(|e| (e.range.clone(), e.message.to_string()))
+                .collect::<Vec<_>>()
+        };
+        set.set_entries(
+            &text,
+            vec![
+                (
+                    19..20,
+                    Diagnostic::new(Position::new(0, 0)..Position::new(0, 0), "d"),
+                ),
+                (
+                    8..9,
+                    Diagnostic::new(Position::new(0, 0)..Position::new(0, 0), "b"),
+                ),
+            ],
+        );
+        assert_eq!(entries(&set), [(8..9, "b".into()), (19..20, "d".into())]);
+        assert_eq!(
+            set.iter().nth(1).unwrap().diagnostic.range.start,
+            Position::new(1, 8)
+        );
+
+        // Typing before both moves them; typing right before one doesn't
+        // stretch it.
+        set.adjust_for_edit(&(0..0), 2);
+        set.adjust_for_edit(&(10..10), 1);
+        assert_eq!(entries(&set), [(11..12, "b".into()), (22..23, "d".into())]);
+
+        // Replacing part of one shrinks it to what's left; replacing all
+        // of one removes it.
+        set.adjust_for_edit(&(21..22), 3);
+        assert_eq!(entries(&set), [(11..12, "b".into()), (24..25, "d".into())]);
+        set.adjust_for_edit(&(24..25), 3);
+        assert_eq!(entries(&set), [(11..12, "b".into())]);
+
+        // Positions follow once the text is set.
+        let text = Rope::from("  let a = xb;\nlet c = eee;\n");
+        set.set_text(&text);
+        assert_eq!(
+            set.iter().next().unwrap().diagnostic.range.start,
+            Position::new(0, 11)
+        );
     }
 }

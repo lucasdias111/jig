@@ -55,6 +55,11 @@ impl InputModeKind for EditorMode {
             .extras
             .range_decorations
             .adjust_for_edit(range, new_len);
+        // Jig patch: diagnostics move with the text too, until the server
+        // sends new ones.
+        if let Some(diagnostics) = state.diagnostics_mut() {
+            diagnostics.adjust_for_edit(range, new_len);
+        }
     }
 
     fn refresh_language_features(

@@ -12,7 +12,7 @@ You receive a file in which the region to change is marked:
 - <<<SELECTION>>> ... <<<END>>> surrounds code to replace, or
 - <<<CURSOR>>> marks where new code is inserted.
 
-Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. Reply with exactly one JSON object and nothing else:
+Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Diagnostics, when present, are the problems a language server reports on the region's lines, by line number in the file; they are what to fix. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. Reply with exactly one JSON object and nothing else:
 {"replace": "<new text for the region>", "message": "<one short sentence>"}
 
 Rules for "replace":
@@ -36,6 +36,33 @@ pub struct PromptRequest {
     pub text: String,
     /// The byte range the command replaces. Empty means insert at that offset.
     pub target: Range<usize>,
+    /// What the language server reports on the target's lines, for jigs
+    /// that fix problems.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One problem a language server reports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// 1-based, in the whole file.
+    pub line: usize,
+    /// `error`, `warning`, `info` or `hint`.
+    pub severity: String,
+    pub message: String,
+}
+
+impl Diagnostic {
+    /// `line 3, error: mismatched types`, the way prompts list it.
+    pub fn describe(&self) -> String {
+        // Messages can run over several lines; one line each keeps the
+        // list readable.
+        let message = self
+            .message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("line {}, {}: {message}", self.line, self.severity)
+    }
 }
 
 impl PromptRequest {
@@ -107,13 +134,23 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         .as_deref()
         .map(|comment| format!("Note: {comment}\n"))
         .unwrap_or_default();
+    let diagnostics = if request.diagnostics.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = request
+            .diagnostics
+            .iter()
+            .map(Diagnostic::describe)
+            .collect();
+        format!("<diagnostics>\n{}\n</diagnostics>\n", lines.join("\n"))
+    };
     let rules = request
         .project_rules
         .as_deref()
         .map(|rules| format!("<project_rules>\n{}\n</project_rules>\n\n", rules.trim()))
         .unwrap_or_default();
     let user = format!(
-        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
+        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}{diagnostics}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
         request.language, request.instruction
     );
     (SYSTEM.to_string(), user)
@@ -132,6 +169,7 @@ mod tests {
             target,
             comment: None,
             project_rules: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -151,6 +189,32 @@ mod tests {
         assert!(user.contains("Instruction: Add docs\nNote: Entity: User\n"));
         let (_, user) = build(&request(10..19));
         assert!(!user.contains("Note:"));
+    }
+
+    #[test]
+    fn includes_diagnostics_after_the_note() {
+        let mut with_problems = request(10..19);
+        with_problems.comment = Some("terse".into());
+        with_problems.diagnostics = vec![
+            Diagnostic {
+                line: 2,
+                severity: "error".into(),
+                message: "mismatched types\nexpected `u32`".into(),
+            },
+            Diagnostic {
+                line: 2,
+                severity: "warning".into(),
+                message: "unused variable `x`".into(),
+            },
+        ];
+        let (system, user) = build(&with_problems);
+        assert!(system.contains("Diagnostics, when present"));
+        assert!(user.contains(
+            "Note: terse\n<diagnostics>\nline 2, error: mismatched types expected `u32`\nline 2, warning: unused variable `x`\n</diagnostics>\n\n<file>\n"
+        ));
+        let (_, user) = build(&request(10..19));
+        assert!(!user.contains("<diagnostics>"));
+        assert!(user.contains("Instruction: Add docs\n\n<file>\n"));
     }
 
     #[test]

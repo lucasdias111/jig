@@ -38,6 +38,8 @@ pub(super) struct Tab {
     pub(super) snippet: Option<super::snippets::Session>,
     /// Breakpoints, and the line the debugger is paused on.
     pub(super) marks: super::breakpoints::Marks,
+    /// What the language server reports about the file.
+    pub(super) problems: super::diagnostics::Problems,
     _events: Subscription,
 }
 
@@ -124,6 +126,7 @@ impl Workspace {
         let cursor = cx.new(|cx| CursorPosition::new(state.clone(), cx));
         let marks = self.install_marks(&state, &document, cx);
         self.install_git(&state, &document, cx);
+        let problems = super::diagnostics::Problems::new(&state, document.path.as_deref(), cx);
         let lsp = document.path.as_deref().and_then(|path| {
             let language = document.language(&self.settings.languages);
             super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
@@ -138,6 +141,7 @@ impl Workspace {
             offers,
             snippet: None,
             marks,
+            problems,
             _events: events,
         }
     }

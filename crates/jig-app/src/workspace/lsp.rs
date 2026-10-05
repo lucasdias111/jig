@@ -54,7 +54,9 @@ impl Workspace {
         }
         let language = self.document().language(&self.settings.languages);
         let text = self.editor().text(cx);
+        let state = self.editor().state().clone();
         let tab = self.tab_mut();
+        tab.problems.rename(&state, &path, cx);
         // The old name closes as the new one opens.
         tab.lsp = None;
         tab.lsp = TabLsp::open(&path, language, &text, cx);

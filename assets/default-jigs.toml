@@ -8,6 +8,8 @@
 # comment_hint: placeholder text for that note.
 # agent = true: run on the coding agent (OpenCode), which works across the
 # project; you review every edit.
+# diagnostics = true: send the problems the language server reports on the
+# lines it works on (the selection's, or the cursor's line) with the prompt.
 #
 # In the ⌘K input, Tab switches between Quick and Agent, and a colon
 # adds a one-off note: "docs: terse" runs Add docs with the note "terse".
@@ -30,7 +32,8 @@ prompt = "Simplify this code without changing its behaviour."
 [[jig]]
 name = "Fix"
 scope = "selection"
-prompt = "Fix the bug or compile error in this code. Change as little as possible."
+prompt = "Fix the problems the language server reports here, or else the bug or compile error in this code. Change as little as possible."
+diagnostics = true
 
 [[jig]]
 name = "Explain"

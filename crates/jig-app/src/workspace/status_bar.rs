@@ -66,6 +66,7 @@ impl Workspace {
             .text_xs()
             .text_color(theme.muted_foreground)
             .children(self.render_branch_switcher(cx))
+            .children(self.render_problem_counts(cx))
             .child(div().flex_1())
             .child(tab.cursor.clone())
             .child(item(indentation::label(tab.indentation).into()))

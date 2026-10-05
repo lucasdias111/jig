@@ -205,6 +205,11 @@ impl Workspace {
                 .as_deref()
                 .filter(|_| !invocation.agent)
                 .and_then(crate::project::agents_for),
+            diagnostics: if invocation.diagnostics {
+                self.problems_on_lines(&text, target.clone(), cx)
+            } else {
+                Vec::new()
+            },
         };
         if invocation.agent {
             self.editor()
@@ -552,6 +557,7 @@ impl Workspace {
             || self.stop_agent_turn(window, cx)
             || self.close_hunk_popup(cx)
             || self.close_find_panel(cx)
+            || self.close_problem(cx)
         {
             cx.stop_propagation();
         } else if self.run.take().is_some() {

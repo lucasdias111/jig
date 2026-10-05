@@ -37,5 +37,8 @@ anyhow = "1"
 #   (input/editor/decorations.rs, input/base/element.rs, kind.rs).
 # - Change bars at the gutter's edge, with clicks, for git
 #   (`set_line_changes`, `on_line_change_click`; the same files).
+# - Diagnostics move with edits instead of being cleared, can be set from
+#   byte ranges, and Jig draws the hovered one in its own panel
+#   (input/editor/diagnostics.rs, input/editor/mod.rs, input/base/state.rs).
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
