@@ -5,7 +5,8 @@
 //! The bars are worked out again on every edit, from the committed text read
 //! once when the tab opens and again whenever git may have moved on: the
 //! window comes back to the front, a file is saved, or the panel committed,
-//! pulled or switched branches.
+//! pulled or switched branches. While the Git view shows, the repository is
+//! watched too (`watch.rs`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,8 @@ use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::EditorHandle as _;
+
+pub(super) mod watch;
 
 use super::sidebar::SidebarView;
 use super::{SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
@@ -40,6 +43,8 @@ pub(super) struct GitState {
     /// The sidebar's Git view, kept while the sidebar shows something else
     /// so a half-written commit message survives.
     panel: Option<Opened<GitPanel>>,
+    /// The repository watched while the Git view shows.
+    watch: Option<watch::RepoWatch>,
     branches: Option<Opened<BranchPicker>>,
     _refresh: Option<Task<()>>,
     _loads: HashMap<EntityId, Task<()>>,
@@ -150,7 +155,7 @@ impl Workspace {
 
     /// Find the project's repository and branch again, and what each open
     /// file was at the last commit, e.g. after a commit made elsewhere.
-    pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open: Vec<EntityId> = self.tabs.iter().map(|tab| tab.id()).collect();
         self.git.files.retain(|id, _| open.contains(id));
         let anchor = self
@@ -161,7 +166,7 @@ impl Workspace {
             .iter()
             .filter_map(|tab| Some((tab.id(), tab.document.path.clone()?)))
             .collect();
-        self.git._refresh = Some(cx.spawn(async move |this, cx| {
+        self.git._refresh = Some(cx.spawn_in(window, async move |this, cx| {
             let (repo, head, committed) = cx
                 .background_executor()
                 .spawn(async move {
@@ -178,7 +183,7 @@ impl Workspace {
                     (repo, head, committed)
                 })
                 .await;
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 let root = repo.as_ref().map(|repo| repo.root().to_path_buf());
                 let panel_root = this
                     .git
@@ -194,6 +199,12 @@ impl Workspace {
                 for (id, committed) in committed {
                     this.set_committed(id, committed, cx);
                 }
+                // E.g. the window came forward after a commit in a terminal:
+                // the Git view shows where things are now.
+                if this.git_view_shown() && !this.ensure_git_panel(window, cx) {
+                    this.refresh_git_panel(window, cx);
+                }
+                this.sync_git_watch(window, cx);
                 cx.notify();
             })
             .ok();
@@ -413,29 +424,37 @@ impl Workspace {
     /// repository, bring its lists up to date, and focus the message.
     pub(super) fn show_git_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.git.popup = None;
-        if self.git.panel.is_none() {
-            let Some(repo) = self.git.repo.clone() else {
-                return;
-            };
-            let view = cx.new(|cx| GitPanel::new(repo, window, cx));
-            let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-                GitPanelEvent::Open(path) => {
-                    let path = path.clone();
-                    this.open_file(&path, window, cx);
-                }
-                GitPanelEvent::Changed => this.git_changed(window, cx),
-                GitPanelEvent::Dismissed => this.focus_main(window, cx),
-            });
-            self.git.panel = Some(Opened {
-                view,
-                _events: events,
-            });
-        } else {
-            self.git_saved(window, cx);
+        if !self.ensure_git_panel(window, cx) {
+            self.refresh_git_panel(window, cx);
         }
         if let Some(panel) = &self.git.panel {
             panel.view.update(cx, |panel, cx| panel.focus(window, cx));
         }
+    }
+
+    /// Make the Git view's panel if there's a repository and no panel yet.
+    /// `true` if it made one, which reads the status as it starts.
+    fn ensure_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.git.panel.is_some() {
+            return false;
+        }
+        let Some(repo) = self.git.repo.clone() else {
+            return false;
+        };
+        let view = cx.new(|cx| GitPanel::new(repo, window, cx));
+        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
+            GitPanelEvent::Open(path) => {
+                let path = path.clone();
+                this.open_file(&path, window, cx);
+            }
+            GitPanelEvent::Changed => this.git_changed(window, cx),
+            GitPanelEvent::Dismissed => this.focus_main(window, cx),
+        });
+        self.git.panel = Some(Opened {
+            view,
+            _events: events,
+        });
+        true
     }
 
     /// The sidebar's Git view, or why there's nothing in it.
@@ -457,8 +476,8 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// After a save: the panel's lists follow.
-    pub(super) fn git_saved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Ask the Git view's panel for the status again, e.g. after a save.
+    pub(super) fn refresh_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = &self.git.panel {
             panel.view.update(cx, |panel, cx| panel.refresh(window, cx));
         }
@@ -602,9 +621,8 @@ impl Workspace {
                 self.activate(ix, window, cx);
             }
         }
-        self.refresh_git(cx);
+        self.refresh_git(window, cx);
         self.refresh_tree(cx);
-        self.git_saved(window, cx);
         cx.notify();
     }
 

@@ -280,7 +280,7 @@ impl Workspace {
             if window.is_window_active() {
                 this.reload_changed_files(None, window, cx);
                 this.refresh_tree(cx);
-                this.refresh_git(cx);
+                this.refresh_git(window, cx);
             }
         })
         .detach();
@@ -532,7 +532,7 @@ impl Workspace {
             crate::providers::reload(cx);
         }
         self.run_file_saved(path, window, cx);
-        self.git_saved(window, cx);
+        self.refresh_git_panel(window, cx);
         self.remember_breakpoints(self.active, cx);
         // Save As may have added a file.
         self.refresh_tree(cx);
@@ -4198,6 +4198,61 @@ env = {{ GREETING = "there" }}
 
         click(&mut vcx, "branch-switcher");
         assert!(vcx.update(|_, cx| workspace.read(cx).branch_picker().is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn the_git_view_follows_changes_made_elsewhere(cx: &mut TestAppContext) {
+        use super::git::watch::Touched;
+        let (dir, window, workspace) = committed_repo(cx);
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::ToggleGitPanel), cx)
+        });
+        let panel = workspace
+            .read_with(cx, |this, _| this.git_panel())
+            .expect("the view opens");
+        let files = |cx: &mut TestAppContext| {
+            panel.read_with(cx, |panel, _| {
+                panel
+                    .status()
+                    .map(|status| status.files.iter().map(|f| f.path.clone()).collect())
+                    .unwrap_or_else(Vec::<String>::new)
+            })
+        };
+        assert_eq!(files(cx), Vec::<String>::new());
+
+        // Another program writes a file; the watcher reports it.
+        std::fs::write(dir.path().join("b.rs"), "new\n").unwrap();
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.repo_changed(Touched::Files, window, cx))
+        });
+        assert_eq!(files(cx), vec!["b.rs"]);
+
+        // A commit in a terminal: the list empties and the bars go.
+        std::fs::write(dir.path().join("a.rs"), "changed\n").unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+        };
+        git(&["add", "a.rs", "b.rs"]);
+        git(&["commit", "--quiet", "-m", "Elsewhere"]);
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                this.reload_changed_files(None, window, cx);
+                this.repo_changed(Touched::Git, window, cx)
+            })
+        });
+        assert_eq!(files(cx), Vec::<String>::new());
+        assert_eq!(
+            workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
+            vec![]
+        );
     }
 
     #[gpui_kit::test]

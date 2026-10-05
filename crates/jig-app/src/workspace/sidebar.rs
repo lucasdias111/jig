@@ -91,7 +91,7 @@ impl Workspace {
             view,
             _events: events,
         });
-        self.refresh_git(cx);
+        self.refresh_git(window, cx);
     }
 
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
@@ -125,6 +125,7 @@ impl Workspace {
             self.focus_main(window, cx);
         }
         self.set_sidebar_open(!self.sidebar_open);
+        self.sync_git_watch(window, cx);
         cx.notify();
     }
 
@@ -146,6 +147,7 @@ impl Workspace {
             self.sidebar_view = SidebarView::Files;
             self.focus_tree(window, cx);
         }
+        self.sync_git_watch(window, cx);
         cx.notify();
     }
 
@@ -168,6 +170,7 @@ impl Workspace {
                 SidebarView::Git => self.show_git_view(window, cx),
             }
         }
+        self.sync_git_watch(window, cx);
         cx.notify();
     }
 
