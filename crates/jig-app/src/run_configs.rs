@@ -21,7 +21,7 @@ pub const TEMPLATE: &str = r#"# Run configurations for this project. Pick one wi
 # stop it with ⌘F2. Jig also lists the Cargo binaries, package.json scripts
 # and Go module it finds; one here with the same name replaces it.
 #
-# command  runs through /bin/sh, from the project root unless `cwd` says
+# command  runs through /bin/sh (cmd on Windows), from the project root unless `cwd` says
 #          otherwise (relative to the root).
 # env      is added to the environment.
 #

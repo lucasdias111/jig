@@ -3,12 +3,11 @@
 //!
 //! The process gets no terminal, so programs that check for one don't
 //! colour their output on their own; the environment asks them to. It runs
-//! in its own process group, so stopping it stops whatever it started, such
-//! as the program `cargo run` builds.
+//! in its own process group (on Windows, its own process tree), so stopping
+//! it stops whatever it started, such as the program `cargo run` builds.
 
 use std::io::{BufRead as _, BufReader, Read};
 use std::ops::Range;
-use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,9 +120,10 @@ impl Process {
         json_stdout: bool,
         events: UnboundedSender<RunEvent>,
     ) -> Result<Self> {
-        let mut child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&config.command)
+        let mut command = shell_command(&config.command);
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command
             .current_dir(&config.cwd)
             .env("PATH", crate::lsp::search_path())
             .envs(COLOR_ENV.iter().copied())
@@ -131,7 +131,6 @@ impl Process {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .process_group(0)
             .spawn()
             .with_context(|| format!("Couldn't start “{}”", config.command))?;
         let pid = child.id() as i32;
@@ -189,14 +188,26 @@ impl Process {
         if !self.is_running() {
             return;
         }
-        signal_group(self.pid, libc::SIGTERM);
-        let (pid, exited) = (self.pid, self.exited.clone());
-        std::thread::spawn(move || {
-            std::thread::sleep(STOP_GRACE);
-            if !exited.load(Ordering::SeqCst) {
-                signal_group(pid, libc::SIGKILL);
-            }
-        });
+        #[cfg(unix)]
+        {
+            signal_group(self.pid, libc::SIGTERM);
+            let (pid, exited) = (self.pid, self.exited.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(STOP_GRACE);
+                if !exited.load(Ordering::SeqCst) {
+                    signal_group(pid, libc::SIGKILL);
+                }
+            });
+        }
+        // Windows has no polite stop for a console program without a window
+        // of its own, so the tree goes at once.
+        #[cfg(not(unix))]
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &self.pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -206,6 +217,26 @@ impl Drop for Process {
     }
 }
 
+/// A command running `script` through the system shell: `/bin/sh`, or
+/// `cmd` on Windows.
+pub fn shell_command(script: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(script);
+        command
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let mut command = Command::new("cmd");
+        // cmd parses its own command line, so the script goes as written.
+        command.arg("/C").raw_arg(script);
+        command
+    }
+}
+
+#[cfg(unix)]
 fn signal_group(pid: i32, signal: libc::c_int) {
     // SAFETY: plain syscall; the group is the child's own, made at spawn.
     unsafe {
@@ -213,12 +244,22 @@ fn signal_group(pid: i32, signal: libc::c_int) {
     }
 }
 
+#[cfg(unix)]
 fn describe_exit(status: ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt as _;
     match (status.code(), status.signal()) {
         (Some(code), _) => format!("Process finished with exit code {code}"),
         (None, Some(libc::SIGTERM | libc::SIGKILL)) => "Process stopped".into(),
         (None, Some(signal)) => format!("Process ended by signal {signal}"),
         (None, None) => "Process finished".into(),
+    }
+}
+
+#[cfg(not(unix))]
+fn describe_exit(status: ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("Process finished with exit code {code}"),
+        None => "Process finished".into(),
     }
 }
 

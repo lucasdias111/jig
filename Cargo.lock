@@ -3568,6 +3568,7 @@ dependencies = [
  "jig-editor",
  "libc",
  "lsp-types",
+ "notify",
  "regex",
  "serde",
  "serde_json",

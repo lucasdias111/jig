@@ -322,10 +322,19 @@ pub(crate) fn read_message(reader: &mut impl BufRead) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
+/// Two connected sockets, standing in for a client and its adapter in
+/// tests. Loopback TCP, since Unix socket pairs don't exist on Windows.
+#[cfg(test)]
+pub fn socket_pair() -> (std::net::TcpStream, std::net::TcpStream) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let ours = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (theirs, _) = listener.accept().unwrap();
+    (ours, theirs)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufReader, Write};
-    use std::os::unix::net::UnixStream;
 
     use futures::StreamExt as _;
     use serde_json::json;
@@ -334,7 +343,7 @@ mod tests {
 
     #[test]
     fn requests_go_out_framed_and_replies_come_back_in_order() {
-        let (ours, theirs) = UnixStream::pair().unwrap();
+        let (ours, theirs) = socket_pair();
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let client = Client::connect(7, ours.try_clone().unwrap(), ours, tx);
 

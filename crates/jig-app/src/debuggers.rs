@@ -567,9 +567,7 @@ fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
     let mut vars = Vars::new(dir);
     vars.set("debuggers", json!(dir));
     let script = vars.expand_str(script).map_err(anyhow::Error::msg)?;
-    let output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&script)
+    let output = crate::run_output::shell_command(&script)
         .current_dir(dir)
         .env("PATH", crate::lsp::search_path())
         .stdin(Stdio::null())

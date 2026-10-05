@@ -1,0 +1,22 @@
+# Run configurations for this project. Pick one with ⌃⌥R, run it with ⌃R,
+# stop it with ⌘F2. Jig also lists the Cargo binaries, package.json scripts
+# and Go module it finds; one here with the same name replaces it.
+#
+# command  runs through /bin/sh, from the project root unless `cwd` says
+#          otherwise (relative to the root).
+# env      is added to the environment.
+#
+# Debugging (⌃D) works on its own for `cargo run` commands. For anything
+# else, say what to debug:
+# program  the executable, relative to the root;
+# args     its arguments;
+# build    a shell command that builds it first.
+
+[[run]]
+name = "Run"
+command = ""
+# cwd = "."
+# env = { RUST_LOG = "debug" }
+# program = "target/debug/app"
+# args = ["--verbose"]
+# build = "make"

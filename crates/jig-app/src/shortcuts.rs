@@ -69,7 +69,7 @@ const IN_CODE: &[Option<&str>] = &[Some(CODE)];
 const IN_INPUT: &[Option<&str>] = &[Some("Input")];
 
 macro_rules! shortcut {
-    ($id:literal, $label:literal, $group:ident, [$($keys:literal),+], $contexts:expr, $action:ty) => {
+    ($id:literal, $label:literal, $group:ident, [$($keys:expr),+], $contexts:expr, $action:ty) => {
         Shortcut {
             id: $id,
             label: $label,
@@ -157,12 +157,16 @@ pub const ALL: &[Shortcut] = &[
         RenameSymbol
     ),
     // ⇧⌘F is GPUI Kit's Replace in the editor; Replace moves to ⌘R, as
-    // in IntelliJ.
+    // in IntelliJ. Elsewhere ⌃R is Run, so Replace takes the usual ⌃H.
     shortcut!(
         "replace",
         "Replace in file",
         Editing,
-        ["secondary-r"],
+        [if cfg!(target_os = "macos") {
+            "cmd-r"
+        } else {
+            "ctrl-h"
+        }],
         IN_INPUT,
         Replace
     ),

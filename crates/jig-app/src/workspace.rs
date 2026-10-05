@@ -8,6 +8,7 @@ mod commands;
 mod completions;
 mod debug;
 mod definitions;
+mod file_watch;
 mod find;
 mod git;
 mod go_to_file;
@@ -158,6 +159,7 @@ pub struct Workspace {
     runs: run::RunState,
     breakpoints: breakpoints::Breakpoints,
     git: git::GitState,
+    file_watch: file_watch::FileWatch,
 }
 
 struct ProjectTree {
@@ -224,9 +226,10 @@ impl Workspace {
             settings,
             run: None,
             next_run_id: 0,
-            runs: Default::default(),
+            runs: run::RunState::new(cx),
             breakpoints: breakpoints::Breakpoints::load(),
             git: Default::default(),
+            file_watch: file_watch::FileWatch::start(window, cx),
         };
         let tab = this.new_tab(document, window, cx);
         if this.home {
@@ -254,9 +257,10 @@ impl Workspace {
             async {}
         })
         .detach();
-        // Pick up files added or removed outside Jig.
+        // Pick up files added, removed or changed outside Jig.
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                this.reload_changed_files(None, window, cx);
                 this.refresh_tree(cx);
                 this.refresh_git(cx);
             }
@@ -429,7 +433,7 @@ impl Workspace {
         self.when_discard_ok(None, window, cx, move |this, window, cx| {
             this.leave_tab(cx);
             this.stop_process();
-            this.runs = Default::default();
+            this.runs = run::RunState::new(cx);
             this.palette = None;
             this.quick_open = None;
             this.find_in_files = None;
@@ -537,6 +541,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
                 KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))
             }),
         )
+        .chain(run::key_bindings())
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
         .chain(jig_commands::new_command::key_bindings())
@@ -746,6 +751,13 @@ mod tests {
     use jig_editor::EditorHandle;
 
     use super::{Workspace, key_bindings};
+
+    /// The editor's move to the end of the text.
+    const END_OF_FILE: &str = if cfg!(target_os = "macos") {
+        "cmd-down"
+    } else {
+        "ctrl-end"
+    };
 
     /// Answers every request with a fixed reply.
     struct FakeProvider(Result<&'static str, &'static str>);
@@ -1005,7 +1017,7 @@ mod tests {
             window.render_frame(cx);
             assert_eq!(workspace.read(cx).editor().language(cx), "rust");
             assert!(!workspace.read(cx).tab().dirty);
-            window.press("secondary-down", cx);
+            window.press(END_OF_FILE, cx);
             window.input("// x\n", cx);
         });
         step(cx, window, |window, cx| {
@@ -1022,6 +1034,59 @@ mod tests {
             )
         });
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\n// x\n");
+    }
+
+    fn reload_changed_files(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        workspace: &Entity<Workspace>,
+    ) {
+        step(cx, window, |window, cx| {
+            workspace.update(cx, |this, cx| this.reload_changed_files(None, window, cx))
+        });
+    }
+
+    #[gpui_kit::test]
+    fn files_changed_on_disk_reload_keeping_the_cursor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\nfn b() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        let b = "fn a() {}\n".len();
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(b..b, cx);
+        });
+
+        std::fs::write(&path, "fn first() {}\nfn a() {}\nfn b() {}\n").unwrap();
+        reload_changed_files(cx, window, &workspace);
+        assert_eq!(
+            text(cx, &workspace),
+            "fn first() {}\nfn a() {}\nfn b() {}\n"
+        );
+        let b = b + "fn first() {}\n".len();
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(this.editor().selection(cx), b..b);
+            assert!(!this.tab().dirty);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn files_changed_on_disk_keep_unsaved_changes(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn a() {}\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("x", cx);
+        });
+
+        std::fs::write(&path, "fn other() {}\n").unwrap();
+        reload_changed_files(cx, window, &workspace);
+        assert_eq!(text(cx, &workspace), "xfn a() {}\n");
+        assert!(cx.update(|cx| workspace.read(cx).tab().dirty));
     }
 
     #[gpui_kit::test]
@@ -1190,7 +1255,7 @@ mod tests {
         );
         step(cx, window, |window, cx| {
             window.render_frame(cx);
-            window.press("secondary-down", cx);
+            window.press(END_OF_FILE, cx);
             window.input("// kept\n", cx);
         });
         run_preset(cx, window, &workspace, 0..9, "simplify");
@@ -3322,11 +3387,11 @@ env = { GREETING = "there" }
         source: std::path::PathBuf,
         breakpoints: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
     ) {
-        use crate::dap::{Client, frame, read_message};
+        use crate::dap::{Client, frame, read_message, socket_pair};
         use serde_json::json;
         super::debug::FAKE_ADAPTER.with(|fake| {
             *fake.borrow_mut() = Some(Box::new(move |messages| {
-                let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+                let (ours, theirs) = socket_pair();
                 let source = source.clone();
                 let breakpoints = breakpoints.clone();
                 std::thread::spawn(move || {

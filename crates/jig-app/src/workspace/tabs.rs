@@ -85,6 +85,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Tab {
         let editor = &self.settings.editor;
+        if let Some(path) = document.path.as_deref() {
+            self.file_watch.watch(path);
+        }
         let indentation = crate::indentation::detect(&document.saved_text);
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
