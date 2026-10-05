@@ -70,6 +70,16 @@ pub const BUNDLED: &[Language] = &[
     },
 ];
 
+/// What starts a line comment in `language`, Jig's name for it. `None` for
+/// languages without one, such as JSON.
+pub fn line_comment(language: &str) -> Option<&'static str> {
+    match language {
+        "rust" | "typescript" | "tsx" | "javascript" | "java" | "go" => Some("//"),
+        "python" | "toml" => Some("#"),
+        _ => None,
+    }
+}
+
 /// Extensions as Settings shows them: `"ts, mts, cts"`.
 pub fn format_extensions(extensions: &[&str]) -> String {
     extensions.join(", ")

@@ -343,7 +343,7 @@ impl Workspace {
     /// Every use of `name`, clicked at `offset` in the current tab, in Find
     /// in Files: its references from the language server, or failing that,
     /// a search for the word.
-    fn show_usages(
+    pub(super) fn show_usages(
         &mut self,
         name: &str,
         offset: usize,

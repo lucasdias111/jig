@@ -25,6 +25,8 @@ pub struct Settings {
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,
     pub colors: ColorSettings,
+    /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
+    pub shortcuts: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -9,6 +9,7 @@ mod debuggers;
 mod definitions;
 mod diff;
 mod document;
+mod field_box;
 mod file_icons;
 mod file_tree;
 mod find_in_files;
@@ -17,6 +18,7 @@ mod git;
 mod git_panel;
 mod indentation;
 mod languages;
+mod lines;
 mod lsp;
 mod lsp_debug;
 mod menus;
@@ -30,6 +32,7 @@ mod run_output;
 mod run_picker;
 mod settings;
 mod settings_window;
+mod shortcuts;
 mod snippets;
 mod theme;
 mod workspace;
@@ -58,6 +61,8 @@ fn main() {
         // Before the menus: they show only shortcuts bound by then.
         settings_window::init(cx);
         menus::init(cx);
+        // Last: it takes over the shortcuts Settings can change.
+        shortcuts::init(cx);
         // Reached only when no window handles Quit (e.g. none is open).
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Settings alone can't open a file, so it doesn't keep Jig running.

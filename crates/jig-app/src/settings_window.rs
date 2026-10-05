@@ -1,5 +1,7 @@
-//! The Settings window (⌘,): Appearance, Colors, Languages, Commands and
-//! Model.
+//! The Settings window (⌘,): Appearance, Colors, Languages, Shortcuts,
+//! Jigs and Model.
+
+mod shortcuts_page;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -192,6 +194,8 @@ pub struct SettingsWindow {
     providers_error: Option<SharedString>,
     /// One per entry of `theme::EDITABLE`, in the same order.
     color_pickers: Vec<Entity<ColorPickerState>>,
+    /// The shortcut taking new keys, on the Shortcuts page.
+    recording: Option<shortcuts_page::Recording>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -261,6 +265,7 @@ impl SettingsWindow {
             check: None,
             providers_error: None,
             color_pickers,
+            recording: None,
             _subscriptions: subscriptions,
         };
         this.reload_commands();
@@ -1258,6 +1263,7 @@ impl Render for SettingsWindow {
         let colors_page = self.colors_page(cx);
         let model_page = self.model_page(cx);
         let languages_page = self.languages_page(cx);
+        let shortcuts_page = self.shortcuts_page(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1284,6 +1290,7 @@ impl Render for SettingsWindow {
                         self.appearance_page(),
                         colors_page,
                         languages_page,
+                        shortcuts_page,
                         self.commands_page(),
                         model_page,
                     ]);
@@ -1373,7 +1380,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_model_page_draws_in_every_state(cx: &mut TestAppContext) {
         let _dir = providers::init_temp(cx);
-        START_PAGE.set(4);
+        START_PAGE.set(5);
         cx.update(|cx| {
             gpui_kit::init(cx);
             crate::theme::init(cx);
@@ -1416,6 +1423,52 @@ mod tests {
         draw(cx);
         cx.update(|cx| providers::disconnect("opencode-go", cx).unwrap());
         draw(cx);
+        START_PAGE.set(0);
+    }
+
+    #[gpui_kit::test]
+    fn records_a_shortcut_and_resets_it(cx: &mut TestAppContext) {
+        START_PAGE.set(3);
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init(cx);
+            init(cx);
+            open(cx);
+        });
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.global::<OpenWindow>().0);
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        draw(cx);
+        cx.update_window(handle, |root, window, cx| {
+            let root = root.downcast::<gpui_kit::component::Root>().unwrap();
+            let view = root.read(cx).view().clone().downcast::<SettingsWindow>();
+            view.unwrap()
+                .update(cx, |this, cx| this.record("save", window, cx));
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle, "secondary-shift-u");
+        let expected = gpui_kit::Keystroke::parse("secondary-shift-u")
+            .unwrap()
+            .unparse();
+        assert_eq!(
+            cx.update(|cx| settings::get(cx).shortcuts.get("save").cloned()),
+            Some(expected)
+        );
+        draw(cx);
+
+        // Pressing the default again forgets the change.
+        cx.update_window(handle, |root, window, cx| {
+            let root = root.downcast::<gpui_kit::component::Root>().unwrap();
+            let view = root.read(cx).view().clone().downcast::<SettingsWindow>();
+            view.unwrap()
+                .update(cx, |this, cx| this.record("save", window, cx));
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle, "secondary-s");
+        assert!(cx.update(|cx| settings::get(cx).shortcuts.is_empty()));
         START_PAGE.set(0);
     }
 }

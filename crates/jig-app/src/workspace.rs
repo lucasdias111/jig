@@ -3,6 +3,7 @@
 
 mod agent;
 mod breakpoints;
+mod code_menu;
 mod commands;
 mod completions;
 mod debug;
@@ -10,9 +11,12 @@ mod definitions;
 mod find;
 mod git;
 mod go_to_file;
+mod go_to_line;
 mod home;
+mod line_edits;
 mod lsp;
 mod preferences;
+mod rename;
 mod run;
 mod selection_button;
 mod sidebar;
@@ -25,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::input::{Editor, GoToDefinition, Replace};
+use gpui_kit::component::input::Editor;
 use gpui_kit::component::{ActiveTheme as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -74,7 +78,21 @@ actions!(
         StepInto,
         StepOut,
         ToggleGitPanel,
-        SwitchBranch
+        SwitchBranch,
+        RenameSymbol,
+        FindReferences,
+        ToggleLineComment,
+        MoveLineUp,
+        MoveLineDown,
+        DuplicateLine,
+        DeleteLine,
+        SelectLine,
+        InsertLineBelow,
+        InsertLineAbove,
+        GoToLine,
+        ZoomIn,
+        ZoomOut,
+        ResetZoom
     ]
 );
 
@@ -114,6 +132,10 @@ pub struct Workspace {
     palette: Option<OpenPalette>,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
+    /// Rename Symbol's field, while it's open.
+    rename: Option<rename::OpenRename>,
+    /// Go to Line's field, while it's open.
+    go_to_line: Option<go_to_line::OpenGoToLine>,
     last_find: find::LastFind,
     /// The project's files as last walked, for Go to File to show at once.
     file_index: Option<go_to_file::FileIndex>,
@@ -190,6 +212,8 @@ impl Workspace {
             palette: None,
             quick_open: None,
             find_in_files: None,
+            rename: None,
+            go_to_line: None,
             last_find: Default::default(),
             file_index: None,
             recent_files: Vec::new(),
@@ -277,10 +301,10 @@ impl Workspace {
     }
 
     /// Run `then` now if there are no unsaved changes, otherwise only after
-    /// the user agrees to discard them. Checks the tab `only`, or every tab.
+    /// the user agrees to discard them. Checks the tabs `only`, or every tab.
     fn when_discard_ok(
         &mut self,
-        only: Option<EntityId>,
+        only: Option<&[EntityId]>,
         window: &mut Window,
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -288,7 +312,7 @@ impl Workspace {
         let dirty: Vec<String> = self
             .tabs
             .iter()
-            .filter(|tab| tab.dirty && only.is_none_or(|id| tab.id() == id))
+            .filter(|tab| tab.dirty && only.is_none_or(|ids| ids.contains(&tab.id())))
             .map(|tab| tab.document.title())
             .collect();
         let detail = match dirty.as_slice() {
@@ -502,56 +526,21 @@ impl Workspace {
     }
 }
 
+/// Jig's bindings. The ones Settings can change are in
+/// [`crate::shortcuts`], here with their defaults.
 pub fn key_bindings() -> Vec<KeyBinding> {
-    vec![
-        KeyBinding::new("secondary-q", Quit, None),
-        KeyBinding::new("secondary-o", Open, None),
-        KeyBinding::new("secondary-s", Save, None),
-        KeyBinding::new("secondary-shift-s", SaveAs, None),
-        KeyBinding::new("secondary-n", NewFile, None),
-        KeyBinding::new("secondary-w", CloseTab, None),
-        KeyBinding::new("secondary-shift-w", CloseWindow, None),
-        KeyBinding::new("secondary-shift-]", NextTab, None),
-        KeyBinding::new("secondary-shift-[", PreviousTab, None),
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
-        KeyBinding::new("secondary-k", OpenCommand, None),
-        KeyBinding::new("secondary-shift-k", AddCommand, None),
-        KeyBinding::new("secondary-b", ToggleSidebar, None),
-        KeyBinding::new("secondary-shift-e", FocusFileTree, None),
-        KeyBinding::new("secondary-p", GoToFile, None),
-        KeyBinding::new("secondary-shift-f", FindInFiles, None),
-        // As in IntelliJ on the Mac.
-        KeyBinding::new("ctrl-r", RunSelected, None),
-        KeyBinding::new("ctrl-alt-r", ChooseRunConfiguration, None),
-        KeyBinding::new("secondary-f2", StopRun, None),
-        KeyBinding::new("secondary-j", ToggleRunPanel, None),
-        KeyBinding::new("ctrl-d", DebugSelected, None),
-        KeyBinding::new("secondary-f8", ToggleBreakpoint, None),
-        KeyBinding::new("f9", Resume, None),
-        KeyBinding::new("alt-secondary-r", Resume, None),
-        KeyBinding::new("f8", StepOver, None),
-        KeyBinding::new("f7", StepInto, None),
-        KeyBinding::new("shift-f8", StepOut, None),
-        // As in VS Code.
-        KeyBinding::new("ctrl-shift-g", ToggleGitPanel, None),
-        // In the editor too, where GPUI Kit binds ⇧⌘F to Replace; Replace
-        // moves to ⌘R, as in IntelliJ.
-        KeyBinding::new("secondary-shift-f", FindInFiles, Some("Input")),
-        KeyBinding::new("secondary-r", Replace, Some("Input")),
-        // Cmd+click does the same.
-        KeyBinding::new("f12", GoToDefinition, Some("Input")),
-    ]
-    .into_iter()
-    // Scoped to the workspace so that forms using Cmd+digits keep them.
-    .chain(
-        (1..=9)
-            .map(|n| KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))),
-    )
-    .chain(crate::file_tree::key_bindings())
-    .chain(crate::find_in_files::key_bindings())
-    .chain(jig_commands::new_command::key_bindings())
-    .collect()
+    crate::shortcuts::bindings(&Default::default())
+        .into_iter()
+        // Scoped to the workspace so that forms using Cmd+digits keep them.
+        .chain(
+            (1..=9).map(|n| {
+                KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))
+            }),
+        )
+        .chain(crate::file_tree::key_bindings())
+        .chain(crate::find_in_files::key_bindings())
+        .chain(jig_commands::new_command::key_bindings())
+        .collect()
 }
 
 impl Render for Workspace {
@@ -602,6 +591,20 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::step_out))
             .on_action(cx.listener(Self::toggle_git_panel))
             .on_action(cx.listener(Self::switch_branch))
+            .on_action(cx.listener(Self::rename_symbol))
+            .on_action(cx.listener(Self::find_references))
+            .on_action(cx.listener(Self::toggle_line_comment))
+            .on_action(cx.listener(Self::move_line_up))
+            .on_action(cx.listener(Self::move_line_down))
+            .on_action(cx.listener(Self::duplicate_line))
+            .on_action(cx.listener(Self::delete_line))
+            .on_action(cx.listener(Self::select_line))
+            .on_action(cx.listener(Self::insert_line_below))
+            .on_action(cx.listener(Self::insert_line_above))
+            .on_action(cx.listener(Self::go_to_line))
+            .on_action(cx.listener(Self::zoom_in))
+            .on_action(cx.listener(Self::zoom_out))
+            .on_action(cx.listener(Self::reset_zoom))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -657,17 +660,28 @@ impl Render for Workspace {
                             })
                             .when(!self.home, |this| {
                                 this.child(
-                                    div().flex_1().min_h_0().pl_2().pr_3().pt_1().pb_2().child(
-                                        Editor::new(self.editor().state())
-                                            .bordered(false)
-                                            // The column behind it is the surface.
-                                            .bg(transparent_black())
-                                            // Locked while a command's change awaits
-                                            // review. The element re-applies this
-                                            // every frame.
-                                            .readonly(self.previewing())
-                                            .size_full(),
-                                    ),
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .pl_2()
+                                        .pr_3()
+                                        .pt_1()
+                                        .pb_2()
+                                        // Line shortcuts bind here, not in
+                                        // every other input.
+                                        .key_context("CodeEditor")
+                                        .child(
+                                            Editor::new(self.editor().state())
+                                                .bordered(false)
+                                                // The column behind it is the surface.
+                                                .bg(transparent_black())
+                                                // Locked while a command's change awaits
+                                                // review. The element re-applies this
+                                                // every frame.
+                                                .readonly(self.previewing())
+                                                .context_menu(self.code_menu(cx))
+                                                .size_full(),
+                                        ),
                                 )
                             })
                             .children(self.render_run_panel(cx))
@@ -695,6 +709,8 @@ impl Render for Workspace {
             })
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
+            .children(self.render_rename())
+            .children(self.render_go_to_line())
             .children(self.render_run_picker(window))
             .children(self.render_git_panel(window))
             .children(self.render_branch_picker(window))
@@ -2506,6 +2522,46 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn closing_other_and_all_tabs(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = three_files(cx);
+        open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+        open_file(cx, window, &workspace, &dir.path().join("c.rs"));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-2", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("z", cx);
+        });
+        let close_except = |cx: &mut TestAppContext, keep: Option<usize>| {
+            let ws = workspace.clone();
+            step(cx, window, move |window, cx| {
+                ws.update(cx, |this, cx| this.close_tabs_except(keep, window, cx))
+            });
+        };
+
+        // Closing the others asks once about the unsaved b.rs.
+        close_except(cx, Some(2));
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        cx.run_until_parked();
+        assert_eq!(tab_titles(cx, &workspace), ["a.rs", "b.rs", "c.rs"]);
+        close_except(cx, Some(2));
+        cx.simulate_prompt_answer("Discard");
+        cx.run_until_parked();
+        assert_eq!(tab_titles(cx, &workspace), ["c.rs"]);
+        assert_eq!(active_title(cx, &workspace), "c.rs");
+
+        // Closing them all shows the start page.
+        open_file(cx, window, &workspace, &dir.path().join("a.rs"));
+        close_except(cx, None);
+        assert!(!cx.has_pending_prompt());
+        assert!(cx.update(|cx| workspace.read(cx).home));
+        assert_eq!(tab_titles(cx, &workspace), ["Untitled"]);
+    }
+
+    #[gpui_kit::test]
     fn a_blank_tab_is_reused(cx: &mut TestAppContext) {
         let (dir, window, workspace) = three_files(cx);
         step(cx, window, |window, cx| {
@@ -4034,5 +4090,182 @@ env = { GREETING = "there" }
             workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
             vec![]
         );
+    }
+
+    #[gpui_kit::test]
+    fn rename_symbol_without_a_server_renames_in_the_file(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.rs");
+        let source = "fn main() {\n    let total = 1;\n    use_it(total, subtotal);\n}\n";
+        std::fs::write(&path, source).unwrap();
+        let (window, workspace) = open(cx, &path);
+        let at = source.find("total").unwrap() + 2;
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(at..at, cx);
+        });
+        step(cx, window, |window, cx| window.press("f2", cx));
+        assert!(workspace.read_with(cx, |this, _| this.rename.is_some()));
+        // The old name is selected, so typing replaces it.
+        cx.simulate_input(window, "sum");
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        assert!(workspace.read_with(cx, |this, _| this.rename.is_none()));
+        assert_eq!(
+            text(cx, &workspace),
+            "fn main() {\n    let sum = 1;\n    use_it(sum, subtotal);\n}\n"
+        );
+        // In the buffer only, until it's saved.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        assert!(workspace.read_with(cx, |this, _| this.tab().dirty));
+
+        // Esc leaves it be.
+        step(cx, window, |window, cx| window.press("f2", cx));
+        cx.simulate_input(window, "other");
+        cx.simulate_keystrokes(window, "escape");
+        cx.run_until_parked();
+        assert!(workspace.read_with(cx, |this, _| this.rename.is_none()));
+        assert!(text(cx, &workspace).contains("let sum = 1;"));
+    }
+
+    #[gpui_kit::test]
+    fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
+        use serde_json::json;
+
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let lib_source = "pub fn alpha() {}\n";
+        std::fs::write(dir.path().join("src/lib.rs"), lib_source).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    alpha();\n}\n",
+        )
+        .unwrap();
+        let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
+        let main = crate::lsp::file_uri(&dir.path().join("src/main.rs"));
+        let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
+        let (client, _seen) = crate::lsp::fake_server(
+            dir.path().to_path_buf(),
+            move |method, params| match method {
+                "textDocument/rename" => {
+                    let name = params["newName"].clone();
+                    json!({"changes": {
+                        lib.clone(): [{"range": at(0, 7, 12), "newText": name}],
+                        main.clone(): [{"range": at(1, 4, 9), "newText": name}],
+                    }})
+                }
+                _ => serde_json::Value::Null,
+            },
+        );
+        let main_path = dir.path().join("src/main.rs");
+        let server = crate::lsp::server_for("rust").unwrap();
+        let root = crate::lsp::root_for(server, &main_path);
+        cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+
+        let (window, workspace) = open(cx, dir.path());
+        open_file(cx, window, &workspace, &main_path);
+        cx.update(|cx| {
+            let editor = workspace.read(cx).editor().clone();
+            editor.select(18..18, cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f2", cx);
+        });
+        cx.simulate_input(window, "beta");
+        cx.simulate_keystrokes(window, "enter");
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if text(cx, &workspace).contains("beta") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(text(cx, &workspace), "fn main() {\n    beta();\n}\n");
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            // Still on main.rs, with lib.rs changed in a tab behind it.
+            assert!(
+                this.document()
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .ends_with("src/main.rs")
+            );
+            let lib = this
+                .tab_for(&dir.path().join("src/lib.rs"))
+                .expect("lib.rs opens");
+            assert_eq!(this.tabs[lib].editor.text(cx), "pub fn beta() {}\n");
+            assert!(this.tabs[lib].dirty);
+        });
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+            lib_source
+        );
+    }
+
+    #[gpui_kit::test]
+    fn toggle_line_comment_comments_and_uncomments(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.py");
+        std::fs::write(&path, "def a():\n    return 1\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        let editor = cx.update(|cx| workspace.read(cx).editor().clone());
+        step(cx, window, |window, cx| {
+            editor.focus(window, cx);
+            editor.select(0..0, cx);
+        });
+        step(cx, window, |window, cx| window.press("secondary-'", cx));
+        assert_eq!(text(cx, &workspace), "# def a():\n    return 1\n");
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::ToggleLineComment), cx)
+        });
+        assert_eq!(text(cx, &workspace), "def a():\n    return 1\n");
+    }
+
+    #[gpui_kit::test]
+    fn line_shortcuts_work_in_the_code_editor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let (window, workspace) = open(cx, &path);
+        let editor = cx.update(|cx| workspace.read(cx).editor().clone());
+        step(cx, window, |window, cx| {
+            editor.focus(window, cx);
+            editor.select(0..0, cx);
+        });
+        step(cx, window, |window, cx| window.press("alt-down", cx));
+        assert_eq!(text(cx, &workspace), "two\none\nthree");
+        step(cx, window, |window, cx| {
+            window.press("secondary-shift-d", cx)
+        });
+        assert_eq!(text(cx, &workspace), "two\none\none\nthree");
+        step(cx, window, |window, cx| {
+            window.press("secondary-shift-backspace", cx)
+        });
+        assert_eq!(text(cx, &workspace), "two\none\nthree");
+        // The cursor is on the line that took the deleted one's place.
+        step(cx, window, |window, cx| window.press("alt-up", cx));
+        assert_eq!(text(cx, &workspace), "two\nthree\none");
+        step(cx, window, |window, cx| window.press("secondary-l", cx));
+        assert_eq!(cx.update(|cx| editor.selection(cx)), 4..9);
+    }
+
+    #[gpui_kit::test]
+    fn go_to_line_moves_the_cursor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let (window, workspace) = open(cx, &path);
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::GoToLine), cx)
+        });
+        assert!(cx.update(|cx| workspace.read(cx).go_to_line.is_some()));
+        step(cx, window, |window, cx| window.input("3:2", cx));
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert!(cx.update(|cx| workspace.read(cx).go_to_line.is_none()));
+        let editor = cx.update(|cx| workspace.read(cx).editor().clone());
+        assert_eq!(cx.update(|cx| editor.selection(cx)), 9..9);
     }
 }

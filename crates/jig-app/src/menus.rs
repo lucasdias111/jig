@@ -5,11 +5,12 @@ use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
-    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, EditAgentsFile,
-    EditCommands, EditDebuggers, EditRunConfigurations, FindInFiles, FocusFileTree, GoToFile,
-    NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, Resume, RunSelected, Save, SaveAs,
-    StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel,
-    ToggleRunPanel, ToggleSidebar,
+    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
+    DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, FindInFiles,
+    FindReferences, FocusFileTree, GoToFile, GoToLine, MoveLineDown, MoveLineUp, NewFile, NextTab,
+    Open, OpenCommand, PreviousTab, Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save,
+    SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint,
+    ToggleGitPanel, ToggleLineComment, ToggleRunPanel, ToggleSidebar, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -37,7 +38,12 @@ pub fn init(cx: &mut App) {
             })
             .ok();
     });
+    set(cx);
+}
 
+/// Set the menus, showing the shortcuts bound now. Again whenever those
+/// change.
+pub fn set(cx: &mut App) {
     cx.set_menus([
         // macOS titles this menu with the app's name.
         menu(
@@ -62,6 +68,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("New File", NewFile),
                 MenuItem::action("Open…", Open),
                 MenuItem::action("Go to File…", GoToFile),
+                MenuItem::action("Go to Line…", GoToLine),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Save As…", SaveAs),
@@ -82,6 +89,15 @@ pub fn init(cx: &mut App) {
                 MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
                 MenuItem::action("Find in Files…", FindInFiles),
+                MenuItem::action("Find All References", FindReferences),
+                MenuItem::action("Rename Symbol…", RenameSymbol),
+                MenuItem::action("Toggle Line Comment", ToggleLineComment),
+                MenuItem::separator(),
+                MenuItem::action("Move Line Up", MoveLineUp),
+                MenuItem::action("Move Line Down", MoveLineDown),
+                MenuItem::action("Duplicate Line", DuplicateLine),
+                MenuItem::action("Delete Line", DeleteLine),
+                MenuItem::action("Select Line", SelectLine),
                 MenuItem::separator(),
                 MenuItem::action("Run Jig…", OpenCommand),
                 MenuItem::action("Add Jig…", AddCommand),
@@ -99,6 +115,10 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Show Previous Tab", PreviousTab),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Run Panel", ToggleRunPanel),
+                MenuItem::separator(),
+                MenuItem::action("Bigger Code Font", ZoomIn),
+                MenuItem::action("Smaller Code Font", ZoomOut),
+                MenuItem::action("Default Code Font Size", ResetZoom),
             ],
         ),
         menu(

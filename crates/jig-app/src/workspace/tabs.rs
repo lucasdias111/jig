@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use gpui_kit::component::input::{EditorState, InputEvent, TabSize};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -178,6 +179,21 @@ impl Workspace {
         self.enter_tab(window, cx);
     }
 
+    /// Open `path` in a new last tab without switching to it, for edits
+    /// made in files you aren't looking at. Returns its index.
+    pub(super) fn open_in_background(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let document = Document::open(path).ok()?;
+        let tab = self.new_tab(document, window, cx);
+        self.tabs.push(tab);
+        cx.notify();
+        Some(self.tabs.len() - 1)
+    }
+
     /// Re-open the current tab's file from disk, e.g. so highlighting follows
     /// a new extension after Save As.
     pub(super) fn reload_tab(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
@@ -253,8 +269,36 @@ impl Workspace {
             return;
         }
         let id = tab.id();
-        self.when_discard_ok(Some(id), window, cx, move |this, window, cx| {
+        self.when_discard_ok(Some(&[id]), window, cx, move |this, window, cx| {
             this.remove_tab(id, window, cx)
+        });
+    }
+
+    /// Close every tab, or with `keep`, every tab but that one, asking once
+    /// first if any of them has unsaved changes.
+    pub(super) fn close_tabs_except(
+        &mut self,
+        keep: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let keep = keep.and_then(|ix| self.tabs.get(ix)).map(Tab::id);
+        let ids: Vec<EntityId> = self
+            .tabs
+            .iter()
+            .map(Tab::id)
+            .filter(|id| Some(*id) != keep)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.when_discard_ok(Some(&ids.clone()), window, cx, move |this, window, cx| {
+            for id in ids {
+                this.remove_tab(id, window, cx);
+            }
+            if let Some(ix) = keep.and_then(|id| this.tabs.iter().position(|tab| tab.id() == id)) {
+                this.activate(ix, window, cx);
+            }
         });
     }
 
@@ -372,6 +416,8 @@ impl Workspace {
         }
         let theme = cx.theme();
         let languages = crate::settings::get(cx).languages;
+        let workspace = cx.entity().downgrade();
+        let count = self.tabs.len();
         let tabs = self
             .tabs
             .iter()
@@ -486,6 +532,10 @@ impl Workspace {
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| this.close_tab_at(ix, window, cx)),
                     )
+                    .context_menu({
+                        let workspace = workspace.clone();
+                        move |menu, _, _| tab_menu(workspace.clone(), ix, count, menu)
+                    })
             });
         Some(
             h_flex()
@@ -503,4 +553,27 @@ impl Workspace {
                 .into_any_element(),
         )
     }
+}
+
+/// Right-clicking a tab offers to close it, the others, or all of them.
+fn tab_menu(
+    workspace: WeakEntity<Workspace>,
+    ix: usize,
+    tabs: usize,
+    menu: PopupMenu,
+) -> PopupMenu {
+    let item = |label: &'static str, keep: Option<Option<usize>>| {
+        let workspace = workspace.clone();
+        PopupMenuItem::new(label).on_click(move |_, window, cx| {
+            workspace
+                .update(cx, |this, cx| match keep {
+                    None => this.close_tab_at(ix, window, cx),
+                    Some(keep) => this.close_tabs_except(keep, window, cx),
+                })
+                .ok();
+        })
+    };
+    menu.item(item("Close Tab", None))
+        .item(item("Close Other Tabs", Some(Some(ix))).disabled(tabs < 2))
+        .item(item("Close All Tabs", Some(None)))
 }
