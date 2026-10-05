@@ -1,6 +1,8 @@
 # Jig
 
-<img width="2384" height="1746" alt="image" src="https://github.com/user-attachments/assets/33610eb9-edec-4998-8f3a-8e747c1165ff" />
+<img width="1192" height="872" alt="image" src="https://github.com/user-attachments/assets/971d677d-1199-4ab0-bb61-817a5e34097f" />
+
+<img width="1192" height="872" alt="image" src="https://github.com/user-attachments/assets/6ea5f1c6-5bd5-4cda-a6fb-d8cda54eaa1b" />
 
 A macOS-first code editor where AI works through jigs, small commands at
 the cursor, not through a chat panel.
