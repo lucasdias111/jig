@@ -642,7 +642,7 @@ impl Workspace {
                     _ => {}
                 }
             }
-            Message::Event { event, body } => self.on_dap_event(id, &event, &body, cx),
+            Message::Event { event, body } => self.on_dap_event(id, &event, &body, window, cx),
             Message::StartDebugging { seq, configuration } => {
                 if let Some(debug) = self.debug_mut() {
                     if let Some(client) = debug.clients.get(id) {
@@ -672,7 +672,14 @@ impl Workspace {
         cx.notify();
     }
 
-    fn on_dap_event(&mut self, id: usize, event: &str, body: &Value, cx: &mut Context<Self>) {
+    fn on_dap_event(
+        &mut self,
+        id: usize,
+        event: &str,
+        body: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match event {
             "initialized" => {
                 let Some(key) = self.debug().map(|debug| debug.plan.debugger.key.clone()) else {
@@ -721,6 +728,10 @@ impl Workspace {
                 }
                 debug.view = View::Debugger;
                 self.runs.panel_open = true;
+                // The program usually has focus while it runs (a terminal, a
+                // browser, a game window), so a hit breakpoint would go unseen.
+                window.activate_window();
+                cx.activate(true);
             }
             "continued" => {
                 if let Some(debug) = self.debug_mut() {
