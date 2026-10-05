@@ -567,7 +567,11 @@ fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
     let mut vars = Vars::new(dir);
     vars.set("debuggers", json!(dir));
     let script = vars.expand_str(script).map_err(anyhow::Error::msg)?;
-    let output = crate::run_output::shell_command(&script)
+    // Installers are sh scripts everywhere; on Windows, Git's sh runs them.
+    let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
+    let output = Command::new(sh)
+        .arg("-c")
+        .arg(&script)
         .current_dir(dir)
         .env("PATH", crate::lsp::search_path())
         .stdin(Stdio::null())

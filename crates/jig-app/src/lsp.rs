@@ -334,7 +334,18 @@ pub fn range(text: &str, range: lsp_types::Range, encoding: Encoding) -> Range<u
 /// sense to a server.
 pub fn file_uri(path: &Path) -> String {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    format!("file://{}", encode(&path.to_string_lossy()))
+    let path = path.to_string_lossy();
+    // `C:\a\b.rs` is `file:///C:/a/b.rs`, the drive's colon kept as is.
+    if cfg!(windows) {
+        let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
+        let path = format!("/{}", path.replace('\\', "/"));
+        let mut encoded = encode(&path);
+        if encoded.get(2..5) == Some("%3A") {
+            encoded.replace_range(2..5, ":");
+        }
+        return format!("file://{encoded}");
+    }
+    format!("file://{}", encode(&path))
 }
 
 /// The path of a `file:` URI.
@@ -342,7 +353,15 @@ pub fn uri_path(uri: &str) -> Option<PathBuf> {
     let path = uri.strip_prefix("file://")?;
     // `file://localhost/…` is allowed, if rare.
     let path = path.strip_prefix("localhost").unwrap_or(path);
-    Some(PathBuf::from(decode(path)))
+    let path = decode(path);
+    // `/C:/a/b.rs` on Windows, where the drive comes first.
+    if cfg!(windows)
+        && let Some(rest) = path.strip_prefix('/')
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return Some(PathBuf::from(rest));
+    }
+    Some(PathBuf::from(path))
 }
 
 /// Percent-encode everything but unreserved characters and `/`.
@@ -453,12 +472,25 @@ mod tests {
 
     #[test]
     fn uris_round_trip() {
-        let path = Path::new("/Users/me/My Projects/naïve#1.rs");
+        let (path, uri, expected) = if cfg!(windows) {
+            (
+                r"C:\Users\me\My Projects\naïve#1.rs",
+                "file:///C:/Users/me/a%20b.rs",
+                r"C:\Users\me\a b.rs",
+            )
+        } else {
+            (
+                "/Users/me/My Projects/naïve#1.rs",
+                "file:///Users/me/a%20b.rs",
+                "/Users/me/a b.rs",
+            )
+        };
+        let path = Path::new(path);
         assert_eq!(uri_path(&file_uri(path)).unwrap(), path);
-        assert_eq!(
-            uri_path("file:///Users/me/a%20b.rs").unwrap(),
-            Path::new("/Users/me/a b.rs")
-        );
+        assert_eq!(uri_path(uri).unwrap(), Path::new(expected));
+        if cfg!(windows) {
+            assert!(file_uri(path).starts_with("file:///C:/Users/me/My%20Projects/"));
+        }
     }
 
     #[test]

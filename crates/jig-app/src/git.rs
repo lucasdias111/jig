@@ -663,6 +663,8 @@ mod tests {
         run(&["init", "--quiet", "--initial-branch=main"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test"]);
+        // Windows runners turn line endings into CRLF on checkout.
+        run(&["config", "core.autocrlf", "false"]);
         let file = root.join("a.txt");
         std::fs::write(&file, "one\ntwo\n").unwrap();
         let repo = Repo::discover(&file).unwrap();

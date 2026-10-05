@@ -3999,6 +3999,8 @@ env = {{ GREETING = "there" }}
         git(&["init", "--quiet", "--initial-branch=main"]);
         git(&["config", "user.email", "test@example.com"]);
         git(&["config", "user.name", "Test"]);
+        // Windows runners turn line endings into CRLF on checkout.
+        git(&["config", "core.autocrlf", "false"]);
         std::fs::write(dir.path().join("a.rs"), "one\ntwo\nthree\n").unwrap();
         git(&["add", "a.rs"]);
         git(&["commit", "--quiet", "-m", "First"]);

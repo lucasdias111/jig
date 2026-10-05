@@ -109,6 +109,9 @@ pub enum Color {
 pub struct Process {
     pid: i32,
     exited: Arc<AtomicBool>,
+    /// Set by `stop`, so the ending says so: on Windows the process just
+    /// ends with whatever code it's killed with.
+    stopped: Arc<AtomicBool>,
 }
 
 impl Process {
@@ -136,6 +139,7 @@ impl Process {
             .with_context(|| format!("Couldn't start “{}”", config.command))?;
         let pid = child.id() as i32;
         let exited = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::new(AtomicBool::new(false));
         let bases = Arc::new([config.cwd.clone(), root.to_path_buf()]);
 
         let (done, drained) = mpsc::channel();
@@ -161,7 +165,7 @@ impl Process {
         }
         drop(done);
 
-        let flag = exited.clone();
+        let (flag, was_stopped) = (exited.clone(), stopped.clone());
         std::thread::spawn(move || {
             let status = child.wait();
             flag.store(true, Ordering::SeqCst);
@@ -171,12 +175,19 @@ impl Process {
                 }
             }
             let (message, success) = match status {
+                Ok(status) if !status.success() && was_stopped.load(Ordering::SeqCst) => {
+                    ("Process stopped".into(), false)
+                }
                 Ok(status) => (describe_exit(status), status.success()),
                 Err(error) => (format!("Lost track of the process: {error}"), false),
             };
             let _ = events.unbounded_send(RunEvent::Exited { message, success });
         });
-        Ok(Self { pid, exited })
+        Ok(Self {
+            pid,
+            exited,
+            stopped,
+        })
     }
 
     pub fn is_running(&self) -> bool {
@@ -189,6 +200,7 @@ impl Process {
         if !self.is_running() {
             return;
         }
+        self.stopped.store(true, Ordering::SeqCst);
         #[cfg(unix)]
         {
             signal_group(self.pid, libc::SIGTERM);
@@ -581,7 +593,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = RunConfig {
             name: "t".into(),
-            command: "echo out; echo err >&2; exit 3".into(),
+            command: if cfg!(windows) {
+                "echo out& 1>&2 echo err& exit 3"
+            } else {
+                "echo out; echo err >&2; exit 3"
+            }
+            .into(),
             cwd: dir.path().to_path_buf(),
             env: Vec::new(),
             source: crate::run_configs::Source::File,
@@ -614,7 +631,12 @@ mod tests {
         assert!(!process.is_running());
 
         let config = RunConfig {
-            command: "sleep 30".into(),
+            command: if cfg!(windows) {
+                "ping -n 30 127.0.0.1 >nul"
+            } else {
+                "sleep 30"
+            }
+            .into(),
             ..config
         };
         let (tx, rx) = futures::channel::mpsc::unbounded();
