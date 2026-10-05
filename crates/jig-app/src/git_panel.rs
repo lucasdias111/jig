@@ -719,15 +719,21 @@ impl Render for GitPanel {
             .gap_1p5()
             .child(header)
             .child(commit)
-            .child(div().flex_1().min_h_0().child(list).when(clean, |this| {
-                this.child(
-                    div()
-                        .px_2()
-                        .py_3()
-                        .text_size(px(13.))
-                        .text_color(theme.muted_foreground)
-                        .child("No changes since the last commit."),
-                )
+            // The list fills the space, so the empty message takes its place
+            // rather than following it.
+            .child(div().flex_1().min_h_0().map(|this| {
+                if clean {
+                    this.child(
+                        div()
+                            .px_2()
+                            .py_3()
+                            .text_size(px(13.))
+                            .text_color(theme.muted_foreground)
+                            .child("No changes since the last commit."),
+                    )
+                } else {
+                    this.child(list)
+                }
             }))
             .child(div().px_1().pb_2().child(footer))
     }
