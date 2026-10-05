@@ -3305,18 +3305,25 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::create_dir_all(dir.path().join(".jig")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();
+        let hello = if cfg!(windows) {
+            "echo hello %GREETING%& 1>&2 echo src/lib.rs:1:4: here& exit 2"
+        } else {
+            "echo hello $GREETING; echo 'src/lib.rs:1:4: here' >&2; exit 2"
+        };
         std::fs::write(
             dir.path().join(".jig/run.toml"),
-            r#"
+            format!(
+                r#"
 [[run]]
 name = "Other"
-command = "true"
+command = "exit 0"
 
 [[run]]
 name = "Hello"
-command = "echo hello $GREETING; echo 'src/lib.rs:1:4: here' >&2; exit 2"
-env = { GREETING = "there" }
-"#,
+command = "{hello}"
+env = {{ GREETING = "there" }}
+"#
+            ),
         )
         .unwrap();
         let (window, workspace) = open(cx, dir.path());

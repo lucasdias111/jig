@@ -24,6 +24,7 @@ use crate::run_configs::RunConfig;
 /// Longer lines are cut, so one huge line can't stall layout.
 const MAX_LINE_CHARS: usize = 4000;
 /// How long a stopped process gets to exit before it is killed.
+#[cfg(unix)]
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// How long output still arriving after the process exited is waited for,
 /// in case something it started holds the pipes open.

@@ -79,7 +79,24 @@ macro_rules! shortcut {
             action: boxed::<$action>,
         }
     };
+    ($id:literal, $label:literal, $group:ident, $keys:expr, $contexts:expr, $action:ty) => {
+        Shortcut {
+            id: $id,
+            label: $label,
+            group: Group::$group,
+            keys: $keys,
+            contexts: $contexts,
+            action: boxed::<$action>,
+        }
+    };
 }
+
+/// ⌥⌘R as in IntelliJ on the Mac; elsewhere it would be ⌃⌥R, which is Run….
+const RESUME_KEYS: &[&str] = if cfg!(target_os = "macos") {
+    &["f9", "alt-cmd-r"]
+} else {
+    &["f9"]
+};
 
 pub const ALL: &[Shortcut] = &[
     // Editing.
@@ -368,14 +385,7 @@ pub const ALL: &[Shortcut] = &[
         ANYWHERE,
         ToggleBreakpoint
     ),
-    shortcut!(
-        "resume",
-        "Resume",
-        Run,
-        ["f9", "alt-secondary-r"],
-        ANYWHERE,
-        Resume
-    ),
+    shortcut!("resume", "Resume", Run, RESUME_KEYS, ANYWHERE, Resume),
     shortcut!("step_over", "Step over", Run, ["f8"], ANYWHERE, StepOver),
     shortcut!("step_into", "Step into", Run, ["f7"], ANYWHERE, StepInto),
     shortcut!("step_out", "Step out", Run, ["shift-f8"], ANYWHERE, StepOut),
