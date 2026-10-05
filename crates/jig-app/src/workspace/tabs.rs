@@ -91,6 +91,8 @@ impl Workspace {
         let indentation = crate::indentation::detect(&document.saved_text);
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
+                // Jig's own find panel takes ⌘F, over the same search.
+                .searchable(false)
                 .language(document.language(&self.settings.languages))
                 .tab_size(indentation)
                 .line_number(editor.line_numbers)
@@ -227,6 +229,7 @@ impl Workspace {
     /// view: a change under review is kept, a running command is cancelled.
     pub(super) fn leave_tab(&mut self, cx: &mut Context<Self>) {
         self.palette = None;
+        self.close_find_panel(cx);
         self.accept_preview(cx);
         if self.run.take().is_some() {
             self.editor().clear_highlights(cx);

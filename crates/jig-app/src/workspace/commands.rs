@@ -123,6 +123,8 @@ impl Workspace {
         }
         self.quick_open = None;
         self.find_in_files = None;
+        // Its matches would muddle the change's highlights.
+        self.close_find_panel(cx);
         // A new command replaces whatever the last one left on screen; a
         // pending change counts as accepted.
         self.accept_preview(cx);
@@ -402,18 +404,31 @@ impl Workspace {
         true
     }
 
-    pub(super) fn on_accept_enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
-        self.accept_or_propagate(cx);
+    pub(super) fn on_accept_enter(
+        &mut self,
+        _: &Enter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_or_propagate(window, cx);
+    }
+
+    /// Whether the review keys belong to something else: a modal, or the
+    /// find panel, where Enter goes to the next match and Esc closes it.
+    fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
+        self.modal_open() || self.find_panel_focused(window, cx)
     }
 
     /// Tab accepts a change under review, or moves on in a snippet.
     pub(super) fn on_accept_tab(
         &mut self,
         _: &IndentInline,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.modal_open() && (self.accept_preview(cx) || self.snippet_step(true, cx)) {
+        if !self.keys_elsewhere(window, cx)
+            && (self.accept_preview(cx) || self.snippet_step(true, cx))
+        {
             cx.stop_propagation();
         } else {
             cx.propagate();
@@ -424,22 +439,27 @@ impl Workspace {
     pub(super) fn on_shift_tab(
         &mut self,
         _: &OutdentInline,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.modal_open() && self.snippet_step(false, cx) {
+        if !self.keys_elsewhere(window, cx) && self.snippet_step(false, cx) {
             cx.stop_propagation();
         } else {
             cx.propagate();
         }
     }
 
-    pub(super) fn on_accept_indent(&mut self, _: &Indent, _: &mut Window, cx: &mut Context<Self>) {
-        self.accept_or_propagate(cx);
+    pub(super) fn on_accept_indent(
+        &mut self,
+        _: &Indent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_or_propagate(window, cx);
     }
 
-    fn accept_or_propagate(&mut self, cx: &mut Context<Self>) {
-        if !self.modal_open() && self.accept_preview(cx) {
+    fn accept_or_propagate(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if !self.keys_elsewhere(window, cx) && self.accept_preview(cx) {
             cx.stop_propagation();
         } else {
             cx.propagate();
@@ -448,7 +468,7 @@ impl Workspace {
 
     /// Cmd+Z during review rejects the change.
     pub(super) fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.modal_open() && self.reject_preview(window, cx) {
+        if !self.keys_elsewhere(window, cx) && self.reject_preview(window, cx) {
             cx.stop_propagation();
         } else {
             cx.propagate();
@@ -526,11 +546,12 @@ impl Workspace {
             self.find_in_files = None;
             cx.stop_propagation();
             cx.notify();
-        } else if self.modal_open() {
+        } else if self.keys_elsewhere(window, cx) {
             cx.propagate();
         } else if self.reject_preview(window, cx)
             || self.stop_agent_turn(window, cx)
             || self.close_hunk_popup(cx)
+            || self.close_find_panel(cx)
         {
             cx.stop_propagation();
         } else if self.run.take().is_some() {

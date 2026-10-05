@@ -1,5 +1,7 @@
 //! Find in Files (⇧⌘F): opening the panel and going to the chosen match.
 
+use std::ops::Range;
+
 use gpui_kit::*;
 use jig_editor::EditorHandle;
 
@@ -9,6 +11,14 @@ use crate::project_search::SearchOptions;
 
 /// A selection longer than this isn't taken as the query.
 const MAX_SELECTION_QUERY: usize = 200;
+
+/// The selection in `text`, when it's short and on one line: what Find
+/// and Find in Files start looking for.
+pub(super) fn selection_query(text: &str, selection: Range<usize>) -> Option<String> {
+    let selected = text.get(selection)?;
+    (!selected.is_empty() && !selected.contains('\n') && selected.len() <= MAX_SELECTION_QUERY)
+        .then(|| selected.to_string())
+}
 
 pub(super) struct OpenFindInFiles {
     pub(super) view: Entity<find_in_files::FindInFiles>,
@@ -52,20 +62,11 @@ impl Workspace {
         // A short selection on one line is what to look for; otherwise
         // start from the last search.
         let selected = if self.home {
-            String::new()
+            None
         } else {
-            let range = self.editor().selection(cx);
-            let text = self.editor().text(cx);
-            text.get(range).unwrap_or_default().to_string()
+            selection_query(&self.editor().text(cx), self.editor().selection(cx))
         };
-        let query = if !selected.is_empty()
-            && !selected.contains('\n')
-            && selected.len() <= MAX_SELECTION_QUERY
-        {
-            selected
-        } else {
-            self.last_find.query.clone()
-        };
+        let query = selected.unwrap_or_else(|| self.last_find.query.clone());
         let options = self.last_find.options;
         self.open_find_in_files(query, options, window, cx);
     }

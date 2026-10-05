@@ -206,6 +206,27 @@ impl<M: InputModeKind> InputBaseState<M> {
         Some(range)
     }
 
+    /// Jig patch: make the first match ending after `offset` the current one,
+    /// wrapping to the first match, and scroll to it. A custom search UI
+    /// starts from the cursor this way, not from the top of the text.
+    pub fn search_match_from(
+        &mut self,
+        offset: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.sync_search_matcher();
+        let matcher = &mut self.search_session.matcher;
+        let ix = matcher
+            .matched_ranges()
+            .iter()
+            .position(|range| range.end > offset)
+            .unwrap_or(0);
+        matcher.set_current_match_index(ix);
+        let range = matcher.matched_ranges().get(ix).cloned()?;
+        self.scroll_to_with_padding(range.end, None, ScrollPadding::SurroundingLines, cx);
+        Some(range)
+    }
+
     /// Replace the current match and move on to the next one. Returns whether
     /// there was a match to replace.
     pub fn replace_current_search_match(

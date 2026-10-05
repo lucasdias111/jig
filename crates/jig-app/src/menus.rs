@@ -6,11 +6,12 @@ use gpui_kit::*;
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
-    DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, FindInFiles,
-    FindReferences, FocusFileTree, GoToFile, GoToLine, MoveLineDown, MoveLineUp, NewFile, NextTab,
-    Open, OpenCommand, PreviousTab, Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save,
-    SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint,
-    ToggleGitPanel, ToggleLineComment, ToggleRunPanel, ToggleSidebar, ZoomIn, ZoomOut,
+    DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, Find,
+    FindAndReplace, FindInFiles, FindReferences, FocusFileTree, GoToFile, GoToLine, MoveLineDown,
+    MoveLineUp, NewFile, NextTab, Open, OpenCommand, PreviousTab, Quit, RenameSymbol, ResetZoom,
+    Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
+    SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
+    ToggleSidebar, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -88,6 +89,8 @@ pub fn set(cx: &mut App) {
                 MenuItem::os_action("Paste", Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
+                MenuItem::action("Find…", Find),
+                MenuItem::action("Find and Replace…", FindAndReplace),
                 MenuItem::action("Find in Files…", FindInFiles),
                 MenuItem::action("Find All References", FindReferences),
                 MenuItem::action("Rename Symbol…", RenameSymbol),

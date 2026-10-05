@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use gpui_kit::component::input::{GoToDefinition, Replace};
+use gpui_kit::component::input::{GoToDefinition, Replace, Search};
 use gpui_kit::*;
 
 use crate::settings;
@@ -173,19 +173,31 @@ pub const ALL: &[Shortcut] = &[
         IN_INPUT,
         RenameSymbol
     ),
-    // ⇧⌘F is GPUI Kit's Replace in the editor; Replace moves to ⌘R, as
-    // in IntelliJ. Elsewhere ⌃R is Run, so Replace takes the usual ⌃H.
+    // Also in any input, to win over GPUI Kit's own Search and Replace
+    // bindings there.
+    shortcut!(
+        "find",
+        "Find",
+        Editing,
+        ["secondary-f"],
+        &[None, Some("Input")],
+        Find
+    ),
+    // ⌘R as in IntelliJ too; elsewhere ⌃R is Run, so it's the usual ⌃H.
     shortcut!(
         "replace",
-        "Replace in file",
+        "Find and replace",
         Editing,
-        [if cfg!(target_os = "macos") {
-            "cmd-r"
-        } else {
-            "ctrl-h"
-        }],
-        IN_INPUT,
-        Replace
+        [
+            "secondary-alt-f",
+            if cfg!(target_os = "macos") {
+                "cmd-r"
+            } else {
+                "ctrl-h"
+            }
+        ],
+        &[None, Some("Input")],
+        FindAndReplace
     ),
     // Navigation.
     shortcut!(
@@ -483,7 +495,9 @@ impl Global for Keymap {}
 /// some of the same actions) and rebind them whenever Settings changes
 /// one. Runs after everything else has bound its keys.
 pub fn init(cx: &mut App) {
-    let actions: Vec<_> = ALL.iter().map(Shortcut::action).collect();
+    // GPUI Kit's search panel is replaced by Jig's, so its keys go too.
+    let taken_over: [Box<dyn Action>; 2] = [Box::new(Search), Box::new(Replace)];
+    let actions: Vec<_> = ALL.iter().map(Shortcut::action).chain(taken_over).collect();
     let base = cx
         .key_bindings()
         .borrow()

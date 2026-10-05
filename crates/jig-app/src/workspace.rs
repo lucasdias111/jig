@@ -10,6 +10,7 @@ mod debug;
 mod definitions;
 mod file_watch;
 mod find;
+mod find_panel;
 mod git;
 mod go_to_file;
 mod go_to_line;
@@ -61,6 +62,8 @@ actions!(
         ToggleSidebar,
         FocusFileTree,
         GoToFile,
+        Find,
+        FindAndReplace,
         FindInFiles,
         NewFile,
         CloseTab,
@@ -140,6 +143,10 @@ pub struct Workspace {
     /// Go to Line's field, while it's open.
     go_to_line: Option<go_to_line::OpenGoToLine>,
     last_find: find::LastFind,
+    /// Find and Replace in the current file, while it's open.
+    find_panel: Option<find_panel::OpenFindPanel>,
+    /// The panel's last query, to start the next ⌘F from.
+    last_find_query: String,
     /// The project's files as last walked, for Go to File to show at once.
     file_index: Option<go_to_file::FileIndex>,
     /// Files shown in this window, most recent first, for Go to File.
@@ -221,6 +228,8 @@ impl Workspace {
             rename: None,
             go_to_line: None,
             last_find: Default::default(),
+            find_panel: None,
+            last_find_query: String::new(),
             file_index: None,
             recent_files: Vec::new(),
             new_command: None,
@@ -548,8 +557,35 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .chain(run::key_bindings())
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
+        .chain(crate::find_panel::key_bindings())
         .chain(jig_commands::new_command::key_bindings())
         .collect()
+}
+
+impl Workspace {
+    /// The current tab's code.
+    fn render_code(&self, cx: &Context<Self>) -> impl IntoElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .pl_2()
+            .pr_3()
+            .pt_1()
+            .pb_2()
+            // Line shortcuts bind here, not in every other input.
+            .key_context("CodeEditor")
+            .child(
+                Editor::new(self.editor().state())
+                    .bordered(false)
+                    // The column behind it is the surface.
+                    .bg(transparent_black())
+                    // Locked while a command's change awaits review. The
+                    // element re-applies this every frame.
+                    .readonly(self.previewing())
+                    .context_menu(self.code_menu(cx))
+                    .size_full(),
+            )
+    }
 }
 
 impl Render for Workspace {
@@ -580,6 +616,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::focus_file_tree))
             .on_action(cx.listener(Self::go_to_file))
+            .on_action(cx.listener(Self::find))
+            .on_action(cx.listener(Self::find_and_replace))
             .on_action(cx.listener(Self::find_in_files))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::close_tab))
@@ -662,28 +700,16 @@ impl Render for Workspace {
                             })
                             .when(!self.home, |this| {
                                 this.child(
+                                    // The find panel floats over the code,
+                                    // outside its key context.
                                     div()
+                                        .relative()
                                         .flex_1()
                                         .min_h_0()
-                                        .pl_2()
-                                        .pr_3()
-                                        .pt_1()
-                                        .pb_2()
-                                        // Line shortcuts bind here, not in
-                                        // every other input.
-                                        .key_context("CodeEditor")
-                                        .child(
-                                            Editor::new(self.editor().state())
-                                                .bordered(false)
-                                                // The column behind it is the surface.
-                                                .bg(transparent_black())
-                                                // Locked while a command's change awaits
-                                                // review. The element re-applies this
-                                                // every frame.
-                                                .readonly(self.previewing())
-                                                .context_menu(self.code_menu(cx))
-                                                .size_full(),
-                                        ),
+                                        .flex()
+                                        .flex_col()
+                                        .child(self.render_code(cx))
+                                        .children(self.render_find_panel()),
                                 )
                             })
                             .children(self.render_run_panel(cx))
@@ -4377,5 +4403,183 @@ env = {{ GREETING = "there" }}
         assert!(cx.update(|cx| workspace.read(cx).go_to_line.is_none()));
         let editor = cx.update(|cx| workspace.read(cx).editor().clone());
         assert_eq!(cx.update(|cx| editor.selection(cx)), 9..9);
+    }
+
+    /// The find panel's query, or `None` while it's closed.
+    fn find_query(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<String> {
+        cx.update(|cx| {
+            workspace
+                .read(cx)
+                .find_panel
+                .as_ref()
+                .map(|open| open.view.read(cx).query(cx))
+        })
+    }
+
+    fn selection(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> std::ops::Range<usize> {
+        cx.update(|cx| workspace.read(cx).editor().selection(cx))
+    }
+
+    #[gpui_kit::test]
+    fn find_starts_from_the_selection_and_enter_goes_to_the_next_match(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "let foo = 1;\nfoo += foo;\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            workspace.read(cx).editor().clone().select(4..7, cx);
+            window.press("secondary-f", cx);
+        });
+        assert_eq!(find_query(cx, &workspace).as_deref(), Some("foo"));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            let this = workspace.read(cx);
+            assert!(
+                this.find_panel_focused(window, cx),
+                "typing goes to the panel"
+            );
+            let session = this.editor().state().read(cx).search_session();
+            assert!(session.is_active(), "the matches are highlighted");
+            assert_eq!(session.matcher.len(), 3);
+            assert_eq!(
+                session.matcher.current(),
+                Some(0),
+                "starting at the selection"
+            );
+        });
+        assert_eq!(selection(cx, &workspace), 4..7);
+
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(
+            selection(cx, &workspace),
+            13..16,
+            "the next match is selected"
+        );
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(selection(cx, &workspace), 20..23);
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(selection(cx, &workspace), 4..7, "round to the first");
+        step(cx, window, |window, cx| window.press("shift-enter", cx));
+        assert_eq!(selection(cx, &workspace), 20..23, "and back");
+
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert_eq!(find_query(cx, &workspace), None, "Esc closes it");
+        step(cx, window, |window, cx| {
+            let this = workspace.read(cx);
+            assert!(this.editor().state().focus_handle(cx).is_focused(window));
+            assert!(!this.editor().state().read(cx).search_session().is_active());
+        });
+        assert_eq!(selection(cx, &workspace), 20..23, "at the last match");
+
+        // A selection over two lines isn't a query: the last one is.
+        step(cx, window, |window, cx| {
+            workspace.read(cx).editor().clone().select(0..16, cx);
+            window.press("secondary-f", cx);
+        });
+        assert_eq!(find_query(cx, &workspace).as_deref(), Some("foo"));
+    }
+
+    #[gpui_kit::test]
+    fn find_and_replace_replaces_every_match_as_one_step(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "foo bar foo\nfoo\n").unwrap();
+        let (window, workspace) = open(cx, &path);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            workspace.read(cx).editor().clone().select(0..3, cx);
+            window.press("secondary-alt-f", cx);
+        });
+        assert_eq!(find_query(cx, &workspace).as_deref(), Some("foo"));
+        assert!(cx.update(|cx| {
+            workspace
+                .read(cx)
+                .find_panel
+                .as_ref()
+                .unwrap()
+                .view
+                .read(cx)
+                .is_replacing()
+        }));
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            // The replace field has the keyboard.
+            window.input("baz", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.press("secondary-alt-enter", cx)
+        });
+        assert_eq!(text(cx, &workspace), "baz bar baz\nbaz\n");
+        assert!(cx.update(|cx| workspace.read(cx).tab().dirty));
+
+        step(cx, window, |window, cx| window.press("escape", cx));
+        step(cx, window, |window, cx| window.press("secondary-z", cx));
+        assert_eq!(text(cx, &workspace), "foo bar foo\nfoo\n", "one undo step");
+    }
+
+    #[gpui_kit::test]
+    fn replace_is_refused_while_a_change_is_under_review(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = preview_docs(cx);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-alt-f", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            // From the replace field to the query.
+            window.press("tab", cx);
+            window.input("a()", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.press("tab", cx);
+            window.input("b()", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-alt-enter", cx);
+            window.press("enter", cx);
+        });
+        assert_eq!(text(cx, &workspace), DOCUMENTED, "nothing replaced");
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            assert_eq!(
+                this.editor()
+                    .state()
+                    .read(cx)
+                    .search_session()
+                    .matcher
+                    .len(),
+                1,
+                "though there was a match"
+            );
+            assert!(this.previewing(), "and Enter didn't accept the change");
+        });
+
+        // Esc closes the panel first, then rejects the change.
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert_eq!(find_query(cx, &workspace), None);
+        assert!(cx.update(|cx| workspace.read(cx).previewing()));
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert_eq!(text(cx, &workspace), ORIGINAL);
+    }
+
+    #[gpui_kit::test]
+    fn the_palette_closes_the_find_panel(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-f", cx);
+        });
+        assert!(find_query(cx, &workspace).is_some());
+        step(cx, window, |window, cx| window.press("secondary-k", cx));
+        assert_eq!(find_query(cx, &workspace), None);
+        assert!(cx.update(|cx| workspace.read(cx).palette.is_some()));
+        // ⌘F leaves the palette alone.
+        step(cx, window, |window, cx| window.press("secondary-f", cx));
+        assert_eq!(find_query(cx, &workspace), None);
     }
 }
