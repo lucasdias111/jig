@@ -121,6 +121,8 @@ pub struct Workspace {
     /// The project's files. `None` until a file or folder is open.
     tree: Option<ProjectTree>,
     sidebar_open: bool,
+    sidebar_view: sidebar::SidebarView,
+    sidebar_motion: Option<sidebar::SidebarMotion>,
     sidebar_width: Pixels,
     /// Set while the sidebar's edge is being dragged.
     resizing_sidebar: bool,
@@ -206,6 +208,8 @@ impl Workspace {
             tab_scroll: ScrollHandle::new(),
             tree: None,
             sidebar_open: false,
+            sidebar_view: Default::default(),
+            sidebar_motion: None,
             sidebar_width: px(240.),
             resizing_sidebar: false,
             home: path.is_none() || folder.is_some(),
@@ -552,8 +556,8 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
         let theme = cx.theme();
+        self.step_sidebar_motion(window);
         let sidebar = self.render_sidebar(cx);
-        let sidebar_top = self.render_sidebar_top(cx);
         let title = self.render_title(cx);
         let tab_bar = self.render_tab_bar(cx);
         let root = v_flex();
@@ -619,33 +623,25 @@ impl Render for Workspace {
             .on_drag_move(cx.listener(Self::drag_agent_chat))
             .on_drag_move(cx.listener(Self::resize_agent_chat))
             .child(
-                // One unified bar across the window: the sidebar's top runs
-                // up under the traffic lights, the rest holds the title and the
-                // git, command and run controls. The tabs sit in a row below.
+                // One bar across the whole window, the sidebar below it:
+                // the traffic lights, the title, and the command and run
+                // controls. The tabs sit in a row below.
                 TitleBar::new()
                     .h(px(TITLE_BAR_HEIGHT))
                     .pl_0()
                     .border_b_0()
                     .bg(transparent_black())
                     .child(
-                        h_flex().size_full().children(sidebar_top).child(
-                            h_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .when(self.sidebar_shown(), |this| this.pl_2())
-                                .when(!self.sidebar_shown(), |this| {
-                                    this.pl(px(TRAFFIC_LIGHTS_WIDTH))
-                                })
-                                .pr_2()
-                                .bg(theme::editor_surface(cx))
-                                .border_b_1()
-                                .border_color(theme.title_bar_border)
-                                .child(title)
-                                .children(self.render_branch_button(cx))
-                                .children(self.render_command_button(cx))
-                                .children(self.render_run_controls(cx)),
-                        ),
+                        h_flex()
+                            .size_full()
+                            .pl(px(TRAFFIC_LIGHTS_WIDTH))
+                            .pr_2()
+                            .bg(theme::editor_surface(cx))
+                            .border_b_1()
+                            .border_color(theme.title_bar_border)
+                            .child(title)
+                            .children(self.render_command_button(cx))
+                            .children(self.render_run_controls(cx)),
                     ),
             )
             .child(
@@ -653,6 +649,7 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
+                    .children(self.render_activity_bar(cx))
                     .children(sidebar)
                     .child(
                         v_flex()
@@ -717,7 +714,6 @@ impl Render for Workspace {
             .children(self.render_rename())
             .children(self.render_go_to_line())
             .children(self.render_run_picker(window))
-            .children(self.render_git_panel(window))
             .children(self.render_branch_picker(window))
             .children(self.render_hunk_popup(cx))
             .child(self.selection_button.clone())
@@ -4126,6 +4122,46 @@ env = {{ GREETING = "there" }}
             workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
             vec![]
         );
+    }
+
+    #[gpui_kit::test]
+    fn the_activity_bar_switches_and_collapses_the_sidebar(cx: &mut TestAppContext) {
+        use super::sidebar::SidebarView;
+        let (_dir, window, workspace) = committed_repo(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        let ws = workspace.clone();
+        let click = move |vcx: &mut gpui_kit::VisualTestContext, selector: &'static str| {
+            // Skip to the end of the sidebar's motion, so nothing moves
+            // between finding the button and clicking it.
+            vcx.update(|window, cx| {
+                ws.update(cx, |this, _| this.sidebar_motion = None);
+                window.render_frame(cx)
+            });
+            let bounds = vcx.debug_bounds(selector).expect(selector);
+            vcx.simulate_click(bounds.center(), gpui_kit::Modifiers::none());
+            vcx.run_until_parked();
+        };
+        let shown = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.update(|_, cx| {
+                let this = workspace.read(cx);
+                this.sidebar_shown().then_some(this.sidebar_view)
+            })
+        };
+        assert_eq!(shown(&mut vcx), None, "a single file opens without it");
+        click(&mut vcx, "activity-files");
+        assert_eq!(shown(&mut vcx), Some(SidebarView::Files));
+        click(&mut vcx, "activity-git");
+        assert_eq!(shown(&mut vcx), Some(SidebarView::Git));
+        assert!(vcx.update(|_, cx| workspace.read(cx).git_panel().is_some()));
+        click(&mut vcx, "activity-git");
+        assert_eq!(
+            shown(&mut vcx),
+            None,
+            "the shown view's button collapses it"
+        );
+
+        click(&mut vcx, "branch-switcher");
+        assert!(vcx.update(|_, cx| workspace.read(cx).branch_picker().is_some()));
     }
 
     #[gpui_kit::test]

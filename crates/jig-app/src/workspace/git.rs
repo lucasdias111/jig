@@ -1,6 +1,6 @@
 //! Git in the workspace: change bars in each tab's gutter against the last
 //! commit, a popup with a change's old lines when one is clicked, the Git
-//! panel (⌃⇧G) and the branch picker, and the branch in the title bar.
+//! view of the sidebar (⌃⇧G), and the branch switcher in the status bar.
 //!
 //! The bars are worked out again on every edit, from the committed text read
 //! once when the tab opens and again whenever git may have moved on: the
@@ -17,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::EditorHandle as _;
 
+use super::sidebar::SidebarView;
 use super::{SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
 use crate::branch_picker::{BranchPicker, BranchPickerEvent};
 use crate::document::Document;
@@ -31,11 +32,13 @@ const POPUP_WIDTH: f32 = 520.;
 pub(super) struct GitState {
     /// The project's repository, once found.
     repo: Option<Repo>,
-    /// The branch checked out, or the commit when none is, for the title bar.
+    /// The branch checked out, or the commit when none is, for the status bar.
     head: Option<String>,
     /// Each tab's file as last committed, and how the buffer differs.
     files: HashMap<EntityId, TabGit>,
     popup: Option<HunkPopup>,
+    /// The sidebar's Git view, kept while the sidebar shows something else
+    /// so a half-written commit message survives.
     panel: Option<Opened<GitPanel>>,
     branches: Option<Opened<BranchPicker>>,
     _refresh: Option<Task<()>>,
@@ -176,6 +179,16 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let root = repo.as_ref().map(|repo| repo.root().to_path_buf());
+                let panel_root = this
+                    .git
+                    .panel
+                    .as_ref()
+                    .map(|panel| panel.view.read(cx).root().to_path_buf());
+                if panel_root.is_some() && panel_root != root {
+                    // Another project: its panel would show the wrong files.
+                    this.git.panel = None;
+                }
                 this.git.repo = repo;
                 this.git.head = head;
                 for (id, committed) in committed {
@@ -382,62 +395,66 @@ impl Workspace {
         )
     }
 
-    /// ⌃⇧G: the Git panel, or closing it.
+    /// ⌃⇧G: the sidebar's Git view, or collapsing the sidebar.
     pub(super) fn toggle_git_panel(
         &mut self,
         _: &ToggleGitPanel,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.git.panel.is_some() {
-            self.close_git_panel(window, cx, true);
-        } else {
-            self.open_git_panel(window, cx);
-        }
-    }
-
-    fn open_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(repo) = self.git.repo.clone() else {
-            self.show_error(
-                "This project isn't in a Git repository. Run git init in its folder to start one.",
-                window,
-                cx,
-            );
+        if self.tree.is_none() {
+            self.show_error("Open a project first, to see its changes.", window, cx);
             return;
-        };
-        self.palette = None;
-        self.quick_open = None;
-        self.find_in_files = None;
-        self.git.branches = None;
-        self.git.popup = None;
-        let view = cx.new(|cx| GitPanel::new(repo, window, cx));
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            GitPanelEvent::Open(path) => {
-                let path = path.clone();
-                this.close_git_panel(window, cx, false);
-                this.open_file(&path, window, cx);
-            }
-            GitPanelEvent::Branches => {
-                this.close_git_panel(window, cx, false);
-                this.open_branch_picker(window, cx);
-            }
-            GitPanelEvent::Changed => this.git_changed(window, cx),
-            GitPanelEvent::Dismissed => this.close_git_panel(window, cx, true),
-        });
-        self.git.panel = Some(Opened {
-            view,
-            _events: events,
-        });
-        cx.notify();
+        }
+        self.toggle_sidebar_view(SidebarView::Git, window, cx);
     }
 
-    fn close_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>, refocus: bool) {
-        if self.git.panel.take().is_some() {
-            if refocus {
-                self.focus_main(window, cx);
-            }
-            cx.notify();
+    /// The sidebar has just switched to Git: make the panel if there's a
+    /// repository, bring its lists up to date, and focus the message.
+    pub(super) fn show_git_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.git.popup = None;
+        if self.git.panel.is_none() {
+            let Some(repo) = self.git.repo.clone() else {
+                return;
+            };
+            let view = cx.new(|cx| GitPanel::new(repo, window, cx));
+            let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
+                GitPanelEvent::Open(path) => {
+                    let path = path.clone();
+                    this.open_file(&path, window, cx);
+                }
+                GitPanelEvent::Changed => this.git_changed(window, cx),
+                GitPanelEvent::Dismissed => this.focus_main(window, cx),
+            });
+            self.git.panel = Some(Opened {
+                view,
+                _events: events,
+            });
+        } else {
+            self.git_saved(window, cx);
         }
+        if let Some(panel) = &self.git.panel {
+            panel.view.update(cx, |panel, cx| panel.focus(window, cx));
+        }
+    }
+
+    /// The sidebar's Git view, or why there's nothing in it.
+    pub(super) fn render_git_view(&self, cx: &Context<Self>) -> AnyElement {
+        if let Some(panel) = &self.git.panel {
+            return panel.view.clone().into_any_element();
+        }
+        let theme = cx.theme();
+        let message = if self.git.repo.is_some() {
+            "Loading…"
+        } else {
+            "This project isn't in a Git repository. Run git init in its folder to start one."
+        };
+        div()
+            .p_4()
+            .text_size(px(12.5))
+            .text_color(theme.muted_foreground)
+            .child(message)
+            .into_any_element()
     }
 
     /// After a save: the panel's lists follow.
@@ -464,7 +481,6 @@ impl Workspace {
         self.palette = None;
         self.quick_open = None;
         self.find_in_files = None;
-        self.git.panel = None;
         let view = cx.new(|cx| BranchPicker::new(window, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             BranchPickerEvent::Switch(branch) => {
@@ -588,22 +604,8 @@ impl Workspace {
         }
         self.refresh_git(cx);
         self.refresh_tree(cx);
+        self.git_saved(window, cx);
         cx.notify();
-    }
-
-    pub(super) fn render_git_panel(&self, window: &Window) -> Option<AnyElement> {
-        let open = self.git.panel.as_ref()?;
-        let width = px(crate::git_panel::WIDTH);
-        let left = (window.viewport_size().width - width - px(12.)).max(px(8.));
-        Some(
-            deferred(
-                anchored()
-                    .position(point(left, px(TITLE_BAR_HEIGHT + 6.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(open.view.clone()),
-            )
-            .into_any_element(),
-        )
     }
 
     pub(super) fn render_branch_picker(&self, window: &Window) -> Option<AnyElement> {
@@ -621,40 +623,27 @@ impl Workspace {
         )
     }
 
-    /// The branch, in the title bar; clicking it opens the Git panel.
-    pub(super) fn render_branch_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    /// The branch, in the status bar; clicking it opens the branch picker.
+    pub(super) fn render_branch_switcher(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.git.repo.as_ref()?;
         let head = self.git.head.clone().unwrap_or_else(|| "Git".into());
         let theme = cx.theme();
         Some(
             h_flex()
-                .id("git-button")
-                .debug_selector(|| "git-button".into())
+                .id("branch-switcher")
+                .debug_selector(|| "branch-switcher".into())
                 .flex_none()
-                .ml_2()
-                .h(px(26.))
-                .max_w(px(200.))
-                .px_2()
-                .gap_1p5()
-                .rounded(px(6.))
-                .text_size(px(12.5))
-                .text_color(theme.foreground.opacity(0.85))
-                .hover(|s| s.bg(theme.foreground.opacity(0.08)))
-                .child(
-                    Icon::default()
-                        .data(BRANCH_ICON)
-                        .size(px(13.))
-                        .flex_none()
-                        .text_color(theme.muted_foreground),
-                )
+                .h_full()
+                .max_w(px(220.))
+                .px_1p5()
+                .gap_1()
+                .hover(|s| {
+                    s.bg(theme.foreground.opacity(0.08))
+                        .text_color(theme.foreground)
+                })
+                .child(Icon::default().data(BRANCH_ICON).size(px(12.)).flex_none())
                 .child(div().min_w_0().truncate().whitespace_nowrap().child(head))
-                // Otherwise the title bar takes the press as a window drag.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if this.git.panel.is_none() {
-                        this.open_git_panel(window, cx);
-                    }
-                }))
+                .on_click(cx.listener(|this, _, window, cx| this.open_branch_picker(window, cx)))
                 .into_any_element(),
         )
     }

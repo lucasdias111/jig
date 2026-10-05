@@ -1,5 +1,6 @@
-//! The strip along the bottom of the editor: where the cursor is, and how
-//! the file is indented, encoded and highlighted.
+//! The strip along the bottom of the editor: the branch, with a switcher,
+//! where the cursor is, and how the file is indented, encoded and
+//! highlighted.
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
@@ -44,7 +45,7 @@ impl Render for CursorPosition {
 }
 
 impl Workspace {
-    pub(super) fn render_status_bar(&self, cx: &App) -> impl IntoElement {
+    pub(super) fn render_status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let tab = self.tab();
         let language = tab
@@ -57,13 +58,15 @@ impl Workspace {
         h_flex()
             .flex_none()
             .h(px(HEIGHT))
-            .px_3()
+            .pl_1p5()
+            .pr_3()
             .gap_4()
-            .justify_end()
             .border_t_1()
             .border_color(theme.title_bar_border)
             .text_xs()
             .text_color(theme.muted_foreground)
+            .children(self.render_branch_switcher(cx))
+            .child(div().flex_1())
             .child(tab.cursor.clone())
             .child(item(indentation::label(tab.indentation).into()))
             .child(item(tab.document.encoding().into()))

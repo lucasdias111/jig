@@ -1,17 +1,46 @@
-//! The file tree sidebar: which project it shows, showing and hiding it, and
-//! opening the files chosen in it.
+//! The sidebar: a narrow activity bar along the window's left edge picks
+//! what it shows, the project's files or Git, and collapses it. Also which
+//! project the tree shows, and opening the files chosen in it.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::tabs::canonical;
 use super::{
-    FocusFileTree, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, ProjectTree, ToggleSidebar, Workspace,
+    FocusFileTree, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, ProjectTree, TITLE_BAR_HEIGHT,
+    ToggleSidebar, Workspace,
 };
 use crate::file_tree::{FileTree, FileTreeEvent};
+use crate::git_panel::BRANCH_ICON;
+
+/// The activity bar's width.
+pub(super) const ACTIVITY_BAR_WIDTH: f32 = 44.;
+
+/// Lucide "files".
+const FILES_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/><path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/></svg>"#;
+
+/// How long the sidebar takes to fold out or collapse.
+const MOTION: Duration = Duration::from_millis(180);
+
+/// The sidebar folding out or collapsing: how open it was when the motion
+/// started, so a toggle midway turns it around from where it is.
+pub(super) struct SidebarMotion {
+    started: Instant,
+    from: f32,
+}
+
+/// What the sidebar shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SidebarView {
+    #[default]
+    Files,
+    Git,
+}
 
 impl Workspace {
     /// Show `dir` in the sidebar, opened, as the project.
@@ -21,7 +50,7 @@ impl Workspace {
             self.home = true;
         }
         self.set_tree_root(dir, window, cx);
-        self.sidebar_open = true;
+        self.set_sidebar_open(true);
         match self.document().path.clone() {
             Some(file) => self.show_in_tree(&file, window, cx),
             // Nothing to edit yet, so start in the tree.
@@ -95,7 +124,7 @@ impl Workspace {
         if self.sidebar_open && self.tree_focused(window, cx) {
             self.focus_main(window, cx);
         }
-        self.sidebar_open = !self.sidebar_open;
+        self.set_sidebar_open(!self.sidebar_open);
         cx.notify();
     }
 
@@ -113,46 +142,183 @@ impl Workspace {
         if self.tree_focused(window, cx) {
             self.focus_main(window, cx);
         } else {
-            self.sidebar_open = true;
+            self.set_sidebar_open(true);
+            self.sidebar_view = SidebarView::Files;
             self.focus_tree(window, cx);
         }
         cx.notify();
+    }
+
+    /// An activity bar button: show `view`, or collapse the sidebar when it
+    /// already shows it.
+    pub(super) fn toggle_sidebar_view(
+        &mut self,
+        view: SidebarView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar_shown() && self.sidebar_view == view {
+            self.set_sidebar_open(false);
+            self.focus_main(window, cx);
+        } else {
+            self.set_sidebar_open(true);
+            self.sidebar_view = view;
+            match view {
+                SidebarView::Files => self.focus_tree(window, cx),
+                SidebarView::Git => self.show_git_view(window, cx),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Open or collapse the sidebar, animating from wherever it is now.
+    fn set_sidebar_open(&mut self, open: bool) {
+        if open == self.sidebar_open {
+            return;
+        }
+        self.sidebar_motion = Some(SidebarMotion {
+            started: Instant::now(),
+            from: self.sidebar_openness(),
+        });
+        self.sidebar_open = open;
+    }
+
+    /// How far the sidebar is folded out, from 0 (collapsed) to 1 (open).
+    fn sidebar_openness(&self) -> f32 {
+        let target = if self.sidebar_open { 1. } else { 0. };
+        let Some(motion) = &self.sidebar_motion else {
+            return target;
+        };
+        let t = (motion.started.elapsed().as_secs_f32() / MOTION.as_secs_f32()).min(1.);
+        let eased = ease_out_quint()(t);
+        motion.from + (target - motion.from) * eased
+    }
+
+    /// Call each frame: ends a finished motion, or asks for the next frame.
+    pub(super) fn step_sidebar_motion(&mut self, window: &Window) {
+        if let Some(motion) = &self.sidebar_motion {
+            if motion.started.elapsed() >= MOTION {
+                self.sidebar_motion = None;
+            } else {
+                window.request_animation_frame();
+            }
+        }
+    }
+
+    /// The activity bar is there whenever there's a project to show.
+    pub(super) fn activity_bar_shown(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    /// How far from the window's left edge the editor starts.
+    fn sidebar_right_edge(&self) -> Pixels {
+        let bar = if self.activity_bar_shown() {
+            px(ACTIVITY_BAR_WIDTH)
+        } else {
+            px(0.)
+        };
+        if self.sidebar_shown() {
+            bar + self.sidebar_width
+        } else {
+            bar
+        }
     }
 
     pub(super) fn sidebar_shown(&self) -> bool {
         self.sidebar_open && self.tree.is_some()
     }
 
-    /// The sidebar below the title bar: the project's files.
+    /// The sidebar below the title bar: the project's files, or Git. While
+    /// it folds out or collapses, its content keeps its full width and is
+    /// clipped, so the text slides rather than rewrapping.
     pub(super) fn render_sidebar(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let tree = self.tree.as_ref().filter(|_| self.sidebar_open)?;
+        let tree = self.tree.as_ref()?;
+        let openness = self.sidebar_openness();
+        if openness <= 0. {
+            return None;
+        }
+        let content = match self.sidebar_view {
+            SidebarView::Files => tree.view.clone().into_any_element(),
+            SidebarView::Git => self.render_git_view(cx),
+        };
         Some(
-            sidebar_panel(self.sidebar_width, cx)
+            div()
+                .flex_none()
                 .h_full()
-                .child(tree.view.clone())
+                .w(self.sidebar_width * openness)
+                .overflow_hidden()
+                .child(
+                    sidebar_panel(self.sidebar_width, cx)
+                        .h_full()
+                        .child(content),
+                )
                 .into_any_element(),
         )
     }
 
-    /// The sidebar's part of the title bar, under the traffic lights, so
-    /// the sidebar reads as running the full height of the window.
-    pub(super) fn render_sidebar_top(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        self.sidebar_shown().then(|| {
-            sidebar_panel(self.sidebar_width, cx)
+    /// The strip along the window's left edge: a button per sidebar view.
+    pub(super) fn render_activity_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if !self.activity_bar_shown() {
+            return None;
+        }
+        let button = |id: &'static str, icon: &'static [u8], tooltip: &'static str, view| {
+            let theme = cx.theme();
+            let active = self.sidebar_shown() && self.sidebar_view == view;
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .size(px(32.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(7.))
+                .text_color(if active {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .when(active, |this| this.bg(theme.sidebar_accent))
+                .hover(|s| s.bg(theme.sidebar_accent).text_color(theme.foreground))
+                .child(Icon::default().data(icon).size(px(17.)))
+                .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_sidebar_view(view, window, cx)
+                }))
+        };
+        Some(
+            sidebar_panel(px(ACTIVITY_BAR_WIDTH), cx)
                 .h_full()
-                .into_any_element()
-        })
+                .flex()
+                .flex_col()
+                .items_center()
+                .pt_1()
+                .gap_1()
+                .child(button(
+                    "activity-files",
+                    FILES_ICON,
+                    "Files (⇧⌘E)",
+                    SidebarView::Files,
+                ))
+                .child(button(
+                    "activity-git",
+                    BRANCH_ICON,
+                    "Git (⌃⇧G)",
+                    SidebarView::Git,
+                ))
+                .into_any_element(),
+        )
     }
 
-    /// The sidebar's draggable edge, over the full height of the window.
+    /// The sidebar's draggable edge, from the title bar down. Not there
+    /// while the sidebar is moving.
     pub(super) fn render_sidebar_handle(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        self.sidebar_shown().then(|| {
+        (self.sidebar_shown() && self.sidebar_motion.is_none()).then(|| {
             div()
                 .id("sidebar-resize")
                 .absolute()
-                .top_0()
+                .top(px(TITLE_BAR_HEIGHT))
                 .bottom_0()
-                .left(self.sidebar_width - px(3.))
+                .left(self.sidebar_right_edge() - px(3.))
                 .w(px(6.))
                 .cursor_col_resize()
                 .on_mouse_down(
@@ -175,9 +341,8 @@ impl Workspace {
                     if !event.dragging() {
                         this.resizing_sidebar = false;
                     } else {
-                        this.sidebar_width = event
-                            .position
-                            .x
+                        let bar = this.sidebar_right_edge() - this.sidebar_width;
+                        this.sidebar_width = (event.position.x - bar)
                             .clamp(px(MIN_SIDEBAR_WIDTH), px(MAX_SIDEBAR_WIDTH));
                     }
                     cx.notify();
