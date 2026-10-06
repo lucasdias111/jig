@@ -11,12 +11,10 @@ read afterwards. The code became something I reviewed, not something I wrote.
 I still wanted the power of AI, just where it's actually useful: in the code,
 at the cursor, on the lines I'm looking at. So I built Jig.
 
-Select some code, press **⌘K**, pick a jig or type what you want, and the
+Select some code, open the jig commands, pick a jig or type what you want, and the
 change shows up inline. **Tab** keeps it, **Esc** throws it away. Nothing
 reaches the disk until you say so.
 
-The name is from woodworking: a jig guides precise, repeatable cuts made by
-hand. Each saved command in Jig is one.
 
 ## Building
 
