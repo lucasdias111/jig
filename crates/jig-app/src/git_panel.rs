@@ -19,7 +19,7 @@ const ROW_HEIGHT: f32 = 26.;
 
 /// Lucide "git-branch".
 pub const BRANCH_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>"#;
-const PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>"#;
+pub const PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>"#;
 const CHECK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 /// Lucide "refresh-cw".
 const FETCH: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>"#;
@@ -35,6 +35,8 @@ pub enum GitPanelEvent {
     /// Git changed files on disk, or the branch: tabs and markers follow.
     Changed,
     Dismissed,
+    /// The New Branch button: the workspace asks for its name.
+    NewBranch,
 }
 
 /// What a finished action leads to.
@@ -457,6 +459,10 @@ impl GitPanel {
             .child(
                 action("git-push", PUSH, "Push")
                     .on_click(cx.listener(|this, _, window, cx| this.push(window, cx))),
+            )
+            .child(
+                action("git-new-branch", BRANCH_ICON, "Branch")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::NewBranch))),
             );
         v_flex()
             .pt_0p5()

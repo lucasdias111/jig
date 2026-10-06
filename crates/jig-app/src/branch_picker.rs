@@ -1,6 +1,7 @@
 //! Switch branches: a Spotlight-style panel listing the repository's
 //! branches, local ones first, filtered as you type. A name that matches no
-//! branch can be created from where you are.
+//! branch can be created from where you are, and the first row, New
+//! Branch…, turns the panel into a field for just that.
 
 use std::ops::Range;
 
@@ -11,7 +12,7 @@ use gpui_kit::*;
 
 use crate::fuzzy;
 use crate::git::Branch;
-use crate::git_panel::BRANCH_ICON;
+use crate::git_panel::{BRANCH_ICON, PLUS};
 
 pub const WIDTH: f32 = 480.;
 const ROW_HEIGHT: f32 = 32.;
@@ -24,18 +25,33 @@ pub enum BranchPickerEvent {
     Blurred,
 }
 
+/// What the panel is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Switch,
+    /// Only a name field for a new branch.
+    Create,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
+    /// Turns the panel to [`Mode::Create`].
+    NewBranch,
     Branch {
         index: usize,
         /// Byte offsets of the name's characters the query matched.
         positions: Vec<usize>,
     },
     Create(String),
+    /// A name already taken, shown so Enter doing nothing makes sense.
+    Taken(String),
 }
 
 pub struct BranchPicker {
+    mode: Mode,
     input: Entity<InputState>,
+    /// The checked-out branch, which a new one starts from.
+    head: Option<String>,
     branches: Vec<Branch>,
     /// Still asking git.
     loading: bool,
@@ -54,8 +70,13 @@ impl Focusable for BranchPicker {
 }
 
 impl BranchPicker {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Switch to branch…"));
+    pub fn new(
+        mode: Mode,
+        head: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder(mode)));
         let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
             InputEvent::Change => this.refilter(cx),
             InputEvent::Blur => cx.emit(BranchPickerEvent::Blurred),
@@ -63,7 +84,9 @@ impl BranchPicker {
         });
         input.update(cx, |input, cx| input.focus(window, cx));
         Self {
+            mode,
             input,
+            head,
             branches: Vec::new(),
             loading: true,
             rows: Vec::new(),
@@ -85,7 +108,9 @@ impl BranchPicker {
             .iter()
             .map(|row| match row {
                 Row::Branch { index, .. } => self.branches[*index].name.clone(),
+                Row::NewBranch => "New Branch…".into(),
                 Row::Create(name) => format!("Create {name}"),
+                Row::Taken(name) => format!("Taken {name}"),
             })
             .collect()
     }
@@ -96,6 +121,19 @@ impl BranchPicker {
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
+        if self.mode == Mode::Create {
+            let name = branch_name(&query);
+            self.rows = if name.is_empty() || self.loading {
+                Vec::new()
+            } else if self.branches.iter().any(|b| !b.remote && b.name == name) {
+                vec![Row::Taken(name)]
+            } else {
+                vec![Row::Create(name)]
+            };
+            self.selected = 0;
+            cx.notify();
+            return;
+        }
         let mut rows: Vec<Row> = if query.is_empty() {
             (0..self.branches.len())
                 .map(|index| Row::Branch {
@@ -117,8 +155,10 @@ impl BranchPicker {
             .collect()
         };
         let exists = self.branches.iter().any(|b| b.name == query);
-        if !query.is_empty() && !exists && !self.loading {
-            rows.push(Row::Create(query.replace(' ', "-")));
+        if query.is_empty() && !self.loading {
+            rows.insert(0, Row::NewBranch);
+        } else if !query.is_empty() && !exists && !self.loading {
+            rows.push(Row::Create(branch_name(&query)));
         }
         self.rows = rows;
         self.selected = 0;
@@ -126,19 +166,29 @@ impl BranchPicker {
         cx.notify();
     }
 
-    fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// Turn the panel into the new branch field, keeping what was typed.
+    fn start_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = Mode::Create;
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder(Mode::Create), window, cx)
+        });
+        self.refilter(cx);
+    }
+
+    fn choose(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         match self.rows.get(index) {
+            Some(Row::NewBranch) => self.start_create(window, cx),
+            Some(Row::Taken(_)) | None => {}
             Some(Row::Branch { index, .. }) => {
                 cx.emit(BranchPickerEvent::Switch(self.branches[*index].clone()))
             }
             Some(Row::Create(name)) => cx.emit(BranchPickerEvent::Create(name.clone())),
-            None => {}
         }
     }
 
-    fn on_enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.choose(self.selected, cx);
+        self.choose(self.selected, window, cx);
     }
 
     fn on_escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
@@ -206,10 +256,26 @@ impl BranchPicker {
                     tag,
                 )
             }
-            Row::Create(name) => (
-                StyledText::new(SharedString::from(format!("Create branch “{name}”"))),
-                "new",
+            Row::NewBranch => (StyledText::new("New Branch…"), ""),
+            Row::Create(name) => {
+                let from = self
+                    .head
+                    .as_ref()
+                    .map_or_else(String::new, |head| format!(" from {head}"));
+                (
+                    StyledText::new(SharedString::from(format!("Create branch “{name}”{from}"))),
+                    "new",
+                )
+            }
+            Row::Taken(name) => (
+                StyledText::new(SharedString::from(format!("“{name}” already exists"))),
+                "",
             ),
+        };
+        let icon = if self.rows[ix] == Row::NewBranch {
+            PLUS
+        } else {
+            BRANCH_ICON
         };
         h_flex()
             .id(("branch-picker-row", ix))
@@ -226,7 +292,7 @@ impl BranchPicker {
             })
             .child(
                 Icon::default()
-                    .data(BRANCH_ICON)
+                    .data(icon)
                     .size(px(13.))
                     .flex_none()
                     .text_color(if selected { text } else { muted }),
@@ -248,9 +314,9 @@ impl BranchPicker {
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.choose(ix, cx);
+                    this.choose(ix, window, cx);
                 }),
             )
             .into_any_element()
@@ -277,10 +343,10 @@ impl Render for BranchPicker {
                 .py_3()
                 .text_size(px(13.))
                 .text_color(theme.muted_foreground)
-                .child(if self.loading {
-                    "Reading branches…"
-                } else {
-                    "No branches yet. Type a name to create one."
+                .child(match (self.loading, self.mode) {
+                    (true, _) => "Reading branches…",
+                    (false, Mode::Create) => "Type a name for the new branch.",
+                    (false, Mode::Switch) => "No branches yet. Type a name to create one.",
                 })
         });
         let divider = || {
@@ -324,8 +390,26 @@ impl Render for BranchPicker {
             .child(v_flex().children(empty).child(list))
             .child(divider().mt_1())
             .child(h_flex().px_2p5().pt_1p5().pb_0p5().justify_end().child(
-                jig_commands::surface::hint("↑↓ navigate · ↩ switch · esc close", cx),
+                jig_commands::surface::hint(
+                    match self.mode {
+                        Mode::Switch => "↑↓ navigate · ↩ switch · esc close",
+                        Mode::Create => "↩ create and switch · esc close",
+                    },
+                    cx,
+                ),
             ));
         jig_commands::motion::pop_in(panel, "jig-branch-picker")
     }
+}
+
+fn placeholder(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Switch => "Switch to branch…",
+        Mode::Create => "New branch name…",
+    }
+}
+
+/// What's typed as a branch name: spaces, which git refuses, become dashes.
+fn branch_name(query: &str) -> String {
+    query.trim().replace(' ', "-")
 }

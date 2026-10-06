@@ -21,8 +21,8 @@ use jig_editor::EditorHandle as _;
 pub(super) mod watch;
 
 use super::sidebar::SidebarView;
-use super::{SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
-use crate::branch_picker::{BranchPicker, BranchPickerEvent};
+use super::{NewBranch, SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
+use crate::branch_picker::{self, BranchPicker, BranchPickerEvent};
 use crate::document::Document;
 use crate::git::{self, Hunk, Repo};
 use crate::git_panel::{BRANCH_ICON, GitPanel, GitPanelEvent};
@@ -449,6 +449,9 @@ impl Workspace {
             }
             GitPanelEvent::Changed => this.git_changed(window, cx),
             GitPanelEvent::Dismissed => this.focus_main(window, cx),
+            GitPanelEvent::NewBranch => {
+                this.open_branch_picker(branch_picker::Mode::Create, window, cx)
+            }
         });
         self.git.panel = Some(Opened {
             view,
@@ -489,10 +492,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_branch_picker(window, cx);
+        self.open_branch_picker(branch_picker::Mode::Switch, window, cx);
     }
 
-    fn open_branch_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn new_branch(
+        &mut self,
+        _: &NewBranch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_branch_picker(branch_picker::Mode::Create, window, cx);
+    }
+
+    fn open_branch_picker(
+        &mut self,
+        mode: branch_picker::Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(repo) = self.git.repo.clone() else {
             self.show_error("This project isn't in a Git repository.", window, cx);
             return;
@@ -500,7 +517,8 @@ impl Workspace {
         self.palette = None;
         self.quick_open = None;
         self.find_in_files = None;
-        let view = cx.new(|cx| BranchPicker::new(window, cx));
+        let head = self.git.head.clone();
+        let view = cx.new(|cx| BranchPicker::new(mode, head, window, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             BranchPickerEvent::Switch(branch) => {
                 let branch = branch.clone();
@@ -661,7 +679,9 @@ impl Workspace {
                 })
                 .child(Icon::default().data(BRANCH_ICON).size(px(12.)).flex_none())
                 .child(div().min_w_0().truncate().whitespace_nowrap().child(head))
-                .on_click(cx.listener(|this, _, window, cx| this.open_branch_picker(window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_branch_picker(branch_picker::Mode::Switch, window, cx)
+                }))
                 .into_any_element(),
         )
     }

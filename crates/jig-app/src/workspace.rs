@@ -85,6 +85,7 @@ actions!(
         StepOut,
         ToggleGitPanel,
         SwitchBranch,
+        NewBranch,
         RenameSymbol,
         FindReferences,
         NextProblem,
@@ -645,6 +646,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::step_out))
             .on_action(cx.listener(Self::toggle_git_panel))
             .on_action(cx.listener(Self::switch_branch))
+            .on_action(cx.listener(Self::new_branch))
             .on_action(cx.listener(Self::rename_symbol))
             .on_action(cx.listener(Self::find_references))
             .on_action(cx.listener(Self::next_problem))
@@ -4320,8 +4322,10 @@ env = {{ GREETING = "there" }}
         let picker = workspace
             .read_with(cx, |this, _| this.branch_picker())
             .expect("the picker opens");
-        // Most recent first, but both commits are in the same second.
+        // New Branch… first, then the branches, most recent first, but both
+        // commits are in the same second.
         let mut names = picker.read_with(cx, |picker, _| picker.row_names());
+        assert_eq!(names.remove(0), "New Branch…");
         names.sort();
         assert_eq!(names, vec!["main".to_string(), "other".to_string()]);
         cx.simulate_input(window, "oth");
@@ -4333,6 +4337,76 @@ env = {{ GREETING = "there" }}
             workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
             vec![]
         );
+    }
+
+    #[gpui_kit::test]
+    fn new_branch_from_the_picker_and_the_git_menu(cx: &mut TestAppContext) {
+        let (dir, window, workspace) = committed_repo(cx);
+        let head = || {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["branch", "--show-current"])
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        let rows = |cx: &mut TestAppContext| {
+            let picker = workspace
+                .read_with(cx, |this, _| this.branch_picker())
+                .unwrap();
+            picker.read_with(cx, |picker, _| picker.row_names())
+        };
+
+        // The switcher's first row turns it into the name field.
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::SwitchBranch), cx)
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), Vec::<String>::new());
+        cx.simulate_input(window, "main");
+        assert_eq!(rows(cx), ["Taken main"], "a taken name isn't offered");
+        cx.simulate_keystrokes(window, "escape");
+        cx.run_until_parked();
+
+        // Git > New Branch… opens straight to it.
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::NewBranch), cx)
+        });
+        cx.run_until_parked();
+        cx.simulate_input(window, "my feature");
+        assert_eq!(rows(cx), ["Create my-feature"]);
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        assert!(workspace.read_with(cx, |this, _| this.branch_picker().is_none()));
+        assert_eq!(head(), "my-feature");
+    }
+
+    #[gpui_kit::test]
+    fn the_git_views_branch_button_asks_for_a_name(cx: &mut TestAppContext) {
+        let (_dir, window, workspace) = committed_repo(cx);
+        step(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(super::ToggleGitPanel), cx)
+        });
+        // The sidebar slides open on the clock, clipping the panel until
+        // it has.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx
+            .debug_bounds("git-new-branch")
+            .expect("the button is in the Git view");
+        vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+        let picker = vcx
+            .update(|_, cx| workspace.read(cx).branch_picker())
+            .expect("the name field opens");
+        vcx.simulate_input("second");
+        let rows = vcx.update(|_, cx| picker.read(cx).row_names());
+        assert_eq!(rows, ["Create second"]);
     }
 
     #[gpui_kit::test]
