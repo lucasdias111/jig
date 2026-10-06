@@ -15,6 +15,18 @@ Select some code, open the jig commands, pick a jig or type what you want, and t
 change shows up inline. **Tab** keeps it, **Esc** throws it away. Nothing
 reaches the disk until you say so.
 
+## Download
+
+[Download Jig for macOS](https://github.com/lucasdias111/jig/releases/latest/download/Jig-macos-arm64.zip)
+(Apple Silicon). Unzip it and move `Jig.app` to Applications. The app isn't
+signed yet, so macOS will block it the first time; this lets it open:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Jig.app
+```
+
+Then connect a model provider in Settings > Model. The Agent lane also needs
+the [`opencode`](https://opencode.ai) CLI on your `PATH`.
 
 ## Building
 
@@ -24,9 +36,7 @@ You need Rust; `rust-toolchain.toml` pins the version.
 cargo run -p jig-app -- path/to/project
 ```
 
-On macOS, `script/bundle-macos.sh` builds `target/Jig.app`. Connect a model
-provider in Settings > Model. The Agent lane also needs the
-[`opencode`](https://opencode.ai) CLI on your `PATH`.
+On macOS, `script/bundle-macos.sh` builds `target/Jig.app`.
 
 [`AGENTS.md`](AGENTS.md) describes how Jig works and how the code is laid out.
 

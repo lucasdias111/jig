@@ -1,0 +1,27 @@
+name: Release
+
+# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) builds
+# Jig.app and publishes it as a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: script/bundle-macos.sh
+      # ditto keeps the bundle's structure and permissions, which zip can lose.
+      - run: ditto -c -k --keepParent target/Jig.app Jig-macos-arm64.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Jig-macos-arm64.zip
+          generate_release_notes: true
