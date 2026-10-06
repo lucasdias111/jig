@@ -29,6 +29,8 @@ lsp-types = "0.97"
 similar = "2"
 # Reloading open files changed outside Jig. GPUI already builds this version.
 notify = "7"
+# Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
+trash = "5"
 
 [dev-dependencies]
 tempfile = "3"

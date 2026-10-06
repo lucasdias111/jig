@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
+use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
@@ -37,7 +38,14 @@ actions!(
         ExpandOrChild,
         OpenSelected,
         Dismiss,
-        CancelNaming
+        CancelNaming,
+        NewFileHere,
+        NewFolderHere,
+        RenameSelected,
+        TrashSelected,
+        CopyPath,
+        CopyRelativePath,
+        RevealSelected
     ]
 );
 
@@ -50,6 +58,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
         KeyBinding::new("space", OpenSelected, Some(CONTEXT)),
         KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
+        // Finder's keys for renaming and deleting are Enter and ⌘⌫, but
+        // Enter opens here, so rename takes F2 as it does in the code.
+        KeyBinding::new("f2", RenameSelected, Some(CONTEXT)),
+        KeyBinding::new("secondary-backspace", TrashSelected, Some(CONTEXT)),
         KeyBinding::new("escape", CancelNaming, Some(NAMING_CONTEXT)),
     ]
 }
@@ -226,6 +238,58 @@ pub fn create_entry(dir: &Path, name: &str, kind: NewEntry) -> Result<PathBuf, S
     Ok(path)
 }
 
+/// Give `path` the name `name` in the same folder and return its new path.
+/// A change of case alone is allowed, as Finder allows it.
+pub fn rename_entry(path: &Path, name: &str) -> Result<PathBuf, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name.".into());
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        return Err("Use a name without slashes.".into());
+    }
+    let Some(dir) = path.parent() else {
+        return Err("This can't be renamed.".into());
+    };
+    let new = dir.join(name);
+    if new == path {
+        return Ok(new);
+    }
+    let same_but_case = path
+        .file_name()
+        .is_some_and(|old| old.to_string_lossy().to_lowercase() == name.to_lowercase());
+    if new.exists() && !same_but_case {
+        return Err(format!("{name} already exists."));
+    }
+    std::fs::rename(path, &new).map_err(|error| format!("Could not rename to {name}: {error}"))?;
+    Ok(new)
+}
+
+/// Where `path` is now that `from` has moved to `to`, if it was inside it.
+pub fn moved_path(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+    path.strip_prefix(from).ok().map(|rest| {
+        if rest.as_os_str().is_empty() {
+            to.to_path_buf()
+        } else {
+            to.join(rest)
+        }
+    })
+}
+
+/// The byte range of `name` without its extension, which a rename field
+/// starts with selected so typing keeps the extension. Dotfiles and
+/// folders are taken whole.
+fn stem_range(name: &str, is_dir: bool) -> Range<usize> {
+    match name.rfind('.') {
+        Some(ix) if ix > 0 && !is_dir => 0..ix,
+        _ => 0..name.len(),
+    }
+}
+
 /// The folders and files directly inside `dir`, folders first, each group
 /// sorted by name ignoring case. Unreadable folders list as empty.
 fn read_listing(root: &Path, dir: &Path, parent_ignored: bool) -> Vec<Entry> {
@@ -287,15 +351,28 @@ pub enum FileTreeEvent {
     Open(PathBuf),
     /// Escape: hand focus back to the editor.
     Dismissed,
+    /// A file or folder was renamed; tabs inside it should follow.
+    Renamed { from: PathBuf, to: PathBuf },
+    /// A file or folder was moved to the Trash; its tabs can close.
+    Trashed(PathBuf),
 }
 
 impl EventEmitter<FileTreeEvent> for FileTree {}
 
-/// The name field shown in the tree while making a file or folder.
+/// What the name field is for.
+#[derive(Clone, Debug, PartialEq)]
+enum NamingFor {
+    New(NewEntry),
+    /// Renaming this entry; the field takes its row's place.
+    Rename(PathBuf),
+}
+
+/// The name field shown in the tree while making or renaming a file or
+/// folder.
 struct Naming {
-    /// The folder the new entry goes in.
+    /// The folder the entry goes in.
     dir: PathBuf,
-    kind: NewEntry,
+    purpose: NamingFor,
     input: Entity<InputState>,
     error: Option<String>,
     _events: Subscription,
@@ -483,8 +560,37 @@ impl FileTree {
             NewEntry::Folder => "Folder name",
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        self.start_naming(dir, NamingFor::New(kind), input, window, cx);
+    }
+
+    /// Turn the selected row into a name field to rename it.
+    fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self
+            .selected
+            .and_then(|ix| self.model.rows().get(ix))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(dir) = row.path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let stem = stem_range(&row.name, row.is_dir);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(row.name.clone()));
+        self.start_naming(dir, NamingFor::Rename(row.path), input.clone(), window, cx);
+        input.update(cx, |input, cx| input.set_selected_range(stem, cx));
+    }
+
+    fn start_naming(
+        &mut self,
+        dir: PathBuf,
+        purpose: NamingFor,
+        input: Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
-            InputEvent::PressEnter { .. } => this.finish_new(window, cx),
+            InputEvent::PressEnter { .. } => this.finish_naming(window, cx),
             InputEvent::Blur => this.cancel_new(cx),
             InputEvent::Change => {
                 if let Some(naming) = &mut this.naming {
@@ -497,7 +603,7 @@ impl FileTree {
         input.update(cx, |input, cx| input.focus(window, cx));
         self.naming = Some(Naming {
             dir,
-            kind,
+            purpose,
             input,
             error: None,
             _events: events,
@@ -509,20 +615,32 @@ impl FileTree {
         cx.notify();
     }
 
-    fn finish_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(naming) = &mut self.naming else {
             return;
         };
         let name = naming.input.read(cx).value().to_string();
-        match create_entry(&naming.dir, &name, naming.kind) {
-            Ok(path) => {
-                let kind = naming.kind;
+        let done = match &naming.purpose {
+            NamingFor::New(kind) => create_entry(&naming.dir, &name, *kind).map(|path| {
+                let open = (*kind == NewEntry::File).then(|| FileTreeEvent::Open(path.clone()));
+                (path, open)
+            }),
+            NamingFor::Rename(from) => rename_entry(from, &name).map(|to| {
+                let renamed = (to != *from).then(|| FileTreeEvent::Renamed {
+                    from: from.clone(),
+                    to: to.clone(),
+                });
+                (to, renamed)
+            }),
+        };
+        match done {
+            Ok((path, event)) => {
                 self.naming = None;
                 self.model.refresh();
                 self.selected = self.model.reveal(&path);
                 self.focus_handle.focus(window, cx);
-                if kind == NewEntry::File {
-                    cx.emit(FileTreeEvent::Open(path));
+                if let Some(event) = event {
+                    cx.emit(event);
                 }
             }
             Err(error) => naming.error = Some(error),
@@ -550,13 +668,24 @@ impl FileTree {
         self.focus_handle.focus(window, cx);
     }
 
-    /// The list position of the name field: first in its folder.
+    /// The list position of the name field: first in its folder for a new
+    /// entry, in place of the row it renames otherwise.
     fn naming_index(&self) -> Option<usize> {
         let naming = self.naming.as_ref()?;
+        if let NamingFor::Rename(path) = &naming.purpose {
+            return self.model.index_of(path);
+        }
         if naming.dir == self.model.root() {
             return Some(0);
         }
         self.model.index_of(&naming.dir).map(|ix| ix + 1)
+    }
+
+    /// Whether the name field is a row of its own rather than in place of one.
+    fn naming_inserts(&self) -> bool {
+        self.naming
+            .as_ref()
+            .is_some_and(|naming| matches!(naming.purpose, NamingFor::New(_)))
     }
 
     fn naming_depth(&self) -> usize {
@@ -564,6 +693,133 @@ impl FileTree {
         self.model
             .index_of(&naming.dir)
             .map_or(0, |ix| self.model.rows()[ix].depth + 1)
+    }
+
+    /// Right-clicking a row selects it and offers what can be done to it;
+    /// right-clicking below the rows offers to make something at the root.
+    fn show_menu(
+        &mut self,
+        ix: Option<usize>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_new(cx);
+        self.selected = ix;
+        // The menu's actions go to whatever has focus.
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+        let mut menu = NativeMenu::new()
+            .menu("New File…", Box::new(NewFileHere))
+            .menu("New Folder…", Box::new(NewFolderHere));
+        if ix.is_some() {
+            menu = menu
+                .separator()
+                .menu("Rename…", Box::new(RenameSelected))
+                .menu("Move to Trash", Box::new(TrashSelected))
+                .separator()
+                .menu("Copy Path", Box::new(CopyPath))
+                .menu("Copy Relative Path", Box::new(CopyRelativePath));
+        }
+        menu.separator()
+            .menu(reveal_label(), Box::new(RevealSelected))
+            .show(position, window, cx);
+    }
+
+    fn new_file_here(&mut self, _: &NewFileHere, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_new(NewEntry::File, window, cx);
+    }
+
+    fn new_folder_here(&mut self, _: &NewFolderHere, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_new(NewEntry::Folder, window, cx);
+    }
+
+    fn rename_selected(&mut self, _: &RenameSelected, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_rename(window, cx);
+    }
+
+    /// Ask, then move the selected file or folder to the Trash. The Trash
+    /// keeps it, so this can be undone from there.
+    fn trash_selected(&mut self, _: &TrashSelected, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self
+            .selected
+            .and_then(|ix| self.model.rows().get(ix))
+            .cloned()
+        else {
+            return;
+        };
+        let detail = if row.is_dir {
+            "The folder and everything in it go to the Trash."
+        } else {
+            "It goes to the Trash."
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Move {} to the Trash?", row.name),
+            Some(detail),
+            &["Move to Trash", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            this.update_in(cx, |this, window, cx| {
+                match trash::delete(&row.path) {
+                    Ok(()) => {
+                        this.model.refresh();
+                        let last = this.model.rows().len().checked_sub(1);
+                        this.selected = this.selected.zip(last).map(|(ix, last)| ix.min(last));
+                        cx.emit(FileTreeEvent::Trashed(row.path));
+                    }
+                    Err(error) => {
+                        drop(window.prompt(
+                            PromptLevel::Critical,
+                            &format!("Could not move {} to the Trash.", row.name),
+                            Some(&error.to_string()),
+                            &["OK"],
+                            cx,
+                        ));
+                    }
+                }
+                this.focus_handle.focus(window, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn copy_path(&mut self, _: &CopyPath, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.selected_path() {
+            cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+        }
+    }
+
+    fn copy_relative_path(&mut self, _: &CopyRelativePath, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.selected_path() {
+            let relative = path.strip_prefix(self.model.root()).unwrap_or(&path);
+            cx.write_to_clipboard(ClipboardItem::new_string(relative.display().to_string()));
+        }
+    }
+
+    /// Show the selected entry, or the project folder, in the system's
+    /// file manager.
+    fn reveal_selected(&mut self, _: &RevealSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let path = self
+            .selected_path()
+            .unwrap_or_else(|| self.model.root().to_path_buf());
+        cx.reveal_path(&path);
+    }
+}
+
+fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Reveal in File Explorer"
+    } else {
+        "Reveal in File Manager"
     }
 }
 
@@ -603,7 +859,8 @@ impl Render for FileTree {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let naming_at = self.naming_index();
-        let rows = self.model.rows().len() + usize::from(naming_at.is_some());
+        let inserts = self.naming_inserts();
+        let rows = self.model.rows().len() + usize::from(naming_at.is_some() && inserts);
         let go_to_file = header_button(
             "go-to-file",
             SEARCH,
@@ -635,7 +892,11 @@ impl Render for FileTree {
                             if Some(list_ix) == naming_at
                                 && let Some(naming) = &this.naming
                             {
-                                let depth = this.naming_depth();
+                                let depth = if inserts {
+                                    this.naming_depth()
+                                } else {
+                                    this.model.rows()[list_ix].depth
+                                };
                                 return h_flex()
                                     .id("new-entry")
                                     .h(px(ROW_HEIGHT))
@@ -650,7 +911,7 @@ impl Render for FileTree {
                                     ));
                             }
                             let ix = match naming_at {
-                                Some(at) if list_ix > at => list_ix - 1,
+                                Some(at) if inserts && list_ix > at => list_ix - 1,
                                 _ => list_ix,
                             };
                             let row = &this.model.rows()[ix];
@@ -762,6 +1023,13 @@ impl Render for FileTree {
                                     this.focus_handle.focus(window, cx);
                                     this.activate(ix, cx);
                                 }))
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.show_menu(Some(ix), event.position, window, cx);
+                                    }),
+                                )
                         })
                         .collect()
                 }),
@@ -786,6 +1054,13 @@ impl Render for FileTree {
             .on_action(cx.listener(Self::expand_or_child))
             .on_action(cx.listener(Self::open_selected))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::new_file_here))
+            .on_action(cx.listener(Self::new_folder_here))
+            .on_action(cx.listener(Self::rename_selected))
+            .on_action(cx.listener(Self::trash_selected))
+            .on_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::copy_relative_path))
+            .on_action(cx.listener(Self::reveal_selected))
             .flex()
             .flex_col()
             .size_full()
@@ -829,6 +1104,13 @@ impl Render for FileTree {
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    // Rows stop the press, so this is the space below them.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.show_menu(None, event.position, window, cx)
+                        }),
+                    )
                     .child(list)
                     .vertical_scrollbar(&self.scroll_handle),
             )
@@ -840,7 +1122,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::{NewEntry, TreeModel, create_entry};
+    use super::{NewEntry, TreeModel, create_entry, moved_path, rename_entry, stem_range};
 
     fn names(model: &TreeModel) -> Vec<String> {
         model
@@ -959,6 +1241,54 @@ mod tests {
         assert!(create_entry(root, "  ", NewEntry::File).is_err());
         assert!(create_entry(root, "../out.rs", NewEntry::File).is_err());
         assert!(create_entry(root, "/tmp/out.rs", NewEntry::Folder).is_err());
+    }
+
+    #[test]
+    fn renames_in_place() {
+        let dir = project();
+        let root = dir.path();
+        let renamed = rename_entry(&root.join("README.md"), " NOTES.md ").unwrap();
+        assert_eq!(renamed, root.join("NOTES.md"));
+        assert!(renamed.is_file());
+        let src = rename_entry(&root.join("src"), "lib").unwrap();
+        assert!(
+            src.join("ui/tree.rs").is_file(),
+            "a folder takes its contents"
+        );
+        assert_eq!(
+            rename_entry(&root.join("lib"), "lib").unwrap(),
+            root.join("lib"),
+            "the same name changes nothing"
+        );
+        let case = rename_entry(&root.join("NOTES.md"), "notes.md").unwrap();
+        assert_eq!(case, root.join("notes.md"), "case alone may change");
+
+        assert_eq!(
+            rename_entry(&root.join("notes.md"), "Cargo.toml"),
+            Err("Cargo.toml already exists.".into())
+        );
+        assert!(rename_entry(&root.join("notes.md"), "lib/notes.md").is_err());
+        assert!(rename_entry(&root.join("notes.md"), "..").is_err());
+        assert!(rename_entry(&root.join("notes.md"), "").is_err());
+    }
+
+    #[test]
+    fn paths_inside_a_renamed_folder_follow_it() {
+        let (from, to) = (Path::new("/p/src"), Path::new("/p/lib"));
+        assert_eq!(
+            moved_path(Path::new("/p/src/ui/a.rs"), from, to),
+            Some("/p/lib/ui/a.rs".into())
+        );
+        assert_eq!(moved_path(from, from, to), Some(to.into()));
+        assert_eq!(moved_path(Path::new("/p/srcs/a.rs"), from, to), None);
+    }
+
+    #[test]
+    fn rename_selects_the_name_before_its_extension() {
+        assert_eq!(stem_range("tree.rs", false), 0..4);
+        assert_eq!(stem_range("app.test.ts", false), 0..8);
+        assert_eq!(stem_range(".gitignore", false), 0..10);
+        assert_eq!(stem_range("v1.2", true), 0..4);
     }
 
     #[test]

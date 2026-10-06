@@ -2391,6 +2391,44 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn renaming_in_the_sidebar_moves_the_open_tab(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let (window, workspace) = open(cx, &path);
+
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("secondary-shift-e", cx);
+        });
+        assert!(tree_focused(cx, window, &workspace));
+        // F2 selects the name without its extension, so typing keeps it.
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("f2", cx);
+        });
+        step(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.input("main", cx);
+            window.press("enter", cx);
+        });
+        let renamed = dir.path().join("src/main.rs");
+        assert!(renamed.is_file() && !path.exists());
+        assert_eq!(tree_rows(cx, &workspace), ["src", "  main.rs"]);
+        cx.update(|cx| {
+            let ws = workspace.read(cx);
+            let open = ws.document().path.clone().unwrap();
+            assert_eq!(
+                open.canonicalize().unwrap(),
+                renamed.canonicalize().unwrap()
+            );
+            assert_eq!(ws.editor().text(cx), ORIGINAL);
+        });
+    }
+
+    #[gpui_kit::test]
     fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();

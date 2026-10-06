@@ -223,6 +223,70 @@ impl Workspace {
         }
     }
 
+    /// Point the tabs of files inside `from` at `to` after a rename in the
+    /// file tree. Tabs without unsaved changes reopen from the new path, so
+    /// highlighting follows a new extension; the others keep their edits
+    /// and save to the new path.
+    pub(super) fn follow_rename(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for ix in 0..self.tabs.len() {
+            let Some(path) = self.tabs[ix].document.path.as_deref() else {
+                continue;
+            };
+            let Some(new) = crate::file_tree::moved_path(&canonical(path), from, to) else {
+                continue;
+            };
+            if self.tabs[ix].dirty {
+                self.tabs[ix].document.path = Some(new);
+                continue;
+            }
+            let Ok(document) = Document::open(&new) else {
+                continue;
+            };
+            if ix == self.active {
+                self.leave_tab(cx);
+            }
+            self.remember_breakpoints(ix, cx);
+            self.tabs[ix] = self.new_tab(document, window, cx);
+        }
+        self.update_title(window);
+        if let Some(path) = self.document().path.clone() {
+            self.show_in_tree(&path, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Close the tabs of files inside `path`, just moved to the Trash.
+    /// Tabs with unsaved changes stay open so nothing typed is lost.
+    pub(super) fn close_trashed(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ids: Vec<EntityId> = self
+            .tabs
+            .iter()
+            .filter(|tab| {
+                !tab.dirty
+                    && tab
+                        .document
+                        .path
+                        .as_deref()
+                        .is_some_and(|open| canonical(open).starts_with(path))
+            })
+            .map(Tab::id)
+            .collect();
+        for id in ids {
+            self.remove_tab(id, window, cx);
+        }
+    }
+
     pub(super) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {
             return;
