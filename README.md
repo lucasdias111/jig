@@ -4,6 +4,8 @@
 
 <img width="1134" height="813" alt="Jig previewing a change" src="https://github.com/user-attachments/assets/ceabdaed-93f9-4953-a564-bb4d00b9d1e5" />
 
+<img width="597" height="411" alt="image" src="https://github.com/user-attachments/assets/1b28e39a-5494-4138-8174-a2a59ec864ab" />
+
 Every AI workflow I tried pulled me away from the code. There was a chat panel
 to explain things to, an agent somewhere else to wait on, and a pile of diffs to
 read afterwards. The code became something I reviewed, not something I wrote.
