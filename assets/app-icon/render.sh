@@ -1,7 +1,8 @@
 #!/bin/sh
-# Render the icon and logo PNGs from their SVGs:
-#   jig.svg            -> jig-1024.png and Jig.icns (the app icon)
-#   jig-mark.svg       -> jig.png (the logo, for light backgrounds)
+# Render the app icon and the logo PNGs:
+#   Jig-iOS-Default-1024@1x.png -> jig-1024.png and Jig.icns (the app icon, made in
+#                        Icon Composer; macOS wants the tile at 824 of 1024, so it's inset)
+#   jig-mark.svg      -> jig.png (the logo, for light backgrounds)
 #   jig-mark-dark.svg  -> jig-dark.png (the logo, for dark backgrounds)
 #   social-preview.svg -> social-preview.png (GitHub's Social preview, uploaded by hand)
 # Quick Look composites onto opaque white, so each SVG is rendered over white
@@ -27,7 +28,13 @@ Image.fromarray(np.dstack([np.clip(rgb, 0, 255), a * 255]).astype(np.uint8)).sav
 PY
 }
 
-transparent jig.svg jig-1024.png
+python3 - <<'PY'
+from PIL import Image
+icon = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+tile = Image.open("Jig-iOS-Default-1024@1x.png").convert("RGBA").resize((824, 824), Image.LANCZOS)
+icon.paste(tile, (100, 100))
+icon.save("jig-1024.png")
+PY
 transparent jig-mark.svg jig.png
 transparent jig-mark-dark.svg jig-dark.png
 
