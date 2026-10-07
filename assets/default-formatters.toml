@@ -1,0 +1,58 @@
+# Jig's built-in formatters, used when a file's language server doesn't
+# format (or isn't running). Add your own in ~/.config/jig/formatters.toml;
+# one there with the same key replaces the built-in one. A formatter reads
+# the file's text on stdin and writes the formatted text to stdout.
+#
+# key        Its name; the same key in your file replaces this one.
+# name       What Jig calls it in messages.
+# languages  The languages it formats, by Jig's names.
+# command    The program and its arguments. Runs in the file's folder.
+#            ${file} is the file's full path, for formatters that pick
+#            their settings or parser by it; ${root} the project's folder.
+#
+# Formatters that aren't installed are skipped; for a language with more
+# than one, the first installed wins. Programs are looked for on the PATH
+# and in the project's node_modules/.bin.
+
+[[formatter]]
+key = "rustfmt"
+name = "rustfmt"
+languages = ["rust"]
+# rustfmt reads stdin as edition 2015 unless a rustfmt.toml says otherwise.
+command = ["rustfmt", "--emit", "stdout", "--edition", "2021"]
+
+[[formatter]]
+key = "prettier"
+name = "Prettier"
+languages = ["typescript", "tsx", "javascript", "json", "markdown"]
+command = ["prettier", "--stdin-filepath", "${file}"]
+
+[[formatter]]
+key = "gofmt"
+name = "gofmt"
+languages = ["go"]
+command = ["gofmt"]
+
+[[formatter]]
+key = "ruff"
+name = "Ruff"
+languages = ["python"]
+command = ["ruff", "format", "--stdin-filename", "${file}", "-"]
+
+[[formatter]]
+key = "black"
+name = "Black"
+languages = ["python"]
+command = ["black", "--quiet", "--stdin-filename", "${file}", "-"]
+
+[[formatter]]
+key = "google-java-format"
+name = "google-java-format"
+languages = ["java"]
+command = ["google-java-format", "-"]
+
+[[formatter]]
+key = "taplo"
+name = "Taplo"
+languages = ["toml"]
+command = ["taplo", "format", "-"]

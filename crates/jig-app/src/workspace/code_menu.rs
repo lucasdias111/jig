@@ -1,6 +1,6 @@
 //! Right-clicking the code: the menu VS Code users reach for. Go to
 //! Definition, Find All References and Rename Symbol for the name under the
-//! pointer, a jig, the clipboard, and commenting lines out.
+//! pointer, a jig, the clipboard, commenting lines out and formatting.
 
 use std::ops::Range;
 
@@ -11,7 +11,9 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 
 use super::commands::COMMAND_ICON;
-use super::{FindReferences, OpenCommand, RenameSymbol, ToggleLineComment, Workspace};
+use super::{
+    FindReferences, FormatDocument, OpenCommand, RenameSymbol, ToggleLineComment, Workspace,
+};
 use crate::definitions;
 use crate::languages;
 
@@ -52,6 +54,7 @@ impl Workspace {
                     !commentable,
                     Box::new(ToggleLineComment),
                 )
+                .menu_with_disabled("Format Document", !editable, Box::new(FormatDocument))
                 .menu("Select All", Box::new(SelectAll))
         }
     }

@@ -17,6 +17,7 @@ use super::{RenameSymbol, Workspace};
 use crate::definitions;
 use crate::field_box::{FieldBox, FieldBoxEvent};
 use crate::lsp::{self, Encoding};
+use crate::text_edits::{Edits, shift, splice};
 
 /// How long to wait for the language server before renaming in this file.
 const RENAME_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,9 +31,6 @@ pub(super) struct OpenRename {
     range: Range<usize>,
     _events: Subscription,
 }
-
-/// Byte ranges and what replaces them.
-type Edits = Vec<(Range<usize>, String)>;
 
 impl Workspace {
     pub(super) fn rename_symbol(
@@ -239,38 +237,6 @@ fn apply(
     Some(cursor.map_or(0, |cursor| shift(cursor, &edits)))
 }
 
-/// Sorted, non-overlapping `edits` to `text` as one: the span from the
-/// first to the last, and what replaces it.
-fn splice(text: &str, edits: &[(Range<usize>, String)]) -> Option<(Range<usize>, String)> {
-    if edits.windows(2).any(|pair| pair[0].0.end > pair[1].0.start) {
-        return None;
-    }
-    let span = edits.first()?.0.start..edits.last()?.0.end;
-    let mut new = String::new();
-    let mut at = span.start;
-    for (range, replacement) in edits {
-        new.push_str(text.get(at..range.start)?);
-        new.push_str(replacement);
-        at = range.end;
-    }
-    Some((span, new))
-}
-
-/// Where `offset` ends up after sorted `edits`: moved along by those before
-/// it, and kept as far into the one it's in as the new text allows.
-fn shift(offset: usize, edits: &[(Range<usize>, String)]) -> usize {
-    let mut delta = 0isize;
-    for (range, new) in edits {
-        if range.end <= offset {
-            delta += new.len() as isize - range.len() as isize;
-        } else if range.start <= offset {
-            let into = (offset - range.start).min(new.len());
-            return (range.start as isize + delta) as usize + into;
-        }
-    }
-    (offset as isize + delta) as usize
-}
-
 /// Every whole-word `old` in `text`, to become `new`.
 fn word_edits(text: &str, old: &str, new: &str) -> Edits {
     let Ok(pattern) = Regex::new(&format!(r"\b{}\b", regex::escape(old))) else {
@@ -334,7 +300,8 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{Edits, shift, splice, word_edits, workspace_edits};
+    use super::{word_edits, workspace_edits};
+    use crate::text_edits::{Edits, shift, splice};
 
     fn rename(text: &str, edits: &Edits) -> String {
         let (span, new) = splice(text, edits).unwrap();
@@ -361,12 +328,6 @@ mod tests {
         assert_eq!(shift(text.len(), &edits), "a(n, n)".len());
         // Before them.
         assert_eq!(shift(1, &edits), 1);
-    }
-
-    #[test]
-    fn overlapping_edits_are_refused() {
-        let edits = vec![(0..3, "x".to_string()), (2..4, "y".to_string())];
-        assert!(splice("abcdef", &edits).is_none());
     }
 
     #[test]

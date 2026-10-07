@@ -24,6 +24,7 @@ pub struct Settings {
     pub commands: CommandSettings,
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,
+    pub formatting: FormatSettings,
     pub colors: ColorSettings,
     /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
     pub shortcuts: BTreeMap<String, String>,
@@ -198,6 +199,30 @@ impl DebugSettings {
     }
 }
 
+/// What happens to a file as it's saved. All off to begin with: nothing
+/// changes what you saved unless you asked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FormatSettings {
+    /// Languages formatted on save, by name.
+    pub on_save: Vec<String>,
+    pub trim_trailing_whitespace: bool,
+    pub final_newline: bool,
+}
+
+impl FormatSettings {
+    pub fn on_save(&self, language: &str) -> bool {
+        self.on_save.iter().any(|on| on == language)
+    }
+
+    pub fn set_on_save(&mut self, language: &str, on: bool) {
+        self.on_save.retain(|other| other != language);
+        if on {
+            self.on_save.push(language.to_string());
+        }
+    }
+}
+
 /// Colors changed in the theme editor, over Ember's own, per variant:
 /// `[colors.dark]` with `"syntax.keyword" = "#FF6188"`. Keys are listed in
 /// `theme::EDITABLE`.
@@ -330,6 +355,8 @@ mod tests {
         settings.editor.soft_wrap = false;
         settings.commands.set_hidden("Explain", true);
         settings.languages.set_off("java", true);
+        settings.formatting.set_on_save("rust", true);
+        settings.formatting.final_newline = true;
         settings
             .languages
             .set_extensions("typescript", Some("ts".into()), "ts, mts, cts");
@@ -350,6 +377,7 @@ mod tests {
         assert_eq!(partial.appearance.font_size, MAX_FONT_SIZE, "clamped");
         assert_eq!(partial.appearance.translucency, MAX_TRANSLUCENCY, "clamped");
         assert_eq!(partial.editor, EditorSettings::default());
+        assert_eq!(partial.formatting, FormatSettings::default(), "off");
     }
 
     #[test]

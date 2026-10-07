@@ -23,6 +23,7 @@ use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named
 use jig_commands::{Preset, presets};
 
 use crate::debuggers::{self, Debugger};
+use crate::formatters;
 use crate::languages::{self, Language};
 use crate::providers::{self, ModelList};
 use crate::settings::{
@@ -30,7 +31,7 @@ use crate::settings::{
     MIN_FONT_SIZE, ThemeChoice,
 };
 use crate::theme::{self, EDITABLE, Section};
-use crate::workspace::{AddCommand, EditCommands, EditDebuggers, EditModelConfig};
+use crate::workspace::{AddCommand, EditCommands, EditDebuggers, EditFormatters, EditModelConfig};
 
 actions!(jig, [OpenSettings]);
 
@@ -634,6 +635,77 @@ impl SettingsWindow {
         })
         .keywords(["debug", "debugger", "add", "file", "toml"]);
 
+        let formatting = formatters::registry();
+        let format_item = |language: &'static Language| {
+            // What formats it when its language server doesn't.
+            let fallback = match formatting.for_language(language.name, std::path::Path::new("/")) {
+                Some(formatter) => format!("Its language server, or {}.", formatter.name),
+                None => match formatting.knows(language.name) {
+                    Some(formatter) => format!(
+                        "Its language server, or {} once it's installed.",
+                        formatter.name
+                    ),
+                    None => "Its language server, if it formats.".into(),
+                },
+            };
+            SettingItem::new(
+                language.label,
+                SettingField::switch(
+                    |cx| settings::get(cx).formatting.on_save(language.name),
+                    |on, cx| settings::update(cx, |s| s.formatting.set_on_save(language.name, on)),
+                )
+                .default_value(false),
+            )
+            .description(fallback)
+            .keywords(["format", "formatter", "save", language.name])
+        };
+        let tidy_item = |label: &'static str,
+                         description: &'static str,
+                         get: fn(&settings::FormatSettings) -> bool,
+                         set: fn(&mut settings::FormatSettings, bool)| {
+            SettingItem::new(
+                label,
+                SettingField::switch(
+                    move |cx| get(&settings::get(cx).formatting),
+                    move |on, cx| settings::update(cx, |s| set(&mut s.formatting, on)),
+                )
+                .default_value(false),
+            )
+            .description(description)
+            .keywords(["format", "save", "whitespace", "newline"])
+        };
+        let formatters_item = SettingItem::render({
+            let error = formatting.error.clone();
+            move |_, _, cx| {
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "Formatters for files whose language server doesn't format are \
+                         added, or a built-in one changed, in formatters.toml.",
+                            ),
+                    )
+                    .when_some(error.clone(), |this, error| {
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    })
+                    .child(
+                        h_flex().child(
+                            Button::new("edit-formatters")
+                                .label("Edit Formatters File")
+                                .small()
+                                .outline()
+                                .on_click(|_, _, cx| {
+                                    send_to_workspace(Box::new(EditFormatters), cx)
+                                }),
+                        ),
+                    )
+            }
+        })
+        .keywords(["format", "formatter", "add", "file", "toml"]);
+
         SettingPage::new("Languages")
             .icon(Icon::default().data(CODE))
             .group(
@@ -660,6 +732,33 @@ impl SettingsWindow {
                     )
                     .items(registry.debuggers.iter().flat_map(debug_items))
                     .item(edit_item),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("On save")
+                    .item(tidy_item(
+                        "Trim trailing whitespace",
+                        "Spaces and tabs at the ends of lines are removed.",
+                        |f| f.trim_trailing_whitespace,
+                        |f, on| f.trim_trailing_whitespace = on,
+                    ))
+                    .item(tidy_item(
+                        "End with a newline",
+                        "A file that doesn't end with a line break gets one.",
+                        |f| f.final_newline,
+                        |f, on| f.final_newline = on,
+                    )),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Format on save")
+                    .description(
+                        "Languages turned on are formatted as they're saved, as with ⇧⌥F. \
+                         A formatter that takes over 2 seconds is skipped and the file \
+                         saved as it is.",
+                    )
+                    .items(languages::BUNDLED.iter().map(format_item))
+                    .item(formatters_item),
             )
     }
 

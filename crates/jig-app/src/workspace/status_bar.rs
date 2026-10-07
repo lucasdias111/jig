@@ -67,6 +67,13 @@ impl Workspace {
             .text_color(theme.muted_foreground)
             .children(self.render_branch_switcher(cx))
             .children(self.render_problem_counts(cx))
+            .children(self.status_note.as_ref().map(|note| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.warning)
+                    .child(note.message.clone())
+            }))
             .child(div().flex_1())
             .child(tab.cursor.clone())
             .child(item(indentation::label(tab.indentation).into()))

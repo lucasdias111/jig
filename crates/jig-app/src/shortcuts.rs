@@ -173,6 +173,14 @@ pub const ALL: &[Shortcut] = &[
         IN_INPUT,
         RenameSymbol
     ),
+    shortcut!(
+        "format_document",
+        "Format document",
+        Editing,
+        ["alt-shift-f"],
+        IN_CODE,
+        FormatDocument
+    ),
     // Also in any input, to win over GPUI Kit's own Search and Replace
     // bindings there.
     shortcut!(

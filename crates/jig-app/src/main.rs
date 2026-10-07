@@ -14,6 +14,7 @@ mod file_icons;
 mod file_tree;
 mod find_in_files;
 mod find_panel;
+mod formatters;
 mod fuzzy;
 mod git;
 mod git_panel;
@@ -36,6 +37,7 @@ mod settings;
 mod settings_window;
 mod shortcuts;
 mod snippets;
+mod text_edits;
 mod theme;
 mod workspace;
 

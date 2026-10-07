@@ -39,6 +39,8 @@ struct State {
     init_options: Value,
     /// The server said it has loaded the project, as jdtls does.
     service_ready: bool,
+    /// What it can format: whole documents, and selected ranges.
+    formatting: Formatting,
     /// Where the problems it reports go.
     diagnostics: Option<channel::UnboundedSender<Published>>,
 }
@@ -49,6 +51,28 @@ struct Document {
     version: i32,
     /// A hash of the text last sent, so the same text isn't sent twice.
     sent: u64,
+}
+
+/// Which formatting requests a server answers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Formatting {
+    pub document: bool,
+    pub range: bool,
+}
+
+impl Formatting {
+    /// From `initialize`'s capabilities, where each is `true` or options.
+    fn from_capabilities(capabilities: &Value) -> Self {
+        let offered = |key: &str| match &capabilities[key] {
+            Value::Bool(on) => *on,
+            Value::Object(_) => true,
+            _ => false,
+        };
+        Self {
+            document: offered("documentFormattingProvider"),
+            range: offered("documentRangeFormattingProvider"),
+        }
+    }
 }
 
 enum Phase {
@@ -122,6 +146,7 @@ impl Client {
                 completion_triggers: Vec::new(),
                 init_options,
                 service_ready: false,
+                formatting: Formatting::default(),
                 diagnostics: None,
             })),
             // 0 is `initialize`.
@@ -151,6 +176,11 @@ impl Client {
     /// How the server counts columns. UTF-16 until it says otherwise.
     pub fn encoding(&self) -> Encoding {
         self.state.lock().unwrap().encoding
+    }
+
+    /// What the server formats. Nothing until it has started.
+    pub fn formatting(&self) -> Formatting {
+        self.state.lock().unwrap().formatting
     }
 
     /// What typed after a name asks for completions, such as `.`.
@@ -343,6 +373,8 @@ fn connect(
                         "contextSupport": true,
                     },
                     "references": {},
+                    "formatting": {},
+                    "rangeFormatting": {},
                     "hover": {"contentFormat": ["markdown", "plaintext"]},
                     "signatureHelp": {
                         "signatureInformation": {
@@ -411,6 +443,7 @@ fn connect(
                     let mut state = state.lock().unwrap();
                     state.encoding = encoding;
                     state.completion_triggers = triggers;
+                    state.formatting = Formatting::from_capabilities(&result["capabilities"]);
                     let initialized =
                         json!({"jsonrpc": "2.0", "method": "initialized", "params": {}})
                             .to_string();
@@ -528,6 +561,8 @@ pub mod tests {
                         json!({"capabilities": {
                             "positionEncoding": "utf-8",
                             "completionProvider": {"triggerCharacters": ["."]},
+                            "documentFormattingProvider": true,
+                            "documentRangeFormattingProvider": {},
                         }})
                     } else {
                         answer(&method, &message["params"])
@@ -562,6 +597,13 @@ pub mod tests {
         );
         assert_eq!(client.encoding(), Encoding::Utf8);
         assert_eq!(client.completion_triggers(), ["."]);
+        assert_eq!(
+            client.formatting(),
+            Formatting {
+                document: true,
+                range: true
+            }
+        );
 
         let methods: Vec<String> = seen
             .iter()
