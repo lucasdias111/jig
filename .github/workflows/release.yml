@@ -21,7 +21,7 @@ jobs:
       - run: script/bundle-macos.sh
       # ditto keeps the bundle's structure and permissions, which zip can lose.
       - run: ditto -c -k --keepParent target/Jig.app Jig-macos-arm64.zip
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: Jig-macos-arm64.zip
           generate_release_notes: true
