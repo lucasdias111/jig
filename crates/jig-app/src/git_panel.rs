@@ -35,8 +35,8 @@ pub enum GitPanelEvent {
     /// Git changed files on disk, or the branch: tabs and markers follow.
     Changed,
     Dismissed,
-    /// The New Branch button: the workspace asks for its name.
-    NewBranch,
+    /// The Branch button: the workspace shows the branch switcher.
+    Branches,
 }
 
 /// What a finished action leads to.
@@ -461,8 +461,8 @@ impl GitPanel {
                     .on_click(cx.listener(|this, _, window, cx| this.push(window, cx))),
             )
             .child(
-                action("git-new-branch", BRANCH_ICON, "Branch")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::NewBranch))),
+                action("git-branches", BRANCH_ICON, "Branch")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(GitPanelEvent::Branches))),
             );
         v_flex()
             .pt_0p5()

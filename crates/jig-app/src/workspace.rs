@@ -740,6 +740,7 @@ impl Render for Workspace {
                     ),
             )
             .children(self.render_sidebar_handle(cx))
+            .children(self.render_floating_settings(cx))
             .when_some(self.new_command.as_ref(), |this, form| {
                 // Centred near the top, like a sheet.
                 let left = ((viewport.width - px(460.)) / 2.).max(px(8.));
@@ -1668,6 +1669,29 @@ mod tests {
         vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
         vcx.run_until_parked();
         assert!(vcx.update(|_, cx| workspace.read(cx).palette.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn settings_float_bottom_left_on_the_home_page(cx: &mut TestAppContext) {
+        let (window, _) = open_empty(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx.debug_bounds("settings").expect("settings are shown");
+        let viewport = vcx.update(|window, _| window.viewport_size());
+        assert!(button.left() < px(20.));
+        assert!(viewport.height - button.bottom() < px(20.));
+    }
+
+    #[gpui_kit::test]
+    fn settings_sit_at_the_bottom_of_the_activity_bar(cx: &mut TestAppContext) {
+        let (_dir, window, _) = three_files(cx);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let button = vcx.debug_bounds("settings").expect("settings are shown");
+        let files = vcx.debug_bounds("activity-files").unwrap();
+        assert_eq!(button.left(), files.left());
+        let viewport = vcx.update(|window, _| window.viewport_size());
+        assert!(viewport.height - button.bottom() < px(20.));
     }
 
     #[gpui_kit::test]
@@ -4396,7 +4420,7 @@ env = {{ GREETING = "there" }}
     }
 
     #[gpui_kit::test]
-    fn the_git_views_branch_button_asks_for_a_name(cx: &mut TestAppContext) {
+    fn the_git_views_branch_button_switches_or_creates_branches(cx: &mut TestAppContext) {
         let (_dir, window, workspace) = committed_repo(cx);
         step(cx, window, |window, cx| {
             window.dispatch_action(Box::new(super::ToggleGitPanel), cx)
@@ -4408,16 +4432,18 @@ env = {{ GREETING = "there" }}
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
         let button = vcx
-            .debug_bounds("git-new-branch")
+            .debug_bounds("git-branches")
             .expect("the button is in the Git view");
         vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
         vcx.run_until_parked();
         let picker = vcx
             .update(|_, cx| workspace.read(cx).branch_picker())
-            .expect("the name field opens");
+            .expect("the switcher opens");
+        let rows =
+            |vcx: &mut gpui_kit::VisualTestContext| vcx.update(|_, cx| picker.read(cx).row_names());
+        assert_eq!(rows(&mut vcx), ["New Branch…", "main"]);
         vcx.simulate_input("second");
-        let rows = vcx.update(|_, cx| picker.read(cx).row_names());
-        assert_eq!(rows, ["Create second"]);
+        assert_eq!(rows(&mut vcx), ["Create second"]);
     }
 
     #[gpui_kit::test]

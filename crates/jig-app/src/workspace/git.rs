@@ -449,8 +449,8 @@ impl Workspace {
             }
             GitPanelEvent::Changed => this.git_changed(window, cx),
             GitPanelEvent::Dismissed => this.focus_main(window, cx),
-            GitPanelEvent::NewBranch => {
-                this.open_branch_picker(branch_picker::Mode::Create, window, cx)
+            GitPanelEvent::Branches => {
+                this.open_branch_picker(branch_picker::Mode::Switch, window, cx)
             }
         });
         self.git.panel = Some(Opened {

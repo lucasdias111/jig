@@ -17,12 +17,16 @@ use super::{
 };
 use crate::file_tree::{FileTree, FileTreeEvent};
 use crate::git_panel::BRANCH_ICON;
+use crate::settings_window::OpenSettings;
 
 /// The activity bar's width.
 pub(super) const ACTIVITY_BAR_WIDTH: f32 = 44.;
 
 /// Lucide "files".
 const FILES_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/><path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/></svg>"#;
+
+/// Lucide "settings".
+const SETTINGS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>"#;
 
 /// How long the sidebar takes to fold out or collapse.
 const MOTION: Duration = Duration::from_millis(180);
@@ -267,28 +271,10 @@ impl Workspace {
             return None;
         }
         let button = |id: &'static str, icon: &'static [u8], tooltip: &'static str, view| {
-            let theme = cx.theme();
             let active = self.sidebar_shown() && self.sidebar_view == view;
-            div()
-                .id(id)
-                .debug_selector(move || id.into())
-                .size(px(32.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.))
-                .text_color(if active {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                })
-                .when(active, |this| this.bg(theme.sidebar_accent))
-                .hover(|s| s.bg(theme.sidebar_accent).text_color(theme.foreground))
-                .child(Icon::default().data(icon).size(px(17.)))
-                .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_sidebar_view(view, window, cx)
-                }))
+            activity_button(id, icon, tooltip, active, cx).on_click(
+                cx.listener(move |this, _, window, cx| this.toggle_sidebar_view(view, window, cx)),
+            )
         };
         Some(
             sidebar_panel(px(ACTIVITY_BAR_WIDTH), cx)
@@ -296,7 +282,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .items_center()
-                .pt_1()
+                .py_1()
                 .gap_1()
                 .child(button(
                     "activity-files",
@@ -310,6 +296,30 @@ impl Workspace {
                     "Git (⌃⇧G)",
                     SidebarView::Git,
                 ))
+                .child(div().flex_1())
+                .child(settings_button(cx))
+                .into_any_element(),
+        )
+    }
+
+    /// Settings, floating in the window's bottom-left corner while there's
+    /// no activity bar to hold it.
+    pub(super) fn render_floating_settings(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.activity_bar_shown() {
+            return None;
+        }
+        // Above the status bar when there is one.
+        let bottom = if self.home {
+            px(8.)
+        } else {
+            px(super::status_bar::HEIGHT + 8.)
+        };
+        Some(
+            div()
+                .absolute()
+                .left(px((ACTIVITY_BAR_WIDTH - 32.) / 2.))
+                .bottom(bottom)
+                .child(settings_button(cx))
                 .into_any_element(),
         )
     }
@@ -361,6 +371,39 @@ impl Workspace {
                 )
         })
     }
+}
+
+/// A square icon button in the activity bar's style.
+fn activity_button(
+    id: &'static str,
+    icon: &'static [u8],
+    tooltip: &'static str,
+    active: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .size(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
+        .text_color(if active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .when(active, |this| this.bg(theme.sidebar_accent))
+        .hover(|s| s.bg(theme.sidebar_accent).text_color(theme.foreground))
+        .child(Icon::default().data(icon).size(px(17.)))
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+}
+
+fn settings_button(cx: &App) -> Stateful<Div> {
+    activity_button("settings", SETTINGS_ICON, "Settings (⌘,)", false, cx)
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx))
 }
 
 /// The sidebar's surface. On macOS it is translucent over the window's
