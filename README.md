@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/app-icon/jig-dark.png">
+    <img src="assets/app-icon/jig.png" width="128" alt="Jig logo">
+  </picture>
+</p>
+
 # Jig
 
 <img width="1123" height="798" alt="Jig editing a file" src="https://github.com/user-attachments/assets/3359dfad-a506-4c8e-8a56-5474d16d8a00" />

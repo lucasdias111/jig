@@ -13,8 +13,9 @@ cargo build --release -p jig-app
 app=target/Jig.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/Jig "$app/Contents/MacOS/Jig"
+cp assets/app-icon/Jig.icns "$app/Contents/Resources/Jig.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -24,6 +25,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Jig</string>
   <key>CFBundleIdentifier</key><string>dev.jig.editor</string>
   <key>CFBundleExecutable</key><string>Jig</string>
+  <key>CFBundleIconFile</key><string>Jig</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
