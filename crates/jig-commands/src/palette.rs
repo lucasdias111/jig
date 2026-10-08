@@ -9,7 +9,8 @@
 use std::rc::Rc;
 
 use gpui_kit::component::input::{
-    Backspace, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveUp,
+    Backspace, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveEnd,
+    MoveRight, MoveUp,
 };
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -202,6 +203,42 @@ impl CommandPalette {
         self.filtered_query = query;
         self.selected = if named && has_prompt { 1 } else { 0 };
         cx.notify();
+    }
+
+    /// The rest of the highlighted jig's name when the text typed so far is
+    /// how it starts and the cursor is at its end: "ain" after "Expl".
+    fn completion(&self, cx: &App) -> Option<String> {
+        let Some(Row::Preset(preset)) = self.rows.get(self.selected) else {
+            return None;
+        };
+        let input = self.input.read(cx);
+        let query = input.value();
+        let at_end = input.selected_range() == (query.len()..query.len());
+        if self.note.is_some() || !at_end || query.contains(':') {
+            return None;
+        }
+        presets::completion(&self.presets[*preset].name, &query).map(str::to_string)
+    }
+
+    /// → or End at the end of the text completes the highlighted jig's name;
+    /// anywhere else they move the cursor as usual.
+    fn complete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_filtered(cx);
+        let Some(rest) = self.completion(cx) else {
+            return;
+        };
+        cx.stop_propagation();
+        self.input
+            .update(cx, |input, cx| input.insert(rest, window, cx));
+        self.refilter(cx);
+    }
+
+    fn on_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+        self.complete(window, cx);
+    }
+
+    fn on_end(&mut self, _: &MoveEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.complete(window, cx);
     }
 
     /// Text typed in the same frame as Enter or Tab hasn't been filtered
@@ -423,6 +460,31 @@ impl CommandPalette {
         }
     }
 
+    /// Spotlight-sized input, marked with the lane it runs on, with the rest
+    /// of a jig's name suggested after the typed text.
+    fn render_input(&self, agent: bool, accent: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
+        let completion = self.completion(cx);
+        let muted = cx.theme().muted_foreground;
+        div()
+            .relative()
+            .px_1()
+            .text_size(px(15.))
+            .child(
+                Input::new(&self.input)
+                    .appearance(false)
+                    .cleanable(false)
+                    .prefix(
+                        crate::surface::lane_icon(agent)
+                            .size(px(15.))
+                            .text_color(accent),
+                    )
+                    .when(completion.is_some(), |this| {
+                        this.suffix(crate::surface::hint("→ complete", cx))
+                    }),
+            )
+            .children(completion.map(|rest| suggestion(self.input.clone(), rest, muted)))
+    }
+
     fn render_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = index == self.selected;
         let (label, detail): (SharedString, SharedString) = match row {
@@ -606,6 +668,7 @@ impl Render for CommandPalette {
         let switch = self.render_lane_switch(cx).into_any_element();
         let agent = self.agent_lane();
         let accent = crate::surface::lane_accent(agent, cx);
+        let input = self.render_input(agent, accent, cx).into_any_element();
         let theme = cx.theme();
         let footer = if agent {
             "Works across the project · you review every edit".to_string()
@@ -631,6 +694,8 @@ impl Render for CommandPalette {
             .capture_action(cx.listener(Self::on_up))
             .capture_action(cx.listener(Self::on_down))
             .capture_action(cx.listener(Self::on_tab))
+            .capture_action(cx.listener(Self::on_right))
+            .capture_action(cx.listener(Self::on_end))
             .capture_action(cx.listener(Self::on_backspace))
             .w(px(420.))
             .p_1p5()
@@ -638,19 +703,7 @@ impl Render for CommandPalette {
             .when(agent, |this| this.border_color(accent.opacity(0.55)))
             .child(switch)
             .children(header)
-            // Spotlight-sized input, marked with the lane it runs on.
-            .child(
-                div().px_1().text_size(px(15.)).child(
-                    Input::new(&self.input)
-                        .appearance(false)
-                        .cleanable(false)
-                        .prefix(
-                            crate::surface::lane_icon(agent)
-                                .size(px(15.))
-                                .text_color(accent),
-                        ),
-                ),
-            )
+            .child(input)
             .when(self.note.is_some(), |this| {
                 this.child(
                     div()
@@ -684,6 +737,55 @@ impl Render for CommandPalette {
             );
         crate::motion::pop_in(palette, "jig-palette")
     }
+}
+
+/// The rest of a jig's name in grey after the typed text. Painted after the
+/// input, so it goes where the input has just laid its text out, in the same
+/// font at the size the input actually drew.
+fn suggestion(input: Entity<InputState>, rest: String, color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, cx| {
+            let state = input.read(cx);
+            let typed = state.value();
+            let (Some(drawn), Some(end)) = (
+                state.range_to_bounds(&(0..typed.len())),
+                state.range_to_bounds(&(typed.len()..typed.len())),
+            ) else {
+                return;
+            };
+            let style = window.text_style();
+            let size = style.font_size.to_pixels(window.rem_size());
+            let measured = window.text_system().shape_line(
+                typed.clone(),
+                size,
+                &[style.to_run(typed.len())],
+                None,
+            );
+            let size = if measured.width > px(0.) {
+                size * (drawn.size.width / measured.width)
+            } else {
+                size
+            };
+            let run = TextRun {
+                color,
+                ..style.to_run(rest.len())
+            };
+            let line = window
+                .text_system()
+                .shape_line(rest.into(), size, &[run], None);
+            let _ = line.paint(
+                end.origin,
+                end.size.height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 #[cfg(test)]
@@ -965,6 +1067,60 @@ mod tests {
         let invocation = events(cx, &host)[0].clone().unwrap();
         assert_eq!(invocation.name.as_deref(), Some("Simplify"));
         assert_eq!(invocation.comment.as_deref(), Some("keep the early return"));
+    }
+
+    fn query(cx: &mut TestAppContext, host: &Entity<Host>) -> String {
+        cx.update(|cx| host.read(cx).palette.read(cx).query(cx))
+    }
+
+    #[gpui_kit::test]
+    fn right_completes_the_named_jig(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        step(cx, window, |window, cx| window.input("expl", cx));
+        step(cx, window, |window, cx| window.press("right", cx));
+        assert_eq!(query(cx, &host), "explain");
+        // Typing goes on after the completed name, and it still runs.
+        step(cx, window, |window, cx| window.input(":", cx));
+        assert_eq!(query(cx, &host), "Explain: ");
+    }
+
+    #[gpui_kit::test]
+    fn end_completes_in_the_agent_lane_too(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        step(cx, window, |window, cx| window.press("tab", cx));
+        step(cx, window, |window, cx| window.input("Add t", cx));
+        step(cx, window, |window, cx| window.press("end", cx));
+        assert_eq!(query(cx, &host), "Add tests");
+    }
+
+    #[gpui_kit::test]
+    fn right_completes_the_jig_chosen_with_the_arrows(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        step(cx, window, |window, cx| window.input("add", cx));
+        step(cx, window, |window, cx| window.press("down", cx));
+        step(cx, window, |window, cx| window.press("right", cx));
+        assert_eq!(query(cx, &host), "add tests");
+    }
+
+    #[gpui_kit::test]
+    fn right_moves_the_cursor_when_there_is_nothing_to_complete(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        // "xpl" only loosely matches Explain, so it stays a prompt.
+        step(cx, window, |window, cx| window.input("xpl", cx));
+        step(cx, window, |window, cx| window.press("right", cx));
+        assert_eq!(query(cx, &host), "xpl");
+        // Away from the end, → just moves the cursor.
+        step(cx, window, |window, cx| {
+            window.press("backspace", cx);
+            window.press("backspace", cx);
+            window.press("backspace", cx);
+        });
+        step(cx, window, |window, cx| window.input("expl", cx));
+        step(cx, window, |window, cx| {
+            window.press("left", cx);
+            window.press("right", cx);
+        });
+        assert_eq!(query(cx, &host), "expl");
     }
 
     #[gpui_kit::test]

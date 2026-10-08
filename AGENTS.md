@@ -26,7 +26,7 @@ A jig can always run on the agent with `agent = true`; the switch then shows Age
 ### The input
 
 - ⌘K, the Jig button in the title bar, or the sparkle button that appears just right of a selection while the code has focus (`workspace/selection_button.rs`; hidden while a run, preview or panel is open, and turned off with Settings > Appearance > Jig button on selections).
-- The typed text is listed first under **Prompt**, matching jigs below under **Jigs**. Enter takes a jig only when the text clearly names it (its name or one of its words starts with the text); otherwise it runs the text as a prompt. ↑↓ pick either way. ⌘↩ saves the typed text as a jig.
+- The typed text is listed first under **Prompt**, matching jigs below under **Jigs**. Enter takes a jig only when the text clearly names it (its name or one of its words starts with the text); otherwise it runs the text as a prompt. ↑↓ pick either way. When the text is how the highlighted jig's name starts, the rest of the name shows in grey after it, and → or End at the end of the text completes it (Tab stays the lane switch). ⌘↩ saves the typed text as a jig.
 - **Notes**: `docs: terse, no examples` runs the jig matching "docs" with the note "terse, no examples". The colon only counts when the text before it matches a jig. Typing `:` on a jig chosen with the arrows completes its name (`Simplify: `). Jigs with `comment = "optional" | "required"` open a note step on Enter when no note was typed.
 - The footer says what will happen, e.g. "Quick edit of the selection · sees this file, AGENTS.md".
 

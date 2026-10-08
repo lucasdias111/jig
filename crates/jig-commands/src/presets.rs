@@ -334,6 +334,20 @@ pub fn names(preset: &Preset, query: &str) -> bool {
             || name.split_whitespace().any(|word| word.starts_with(&query)))
 }
 
+/// The rest of `name` when `typed` is how it starts, ignoring case: "ain"
+/// for "Expl" and "Explain". `None` when there's nothing left to add.
+pub fn completion<'a>(name: &'a str, typed: &str) -> Option<&'a str> {
+    let mut rest = name.char_indices();
+    for wanted in typed.chars() {
+        let (_, got) = rest.next()?;
+        if !got.to_lowercase().eq(wanted.to_lowercase()) {
+            return None;
+        }
+    }
+    let (at, _) = rest.next()?;
+    (!typed.is_empty()).then(|| &name[at..])
+}
+
 /// Lower is better: prefix, then substring, then a subsequence ranked by how
 /// spread out its characters are. `None` when `query` isn't a subsequence.
 fn score(name: &str, query: &str) -> Option<u32> {
@@ -468,6 +482,17 @@ mod tests {
             ["Extract function"]
         );
         assert!(filter(&presets, "zzz").is_empty());
+    }
+
+    #[test]
+    fn completion_adds_the_rest_of_the_name() {
+        assert_eq!(completion("Explain", "expl"), Some("ain"));
+        assert_eq!(completion("Add docs", "Add d"), Some("ocs"));
+        assert_eq!(completion("Explain", "Explain"), None);
+        assert_eq!(completion("Explain", "xpl"), None);
+        assert_eq!(completion("Add docs", "docs"), None);
+        assert_eq!(completion("Explain", ""), None);
+        assert_eq!(completion("Résumé", "rÉs"), Some("umé"));
     }
 
     #[test]
