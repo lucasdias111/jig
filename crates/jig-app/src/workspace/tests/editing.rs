@@ -239,3 +239,29 @@ fn the_palette_closes_the_find_panel(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| window.press("secondary-f", cx));
     assert_eq!(find_query(cx, &workspace), None);
 }
+
+#[gpui_kit::test]
+fn typing_a_bracket_over_a_selection_surrounds_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.rs");
+    std::fs::write(&path, "let a = b + c;\n").unwrap();
+    let (window, workspace) = open(cx, &path);
+    let editor = cx.update(|cx| workspace.read(cx).editor().clone());
+    step(cx, window, |window, cx| {
+        editor.focus(window, cx);
+        editor.select(8..13, cx);
+    });
+    step(cx, window, |window, cx| window.input("(", cx));
+    assert_eq!(text(cx, &workspace), "let a = (b + c);\n");
+    // The wrapped text stays selected, so a second bracket wraps it again.
+    assert_eq!(cx.update(|cx| editor.selection(cx)), 9..14);
+    step(cx, window, |window, cx| window.input("[", cx));
+    assert_eq!(text(cx, &workspace), "let a = ([b + c]);\n");
+    step(cx, window, |window, cx| window.press("secondary-z", cx));
+    assert_eq!(text(cx, &workspace), "let a = (b + c);\n");
+    assert_eq!(cx.update(|cx| editor.selection(cx)), 9..14);
+    // With nothing selected the bracket still just auto-closes.
+    step(cx, window, |_, cx| editor.select(16..16, cx));
+    step(cx, window, |window, cx| window.input("(", cx));
+    assert_eq!(text(cx, &workspace), "let a = (b + c);()\n");
+}

@@ -1759,6 +1759,26 @@ impl<M: InputModeKind> InputBaseState<M> {
         None
     }
 
+    /// Jig patch: typing a pair's opener over a selection wraps it instead of
+    /// replacing it, like VS Code's `editor.autoSurround`. Returns the closer.
+    fn surround_target(&self, range: &Range<usize>, text: &str) -> Option<SharedString> {
+        if self.silent_replace_text
+            || self.ime_marked_range.is_some()
+            || !self.selections.is_single()
+            || range.is_empty()
+            || *range != self.selected_range()
+            || text.chars().count() != 1
+            || !self.mode.is_auto_close()
+        {
+            return None;
+        }
+        let rules = self.mode.language_config()?;
+        rules
+            .closing_pairs()
+            .find(|(open, _, _)| *open == text)
+            .map(|(_, close, _)| close.to_string().into())
+    }
+
     fn text_before_matches(&self, offset: usize, text: &str) -> bool {
         offset >= text.len()
             && self.text.is_char_boundary(offset - text.len())
@@ -4052,7 +4072,30 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
                 if let Some(intent) = requested_intent {
                     self.undo_manager.set_pending_intent(intent);
                 }
-                if let Some((open_len, closer)) = self.auto_close_target(&range, new_text) {
+                if let Some(closer) = self.surround_target(&range, new_text) {
+                    // Two insertions leave the selected text itself untouched,
+                    // so its folds, diagnostics and breakpoints stay put.
+                    self.undo_manager.begin_transaction();
+                    self.replace_text_in_ranges(
+                        &[
+                            (range.start..range.start, new_text.to_string()),
+                            (range.end..range.end, closer.to_string()),
+                        ],
+                        window,
+                        cx,
+                    );
+                    self.selections.remove_all_but_active();
+                    let shift = new_text.len();
+                    self.set_selection(range.start + shift, range.end + shift);
+                    self.active_selection_mut().reversed = selection_before.reversed;
+                    self.update_preferred_column();
+                    self.undo_manager.record_selections(
+                        vec![selection_before],
+                        self.selections.iter().copied().collect(),
+                    );
+                    self.undo_manager.commit_transaction();
+                } else if let Some((open_len, closer)) = self.auto_close_target(&range, new_text)
+                {
                     // One edit keeps the pair atomic even at undo coalescing limits.
                     let replacement = format!("{new_text}{closer}");
                     self.replace_text_in_ranges(&[(range.clone(), replacement)], window, cx);
