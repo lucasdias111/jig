@@ -6,8 +6,6 @@ use serde::Deserialize;
 
 use crate::prompt::{CURSOR, SELECTION_END, SELECTION_START};
 
-pub const MAX_MESSAGE_WORDS: usize = 20;
-
 /// The reply as a tool the model must call, for providers that can force
 /// one. A forced tool call always comes back as structured input, so the
 /// model can't drift into prose the way it sometimes does with a big file
@@ -67,7 +65,7 @@ pub fn parse(raw: &str, original: &str) -> Result<Reply> {
     }
     Ok(Reply {
         replace: match_trailing_newline(reply.replace, original),
-        message: cap_words(&reply.message),
+        message: reply.message.trim().to_string(),
     })
 }
 
@@ -86,15 +84,6 @@ fn match_trailing_newline(mut replace: String, original: &str) -> String {
         }
     }
     replace
-}
-
-fn cap_words(message: &str) -> String {
-    let words: Vec<&str> = message.split_whitespace().collect();
-    if words.len() <= MAX_MESSAGE_WORDS {
-        words.join(" ")
-    } else {
-        format!("{}…", words[..MAX_MESSAGE_WORDS].join(" "))
-    }
 }
 
 #[cfg(test)]
@@ -142,14 +131,13 @@ mod tests {
     }
 
     #[test]
-    fn message_is_capped() {
+    fn long_message_is_kept_whole() {
         let long = (1..=30)
             .map(|i| format!("w{i}"))
             .collect::<Vec<_>>()
             .join(" ");
         let reply = parse(&format!(r#"{{"replace": "x", "message": "{long}"}}"#), "y").unwrap();
-        assert_eq!(reply.message.split_whitespace().count(), MAX_MESSAGE_WORDS);
-        assert!(reply.message.ends_with("w20…"));
+        assert_eq!(reply.message, long);
     }
 
     #[test]
