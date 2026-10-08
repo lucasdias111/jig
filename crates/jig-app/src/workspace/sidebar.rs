@@ -49,12 +49,16 @@ pub(super) enum SidebarView {
 impl Workspace {
     /// Show `dir` in the sidebar, opened, as the project.
     pub(super) fn open_folder(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.len() == 1 && self.tab().is_blank(cx) {
+        let empty = self.tabs.len() == 1 && self.tab().is_blank(cx);
+        if empty {
             // Nothing worth keeping on screen: show the project's page.
             self.home = true;
         }
         self.set_tree_root(dir, window, cx);
         self.set_sidebar_open(true);
+        if empty {
+            self.restore_session(dir, window, cx);
+        }
         match self.document().path.clone() {
             Some(file) => self.show_in_tree(&file, window, cx),
             // Nothing to edit yet, so start in the tree.

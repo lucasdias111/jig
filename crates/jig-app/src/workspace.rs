@@ -24,6 +24,7 @@ mod preferences;
 mod rename;
 mod run;
 mod selection_button;
+mod session;
 mod sidebar;
 mod snippets;
 mod status_bar;

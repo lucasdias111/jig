@@ -33,6 +33,7 @@ mod recent;
 mod run_configs;
 mod run_output;
 mod run_picker;
+mod session;
 mod settings;
 mod settings_window;
 mod shortcuts;
@@ -58,6 +59,7 @@ fn main() {
         let settings_error = settings::init(cx);
         providers::init(cx);
         recent::init(cx);
+        session::init(cx);
         agent::init(cx);
         theme::init(cx);
         theme::apply(None, cx);

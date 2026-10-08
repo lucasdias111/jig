@@ -258,6 +258,7 @@ impl Workspace {
         if let Some(path) = self.document().path.clone() {
             self.show_in_tree(&path, window, cx);
         }
+        self.remember_session(cx);
         cx.notify();
     }
 
@@ -317,6 +318,7 @@ impl Workspace {
             self.note_recent_file(&path);
             self.show_in_tree(&path, window, cx);
         }
+        self.remember_session(cx);
         cx.notify();
     }
 
@@ -400,6 +402,7 @@ impl Workspace {
                 self.focus_main(window, cx);
             }
             self.update_title(window);
+            self.remember_session(cx);
             cx.notify();
             return;
         }

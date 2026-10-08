@@ -12,6 +12,7 @@ mod git;
 mod home;
 mod jigs;
 mod quick;
+mod session;
 mod tabs;
 
 use std::path::Path;
