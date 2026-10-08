@@ -17,9 +17,9 @@ use crate::snippets::{self, Snippet};
 
 /// Most suggestions shown at once.
 const MAX_ITEMS: usize = 100;
-/// Words are only suggested once this much of one has been typed, so the
-/// list doesn't pop up for every short name.
-const MIN_WORD_PREFIX: usize = 3;
+/// Words are suggested from the first letter, as other editors do; the
+/// nearest good matches come first, so a short prefix still lands well.
+const MIN_WORD_PREFIX: usize = 1;
 /// Likewise snippets, unless their whole name has been typed.
 const MIN_SNIPPET_PREFIX: usize = 2;
 const MAX_WORDS: usize = 20;
@@ -180,7 +180,11 @@ pub fn from_words(text: &str, offset: usize) -> Vec<Completion> {
     let offset = offset.min(text.len());
     let start = name_start(text, offset);
     let typed = &text[start..offset];
-    if typed.chars().count() < MIN_WORD_PREFIX || text.len() > MAX_WORD_SCAN_BYTES {
+    // A number being typed isn't the start of a word.
+    if typed.chars().count() < MIN_WORD_PREFIX
+        || typed.starts_with(|c: char| c.is_ascii_digit())
+        || text.len() > MAX_WORD_SCAN_BYTES
+    {
         return Vec::new();
     }
     // Each word, the tier it matches in, and how far its nearest use is.
@@ -390,8 +394,16 @@ mod tests {
     }
 
     #[test]
-    fn words_wait_for_three_characters() {
-        let text = "counter\nco";
+    fn words_start_at_the_first_letter() {
+        let text = "counter\nc";
+        assert_eq!(labels(&from_words(text, text.len())), ["counter"]);
+        let text = "counter\n";
+        assert!(from_words(text, text.len()).is_empty());
+    }
+
+    #[test]
+    fn numbers_are_not_completed() {
+        let text = "v1 = 10;\n1";
         assert!(from_words(text, text.len()).is_empty());
     }
 

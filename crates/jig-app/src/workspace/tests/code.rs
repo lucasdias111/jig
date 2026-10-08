@@ -73,12 +73,9 @@ fn words_in_the_file_complete_without_a_language_server(cx: &mut TestAppContext)
         editor.select(12..12, cx);
     });
 
-    type_slowly(cx, window, "co");
-    assert!(
-        completion_labels(cx, &workspace).is_empty(),
-        "too short to guess"
-    );
-    type_slowly(cx, window, "u");
+    type_slowly(cx, window, "c");
+    assert_eq!(completion_labels(cx, &workspace), ["counter"]);
+    type_slowly(cx, window, "ou");
     assert_eq!(completion_labels(cx, &workspace), ["counter"]);
 
     step(cx, window, |window, cx| {
