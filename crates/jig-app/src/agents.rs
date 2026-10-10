@@ -41,7 +41,7 @@ struct AgentFile {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// Jig's own OpenCode client, with the model from Settings > Model.
+    /// Jig's own OpenCode client, with the model from Settings > Models.
     OpenCode,
     /// The Agent Client Protocol on stdio.
     #[default]
@@ -199,7 +199,7 @@ pub fn chosen(cx: &App) -> Arc<Agent> {
 pub fn status(agent: &Agent) -> (String, bool) {
     match agent.program() {
         Ok(path) => (format!("Using {}", home_relative(&path)), true),
-        Err(missing) if agent.installable() => (format!("{missing} Install it below."), false),
+        Err(missing) if agent.installable() => (format!("{missing} Jig can install it."), false),
         Err(missing) => (missing, false),
     }
 }

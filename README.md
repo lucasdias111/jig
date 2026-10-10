@@ -34,7 +34,7 @@ signed yet, so macOS will block it the first time; this lets it open:
 xattr -dr com.apple.quarantine /Applications/Jig.app
 ```
 
-Then connect a model provider in Settings > Model. The Agent lane also needs
+Then connect a model provider in Settings > Models. The Agent lane also needs
 the [`opencode`](https://opencode.ai) CLI on your `PATH`.
 
 ## Building

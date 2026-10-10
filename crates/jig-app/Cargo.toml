@@ -32,6 +32,11 @@ notify = "7"
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
 
+[features]
+# Pictures of the Settings window: `JIG_SNAPSHOTS=<folder> cargo run -p jig-app
+# --features snapshots` (macOS; needs GPUI's Metal renderer).
+snapshots = ["gpui-kit/test-support"]
+
 [dev-dependencies]
 tempfile = "3"
 gpui-kit = { workspace = true, features = ["test-support"] }

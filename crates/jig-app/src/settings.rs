@@ -60,13 +60,6 @@ impl ThemeChoice {
             ThemeChoice::Dark => "Dark",
         }
     }
-
-    pub fn from_key(key: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|choice| choice.key() == key)
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

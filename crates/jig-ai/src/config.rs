@@ -25,7 +25,7 @@ session_header = "x-opencode-session"
 const CONFIG_HEADER: &str = "\
 # Jig's AI providers, and the model each lane uses as provider/model:
 # `quick` for quick commands, `agent` for agent commands (the same as quick
-# when left out). Settings > Model edits this file too. API keys are never
+# when left out). Settings > Models edits this file too. API keys are never
 # stored here: paste them in Settings (they go in the system keychain), or
 # name an environment variable in api_key_env.
 #
@@ -196,7 +196,7 @@ impl Config {
     pub fn quick(&self) -> Result<ProviderConfig> {
         let id = self
             .quick_model()
-            .context("Pick a model for quick commands in Settings > Model.")?;
+            .context("Pick a model for quick commands in Settings > Models.")?;
         self.resolve(&id)
     }
 
@@ -212,7 +212,7 @@ impl Config {
             .agent
             .clone()
             .or_else(|| self.quick_model())
-            .context("Pick a model for agent commands in Settings > Model.")?;
+            .context("Pick a model for agent commands in Settings > Models.")?;
         let provider = self.resolve(&id)?;
         let model = provider.model.clone();
         Ok(AgentModel::Jig { provider, model })
@@ -222,7 +222,7 @@ impl Config {
         let (name, model) = split_model(id)
             .with_context(|| format!("\"{id}\" should look like provider/model."))?;
         let provider = self.provider(name).with_context(|| {
-            format!("\"{name}\" isn't connected. Pick another model in Settings > Model.")
+            format!("\"{name}\" isn't connected. Pick another model in Settings > Models.")
         })?;
         Ok(ProviderConfig {
             model: model.to_string(),
@@ -426,12 +426,12 @@ base_url = \"https://openrouter.ai/api/v1\"
         let none = parse(TWO);
         assert_eq!(
             none.quick().unwrap_err().to_string(),
-            "Pick a model for quick commands in Settings > Model."
+            "Pick a model for quick commands in Settings > Models."
         );
         let gone = parse(&format!("quick = \"groq/llama\"\n{TWO}"));
         assert_eq!(
             gone.quick().unwrap_err().to_string(),
-            "\"groq\" isn't connected. Pick another model in Settings > Model."
+            "\"groq\" isn't connected. Pick another model in Settings > Models."
         );
     }
 

@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use gpui_kit::component::input::{GoToDefinition, Replace, Search};
+use gpui_kit::component::kbd::Kbd;
 use gpui_kit::*;
 
 use crate::settings;
@@ -493,12 +494,12 @@ pub fn bindings(changed: &BTreeMap<String, String>) -> Vec<KeyBinding> {
         .collect()
 }
 
-/// How `keys` look on this platform: `⇧⌘D` on a Mac, `ctrl-shift-d`
-/// elsewhere. Text that isn't a keystroke is shown as it is.
+/// How `keys` look on this platform: `⇧⌘D` and `⌘⏎` on a Mac,
+/// `Ctrl+Shift+D` elsewhere. Text that isn't a keystroke is shown as it is.
 pub fn display(keys: &str) -> String {
     keys.split_whitespace()
         .map(|keys| {
-            Keystroke::parse(keys).map_or_else(|_| keys.to_string(), |keys| keys.to_string())
+            Keystroke::parse(keys).map_or_else(|_| keys.to_string(), |keys| Kbd::format(&keys))
         })
         .collect::<Vec<_>>()
         .join(" ")

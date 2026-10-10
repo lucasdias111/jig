@@ -56,6 +56,12 @@ fn main() {
     // Any further files open in tabs of their own.
     let more: Vec<PathBuf> = paths.collect();
 
+    #[cfg(feature = "snapshots")]
+    if let Some(dir) = std::env::var_os("JIG_SNAPSHOTS") {
+        settings_window::snapshots::run(&PathBuf::from(dir));
+        return;
+    }
+
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         let settings_error = settings::init(cx);

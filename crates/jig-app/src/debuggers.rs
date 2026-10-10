@@ -532,7 +532,7 @@ pub fn status(debugger: &Debugger) -> (String, bool) {
     let cwd = std::env::temp_dir();
     if let Some(what) = missing(debugger, &cwd) {
         let how = if debugger.installable() {
-            "Install it below.".to_string()
+            "Jig can install it.".to_string()
         } else {
             debugger.help()
         };

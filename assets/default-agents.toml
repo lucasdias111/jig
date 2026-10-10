@@ -23,7 +23,7 @@ name = "OpenCode"
 kind = "opencode"
 command = ["opencode"]
 install = "curl -fsSL https://opencode.ai/install | bash"
-about = "Jig's own OpenCode client: every edit asks, and it can ask questions with choices. Uses the Agent model from Settings > Model."
+about = "Jig's own OpenCode client: every edit asks, and it can ask questions with choices. Uses the Agent model from Settings > Models."
 
 [[agent]]
 key = "claude-code"

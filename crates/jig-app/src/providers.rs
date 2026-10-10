@@ -119,7 +119,7 @@ pub fn agent_target(cx: &App) -> Result<AgentTarget, String> {
             let key = api_key(provider, cx).map(|(key, _)| key);
             if key.is_none() && provider.needs_key() {
                 return Err(format!(
-                    "\"{}\" has no API key. Add one in Settings > Model.",
+                    "\"{}\" has no API key. Add one in Settings > Models.",
                     provider.name
                 ));
             }
@@ -255,6 +255,14 @@ fn load_models(name: &str, pause: Duration, cx: &mut App) {
         providers.models.insert(name.clone(), ModelList::Loading);
         providers.loads.insert(name, task);
     });
+}
+
+/// Keep providers in `dir` instead of the user's config, for pictures of
+/// Settings.
+#[cfg(feature = "snapshots")]
+pub fn init_at(dir: &std::path::Path, cx: &mut App) {
+    let store = KeyStore::File(dir.join("keys.toml"));
+    cx.set_global(Providers::new(Some(dir.join("config.toml")), Some(store)));
 }
 
 /// Providers in a temporary folder, with keys in a file there.
