@@ -1,6 +1,8 @@
 //! The agent conversation: a floating window at the code with what was asked,
 //! what the agent said and did, and a box to reply in. Each reply continues
-//! the same agent session, so the agent remembers the turns before.
+//! the same agent session, so the agent remembers the turns before. It can
+//! be pinned to the window's right edge, and its header opens the earlier
+//! conversations.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -9,6 +11,7 @@ use std::time::Instant;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -33,6 +36,8 @@ pub enum ChatEntry {
         path: String,
         accepted: bool,
     },
+    /// Something the agent did besides editing, e.g. "Ran `cargo test`".
+    Did(String),
     /// Something that happened to the run, e.g. "Stopped."
     Note(String),
     Error(String),
@@ -45,6 +50,19 @@ pub enum ChatStatus {
     Working { started: Instant, step: LiveStep },
     /// An edit is in the buffer awaiting accept or reject.
     Reviewing { path: String, removed: String },
+    /// The agent wants to do something else that needs the user's go-ahead,
+    /// e.g. run a command.
+    Asking { title: String, detail: String },
+    /// The agent asked a question; the user picks an option or answers in
+    /// the reply box.
+    Question {
+        question: String,
+        options: Vec<String>,
+        /// Which of how many questions this is, when it asked several.
+        position: (usize, usize),
+    },
+    /// An earlier conversation is being fetched.
+    Loading,
     /// The turn is over; the user may reply.
     Waiting,
 }
@@ -63,6 +81,9 @@ pub type ChatBounds = Rc<Cell<Bounds<Pixels>>>;
 #[derive(Clone)]
 pub struct ChatFrame {
     pub width: Pixels,
+    /// Docked to the window's right edge, full height, instead of floating
+    /// at the code.
+    pub pinned: bool,
     /// Set once the user resizes it; until then the transcript grows with
     /// its content, up to a limit.
     pub transcript_height: Option<Pixels>,
@@ -74,6 +95,7 @@ impl Default for ChatFrame {
     fn default() -> Self {
         Self {
             width: px(WIDTH),
+            pinned: false,
             transcript_height: None,
             bounds: Default::default(),
             transcript_bounds: Default::default(),
@@ -81,10 +103,18 @@ impl Default for ChatFrame {
     }
 }
 
+/// Pin to the side (Lucide "panel-right").
+const PIN_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>"#;
+
+/// Earlier conversations (Lucide "history").
+const HISTORY_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>"#;
+
 /// The corner grip (two short diagonal strokes).
 const GRIP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><path d="M20 11 11 20"/><path d="M20 17 17 20"/></svg>"#;
 
 type GrabHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type OptionHandler = Rc<dyn Fn(&usize, &mut Window, &mut App)>;
 
 /// The conversation as drawn. The workspace owns the transcript and the
 /// reply box; this only lays them out.
@@ -98,6 +128,9 @@ pub struct Conversation {
     frame: ChatFrame,
     on_grab: Option<GrabHandler>,
     on_resize_grab: Option<GrabHandler>,
+    on_pin: Option<ClickHandler>,
+    on_history: Option<ClickHandler>,
+    on_option: Option<OptionHandler>,
 }
 
 impl Conversation {
@@ -118,7 +151,34 @@ impl Conversation {
             frame,
             on_grab: None,
             on_resize_grab: None,
+            on_pin: None,
+            on_history: None,
+            on_option: None,
         }
+    }
+
+    /// Called by the header's pin button.
+    pub fn on_pin(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_pin = Some(Rc::new(handler));
+        self
+    }
+
+    /// Called by the header's button for the earlier conversations.
+    pub fn on_history(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_history = Some(Rc::new(handler));
+        self
+    }
+
+    /// Called with the option clicked when the agent asks a question.
+    pub fn on_option(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_option = Some(Rc::new(handler));
+        self
     }
 
     /// Called when the corner grip is pressed; the workspace then resizes
@@ -146,19 +206,50 @@ impl RenderOnce for Conversation {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let accent = crate::surface::lane_accent(true, cx);
-        let on_grab = self.on_grab;
+        let pinned = self.frame.pinned;
+        let on_grab = self.on_grab.filter(|_| !pinned);
+        let header_button =
+            |id: &'static str, icon: &'static [u8], active: bool, handler: Option<ClickHandler>| {
+                let theme = cx.theme();
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .flex_none()
+                    .p_0p5()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|this| this.bg(theme.foreground.opacity(0.08)))
+                    .when(active, |this| this.bg(accent.opacity(0.16)))
+                    // Not a drag of the header.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .when_some(handler, |this, handler| {
+                        this.on_click(move |event, window, cx| handler(event, window, cx))
+                    })
+                    .child(
+                        gpui_kit::component::Icon::default()
+                            .data(icon)
+                            .size(px(13.))
+                            .text_color(if active {
+                                accent
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+            };
+        let history = header_button("agent-chat-history", HISTORY_ICON, false, self.on_history);
+        let pin = header_button("agent-chat-pin", PIN_ICON, pinned, self.on_pin);
         // The header is the handle to move the window by.
         let header = h_flex()
             .id("jig-agent-chat-header")
             .debug_selector(|| "agent-chat-header".into())
-            .cursor_grab()
+            .when(!pinned, |this| this.cursor_grab())
             .py_0p5()
             .when_some(on_grab, |this, on_grab| {
                 this.on_mouse_down(MouseButton::Left, move |event, window, cx| {
                     on_grab(event, window, cx)
                 })
+                .on_drag(ChatDrag, |_, _, _, cx| cx.new(|_| EmptyView))
             })
-            .on_drag(ChatDrag, |_, _, _, cx| cx.new(|_| EmptyView))
             .gap_2()
             .text_xs()
             .text_color(theme.muted_foreground)
@@ -172,13 +263,16 @@ impl RenderOnce for Conversation {
                 // The spinner animates every frame, so this stays current.
                 |this, elapsed| this.child(format!("{elapsed}s")),
             )
-            .child(crate::surface::lane_tag(true, cx));
+            .child(crate::surface::lane_tag(true, cx))
+            .child(history)
+            .child(pin);
 
         let transcript = v_flex()
             .id("jig-agent-transcript")
-            .map(|this| match self.frame.transcript_height {
-                Some(height) => this.h(height),
-                None => this.max_h(px(TRANSCRIPT_HEIGHT)),
+            .map(|this| match (pinned, self.frame.transcript_height) {
+                (true, _) => this.size_full(),
+                (false, Some(height)) => this.h(height),
+                (false, None) => this.max_h(px(TRANSCRIPT_HEIGHT)),
             })
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
@@ -186,19 +280,24 @@ impl RenderOnce for Conversation {
             .children(
                 self.entries
                     .into_iter()
-                    .map(|entry| render_entry(entry, cx)),
+                    .enumerate()
+                    .map(|(index, entry)| render_entry(index, entry, cx)),
             );
         let transcript_bounds = self.frame.transcript_bounds.clone();
-        let transcript = div().relative().child(transcript).child(
-            canvas(
-                move |drawn, _, _| transcript_bounds.set(drawn),
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-        );
+        let transcript = div()
+            .relative()
+            .when(pinned, |this| this.flex_1().min_h_0())
+            .child(transcript)
+            .child(
+                canvas(
+                    move |drawn, _, _| transcript_bounds.set(drawn),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
 
         let status = match self.status {
             ChatStatus::Working { step, .. } => {
@@ -237,45 +336,86 @@ impl RenderOnce for Conversation {
                     "tab or enter to accept · esc to reject",
                     cx,
                 )),
-            ChatStatus::Waiting => v_flex()
-                .gap_1p5()
+            ChatStatus::Asking { title, detail } => v_flex()
+                .gap_2()
                 .child(
                     div()
-                        .id("jig-agent-reply")
-                        .debug_selector(|| "agent-reply-box".into())
-                        .cursor_text()
-                        // The whole box takes the click, not just the text.
-                        .on_mouse_down(MouseButton::Left, {
-                            let input = self.input.clone();
-                            move |_, window, cx| {
-                                input.update(cx, |input, cx| input.focus(window, cx));
-                            }
-                        })
-                        .px_2()
-                        .py_1()
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(accent.opacity(0.35))
-                        .bg(theme.foreground.opacity(0.03))
-                        .child(
-                            Input::new(&self.input)
-                                .w_full()
-                                .appearance(false)
-                                .cleanable(false)
-                                .prefix(
-                                    crate::surface::lane_icon(true)
-                                        .size(px(13.))
-                                        .text_color(accent),
-                                ),
-                        ),
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(format!("{title}?")),
                 )
+                .when(!detail.trim().is_empty(), |this| {
+                    this.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .bg(theme.foreground.opacity(0.05))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_xs()
+                            .child(detail),
+                    )
+                })
+                .child(crate::surface::hint(
+                    "tab or enter to allow · esc to deny",
+                    cx,
+                )),
+            ChatStatus::Question {
+                question,
+                options,
+                position: (at, of),
+            } => {
+                let on_option = self.on_option.clone();
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(of > 1, |this| this.child(format!("{at}/{of} ")))
+                            .child(question),
+                    )
+                    .child(h_flex().flex_wrap().gap_1p5().children(
+                        options.into_iter().enumerate().map(|(index, option)| {
+                            let on_option = on_option.clone();
+                            div()
+                                .id(("jig-agent-option", index))
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(accent.opacity(0.35))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(accent.opacity(0.12)))
+                                .text_xs()
+                                .child(format!("{} {option}", index + 1))
+                                .when_some(on_option, |this, on_option| {
+                                    this.on_click(move |_, window, cx| {
+                                        on_option(&index, window, cx)
+                                    })
+                                })
+                        }),
+                    ))
+                    .child(reply_box(&self.input, accent, cx))
+                    .child(crate::surface::hint(
+                        "a number or your own answer · enter to answer · esc to decline",
+                        cx,
+                    ))
+            }
+            ChatStatus::Loading => h_flex()
+                .gap_2()
+                .text_xs()
+                .child(Spinner::new().color(accent))
+                .child("Loading the conversation…"),
+            ChatStatus::Waiting => v_flex()
+                .gap_1p5()
+                .child(reply_box(&self.input, accent, cx))
                 .child(crate::surface::hint("enter to reply · esc to close", cx)),
         };
-
         let panel = crate::surface::panel(cx)
             .flex()
             .flex_col()
             .w(self.frame.width)
+            // Pinned, it fills the height its owner gives it.
+            .when(pinned, |this| this.h_full())
             .px_3p5()
             .py_2p5()
             .gap_2p5()
@@ -310,6 +450,7 @@ impl RenderOnce for Conversation {
             );
         div()
             .relative()
+            .when(pinned, |this| this.h_full())
             .child(crate::motion::pop_in(panel, "jig-agent-chat"))
             .child(
                 canvas(move |drawn, _, _| bounds.set(drawn), |_, _, _, _| {})
@@ -318,11 +459,44 @@ impl RenderOnce for Conversation {
                     .left_0()
                     .size_full(),
             )
-            .child(grip)
+            .when(!pinned, |this| this.child(grip))
     }
 }
 
-fn render_entry(entry: ChatEntry, cx: &App) -> AnyElement {
+/// The box the user replies or answers in. The whole box takes the click,
+/// not just the text.
+fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    div()
+        .id("jig-agent-reply")
+        .debug_selector(|| "agent-reply-box".into())
+        .cursor_text()
+        .on_mouse_down(MouseButton::Left, {
+            let input = input.clone();
+            move |_, window, cx| {
+                input.update(cx, |input, cx| input.focus(window, cx));
+            }
+        })
+        .px_2()
+        .py_1()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(accent.opacity(0.35))
+        .bg(theme.foreground.opacity(0.03))
+        .child(
+            Input::new(input)
+                .w_full()
+                .appearance(false)
+                .cleanable(false)
+                .prefix(
+                    crate::surface::lane_icon(true)
+                        .size(px(13.))
+                        .text_color(accent),
+                ),
+        )
+}
+
+fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
     let theme = cx.theme();
     match entry {
         // The user's words sit on the right, tinted with the lane.
@@ -338,7 +512,25 @@ fn render_entry(entry: ChatEntry, cx: &App) -> AnyElement {
                     .child(text),
             )
             .into_any_element(),
-        ChatEntry::Agent(text) => div().child(text).into_any_element(),
+        // The agent may answer at length, in Markdown.
+        ChatEntry::Agent(text) => {
+            let code = StyleRefinement::default()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(12.));
+            TextView::markdown(("jig-agent-text", index), text)
+                .style(
+                    TextViewStyle::default()
+                        .paragraph_gap(rems(0.5))
+                        .code_block(code),
+                )
+                .selectable(true)
+                .into_any_element()
+        }
+        ChatEntry::Did(text) => div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(text)
+            .into_any_element(),
         ChatEntry::Edit { path, accepted } => h_flex()
             .gap_1p5()
             .text_xs()

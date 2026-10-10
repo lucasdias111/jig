@@ -1,6 +1,7 @@
 //! The Settings window (⌘,): Appearance, Colors, Languages, Shortcuts,
-//! Jigs and Model.
+//! Jigs, Model and Agent.
 
+mod agent_page;
 mod shortcuts_page;
 
 use std::collections::HashMap;
@@ -939,7 +940,7 @@ impl SettingsWindow {
             keep_current(&mut quick_options, &id, config);
         }
 
-        let mut agent_options = vec![(SharedString::from(""), "Same as Quick".into())];
+        let mut agent_options = vec![(SharedString::from(""), "Same as Jig".into())];
         let agent = match (&config.agent, &config.agent_model) {
             (Some(id), _) => id.clone(),
             (None, Some(native)) => {
@@ -967,7 +968,7 @@ impl SettingsWindow {
         } else {
             let this = this.clone();
             SettingItem::new(
-                "Quick",
+                "Jig",
                 SettingField::scrollable_dropdown(
                     quick_options,
                     |cx| {
@@ -1032,7 +1033,7 @@ impl SettingsWindow {
                         .gap_2()
                         .child(
                             Button::new("test-quick")
-                                .label("Test Quick Model")
+                                .label("Test Jig Model")
                                 .small()
                                 .outline()
                                 .disabled(testing || !can_test)
@@ -1392,6 +1393,7 @@ impl Render for SettingsWindow {
                         shortcuts_page,
                         self.commands_page(),
                         model_page,
+                        self.agent_page(),
                     ]);
                 #[cfg(test)]
                 let settings =
@@ -1474,6 +1476,38 @@ mod tests {
             );
             assert!(settings::get(cx).colors.dark.is_empty());
         });
+    }
+
+    #[gpui_kit::test]
+    fn the_agent_page_draws_with_every_choice(cx: &mut TestAppContext) {
+        START_PAGE.set(6);
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init(cx);
+            init(cx);
+            open(cx);
+        });
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.global::<OpenWindow>().0);
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        draw(cx);
+        for access in jig_ai::agent::Access::ALL {
+            cx.update(|cx| {
+                settings::update(cx, |s| {
+                    s.agent.shell = access;
+                    s.agent.questions = !s.agent.questions;
+                })
+            });
+            draw(cx);
+        }
+        assert_eq!(
+            cx.update(|cx| settings::get(cx).agent.shell),
+            jig_ai::agent::Access::Deny
+        );
+        START_PAGE.set(0);
     }
 
     #[gpui_kit::test]

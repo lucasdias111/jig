@@ -25,6 +25,8 @@ pub struct Settings {
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,
     pub formatting: FormatSettings,
+    /// What the agent may do without asking, or at all.
+    pub agent: jig_ai::agent::Permissions,
     pub colors: ColorSettings,
     /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
     pub shortcuts: BTreeMap<String, String>,
@@ -357,6 +359,8 @@ mod tests {
         settings.languages.set_off("java", true);
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
+        settings.agent.shell = jig_ai::agent::Access::Allow;
+        settings.agent.questions = false;
         settings
             .languages
             .set_extensions("typescript", Some("ts".into()), "ts, mts, cts");
@@ -378,6 +382,11 @@ mod tests {
         assert_eq!(partial.appearance.translucency, MAX_TRANSLUCENCY, "clamped");
         assert_eq!(partial.editor, EditorSettings::default());
         assert_eq!(partial.formatting, FormatSettings::default(), "off");
+        assert_eq!(
+            partial.agent,
+            jig_ai::agent::Permissions::default(),
+            "everything asks"
+        );
     }
 
     #[test]

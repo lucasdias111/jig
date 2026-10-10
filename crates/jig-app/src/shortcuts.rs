@@ -346,6 +346,14 @@ pub const ALL: &[Shortcut] = &[
         OpenCommand
     ),
     shortcut!(
+        "agent_conversations",
+        "Agent conversations",
+        Jigs,
+        ["secondary-alt-k"],
+        ANYWHERE,
+        OpenAgentConversations
+    ),
+    shortcut!(
         "add_jig",
         "Add jig",
         Jigs,

@@ -350,7 +350,7 @@ pub fn completion<'a>(name: &'a str, typed: &str) -> Option<&'a str> {
 
 /// Lower is better: prefix, then substring, then a subsequence ranked by how
 /// spread out its characters are. `None` when `query` isn't a subsequence.
-fn score(name: &str, query: &str) -> Option<u32> {
+pub(crate) fn score(name: &str, query: &str) -> Option<u32> {
     if name.starts_with(query) {
         return Some(0);
     }

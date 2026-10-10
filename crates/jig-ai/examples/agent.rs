@@ -1,10 +1,11 @@
-//! Run one agent command from the terminal, accepting every edit:
+//! Run one agent command from the terminal, accepting every edit and
+//! turning down everything else:
 //! `cargo run -p jig-ai --example agent -- <project dir> "<prompt>"`
 
 use std::sync::Arc;
 
 use jig_ai::agent::{
-    AgentEvent, AgentRequest, AgentServer, AgentSession, DEFAULT_MODEL, apply_diff,
+    AgentEvent, AgentRequest, AgentServer, AgentSession, DEFAULT_MODEL, Permissions, apply_diff,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -12,11 +13,13 @@ fn main() -> anyhow::Result<()> {
     let directory = std::path::PathBuf::from(args.next().expect("project dir"));
     let prompt = args.next().expect("prompt");
     let server = Arc::new(AgentServer::start(None)?);
-    let session = AgentSession::create(server, &directory)?;
+    let session = AgentSession::create(server, &directory, &prompt, &Permissions::default())?;
     let request = AgentRequest {
         directory,
         prompt,
         model: DEFAULT_MODEL.into(),
+        command: None,
+        permissions: Permissions::default(),
     };
     let replier = session.clone();
     session.run(&request, &|event| match event {
@@ -34,6 +37,15 @@ fn main() -> anyhow::Result<()> {
             }
             replier.reply(&edit.id, true, None).unwrap();
         }
+        AgentEvent::Permission(request) => {
+            println!("denied: {} {}", request.title, request.detail);
+            replier.reply(&request.id, false, None).unwrap();
+        }
+        AgentEvent::Question(request) => {
+            println!("declined {} questions", request.questions.len());
+            replier.answer(&request.id, None).unwrap();
+        }
+        AgentEvent::Did(text) => println!("{text}"),
         AgentEvent::Done(text) => println!("done: {text}"),
     })
 }

@@ -120,6 +120,113 @@ fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppCon
     );
 }
 
+fn permission(detail: &str) -> jig_ai::agent::AgentEvent {
+    jig_ai::agent::AgentEvent::Permission(jig_ai::agent::PermissionRequest {
+        id: "per_1".into(),
+        title: "Run a command".into(),
+        detail: detail.into(),
+    })
+}
+
+#[gpui_kit::test]
+fn a_command_runs_only_once_allowed(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(permission("cargo test"), window, cx);
+        })
+    });
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    assert_eq!(waiting(cx), Some("permission"));
+    // Enter, back in the code, allows it.
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(waiting(cx), None);
+    assert!(
+        cx.update(|cx| workspace.read(cx).editor().text(cx))
+            .starts_with("// a"),
+        "Enter went to the request, not into the file"
+    );
+
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.test_agent_request(permission("rm -rf target"), window, cx)
+        })
+    });
+    // Esc turns it down and keeps the conversation.
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(waiting(cx), None);
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries.last(),
+        Some(&ChatEntry::Note("Not allowed: rm -rf target".into()))
+    );
+}
+
+#[gpui_kit::test]
+fn the_agent_s_question_is_answered_by_number_or_in_words(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let question = |text: &str| jig_ai::agent::Question {
+        question: text.into(),
+        options: vec!["Yes".into(), "No".into()],
+    };
+    let ask = jig_ai::agent::AgentEvent::Question(jig_ai::agent::QuestionRequest {
+        id: "que_1".into(),
+        questions: vec![question("Keep the old name?"), question("Add a test?")],
+    });
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(ask, window, cx);
+        })
+    });
+    // The reply box has the keyboard.
+    step(cx, window, |window, cx| window.input("2", cx));
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+        Some("question"),
+        "one more to go"
+    );
+    step(cx, window, |window, cx| {
+        window.input("only if it's quick", cx)
+    });
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(cx.update(|cx| workspace.read(cx).agent_waiting_on()), None);
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries.last(),
+        Some(&ChatEntry::User("No · only if it's quick".into()))
+    );
+}
+
+#[gpui_kit::test]
+fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let pin = vcx.debug_bounds("agent-chat-pin").expect("a pin button");
+    vcx.simulate_click(pin.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    let header = vcx.debug_bounds("agent-chat-header").unwrap();
+    let width = vcx.update(|window, _| window.viewport_size().width);
+    assert!(
+        width - header.right() < px(40.),
+        "against the right edge: {header:?} in {width:?}"
+    );
+    // Pinned, it stays through the next frame and doesn't float too.
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.update(|_, cx| workspace.read(cx).floating_agent_chat_pinned()));
+}
+
 #[gpui_kit::test]
 fn the_agent_conversation_resizes_by_its_corner(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);

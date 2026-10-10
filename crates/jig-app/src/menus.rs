@@ -8,10 +8,11 @@ use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
     DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, Find,
     FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoToFile, GoToLine,
-    MoveLineDown, MoveLineUp, NewBranch, NewFile, NextProblem, NextTab, Open, OpenCommand,
-    PreviousProblem, PreviousTab, Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs,
-    SelectLine, StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint,
-    ToggleGitPanel, ToggleLineComment, ToggleRunPanel, ToggleSidebar, ZoomIn, ZoomOut,
+    MoveLineDown, MoveLineUp, NewBranch, NewFile, NextProblem, NextTab, Open,
+    OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
+    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
+    SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
+    ToggleSidebar, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -106,6 +107,7 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Select Line", SelectLine),
                 MenuItem::separator(),
                 MenuItem::action("Run Jig…", OpenCommand),
+                MenuItem::action("Agent Conversations…", OpenAgentConversations),
                 MenuItem::action("Add Jig…", AddCommand),
                 MenuItem::action("Edit Jigs File", EditCommands),
                 MenuItem::action("Edit AGENTS.md", EditAgentsFile),

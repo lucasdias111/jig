@@ -1,10 +1,12 @@
 //! The floating command input that opens below the cursor.
 //!
-//! Typing filters the presets. Enter runs the highlighted row; once something
-//! is typed, the last row always runs the text itself as a custom command.
-//! Commands set to take a note (and any command, with Tab) first switch the
-//! input to a note step: Enter runs, Esc goes back to the list. Esc in the
-//! list, or clicking away, dismisses it.
+//! In Jig mode, typing filters the jigs. Enter runs the highlighted row;
+//! once something is typed, the first row runs the text itself as a prompt.
+//! Jigs set to take a note first switch the input to a note step: Enter
+//! runs, Esc goes back to the list. In Agent mode the typed text is a
+//! message for the agent, listed above the earlier conversations it
+//! matches; "/" lists OpenCode's commands and skills, and "/jig" the jigs.
+//! Esc in the list, or clicking away, dismisses it.
 
 use std::rc::Rc;
 
@@ -21,17 +23,62 @@ use crate::presets::{self, CommentMode, Invocation, Preset};
 const MAX_ROWS: usize = 8;
 const CONTEXT: &str = "JigPalette";
 
+/// What starts the jigs in Agent mode: "/jig simplify".
+const JIG_PREFIX: &str = "/jig";
+
 pub enum PaletteEvent {
     Run(Invocation),
     /// Cmd+Enter on typed text: turn it into a preset.
     SaveAsCommand(String),
+    /// Pick up the earlier conversation with this id.
+    Resume(String),
+    /// Run an OpenCode command or skill in a new conversation.
+    RunAgentCommand {
+        name: String,
+        arguments: String,
+    },
+    /// Switched to Agent mode: the earlier conversations and the commands
+    /// are wanted, see [`CommandPalette::set_agent_catalog`].
+    AgentMode,
     Dismissed,
+}
+
+/// An earlier conversation with the agent, as the palette lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PastConversation {
+    pub id: String,
+    pub title: String,
+    /// When it last changed, e.g. "2 h ago".
+    pub when: String,
+}
+
+/// An OpenCode command or skill, run with "/name".
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentCommandInfo {
+    pub name: String,
+    pub description: String,
+    pub skill: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
     Preset(usize),
     Custom(String),
+    Conversation(usize),
+    Command(usize),
+    /// "/jig", listed with the commands.
+    Jigs,
+}
+
+impl Row {
+    fn section(&self) -> &'static str {
+        match self {
+            Row::Custom(_) => "Prompt",
+            Row::Preset(_) => "Jigs",
+            Row::Conversation(_) => "Conversations",
+            Row::Command(_) | Row::Jigs => "Commands",
+        }
+    }
 }
 
 /// The note step for one preset.
@@ -59,6 +106,8 @@ pub struct CommandPalette {
     /// The text after a colon that follows a command's name, e.g. "terse"
     /// in "docs: terse". `None` without a colon or a matching command.
     inline_note: Option<String>,
+    conversations: Vec<PastConversation>,
+    commands: Vec<AgentCommandInfo>,
     _subscription: Subscription,
 }
 
@@ -109,6 +158,8 @@ impl CommandPalette {
             context: Vec::new(),
             agent: false,
             inline_note: None,
+            conversations: Vec::new(),
+            commands: Vec::new(),
             _subscription: subscription,
         };
         this.refilter(cx);
@@ -119,8 +170,47 @@ impl CommandPalette {
         match (agent, has_selection) {
             (false, true) => "Jig or prompt for the selection…",
             (false, false) => "Jig or prompt…",
-            (true, true) => "Ask the agent about the selection…",
-            (true, false) => "Ask the agent…",
+            (true, true) => "Ask the agent about the selection, or / for commands…",
+            (true, false) => "Ask the agent, or / for commands…",
+        }
+    }
+
+    /// Switch to Agent mode, e.g. to pick up an earlier conversation.
+    pub fn switch_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_agent(true, window, cx);
+    }
+
+    /// The earlier conversations and OpenCode's commands, listed in Agent
+    /// mode once they've been fetched.
+    pub fn set_agent_catalog(
+        &mut self,
+        conversations: Vec<PastConversation>,
+        commands: Vec<AgentCommandInfo>,
+        cx: &mut Context<Self>,
+    ) {
+        self.conversations = conversations;
+        self.commands = commands;
+        if self.note.is_none() {
+            let selected = self.rows.get(self.selected).cloned();
+            self.refilter(cx);
+            // Keep the arrows' choice when the list fills in under it.
+            if let Some(index) = selected.and_then(|row| self.rows.iter().position(|r| *r == row)) {
+                self.selected = index;
+            }
+        }
+    }
+
+    /// The part of `query` that names a jig: all of it in Jig mode, the
+    /// rest after "/jig " in Agent mode, `None` when it's for the agent.
+    fn jig_query<'a>(&self, query: &'a str) -> Option<&'a str> {
+        if !self.agent {
+            return Some(query);
+        }
+        let rest = query.trim_start().strip_prefix(JIG_PREFIX)?;
+        if rest.is_empty() {
+            Some(rest)
+        } else {
+            rest.strip_prefix(' ')
         }
     }
 
@@ -159,10 +249,12 @@ impl CommandPalette {
         // name, so the note that follows goes to that command.
         if let Some(before) = query.strip_suffix(':')
             && before == self.filtered_query
-            && !before.contains(':')
+            && let Some(jig) = self.jig_query(before)
+            && !jig.contains(':')
             && let Some(Row::Preset(preset)) = self.rows.get(self.selected)
         {
-            let completed = format!("{}: ", self.presets[*preset].name);
+            let prefix = &before[..before.len() - jig.len()];
+            let completed = format!("{prefix}{}: ", self.presets[*preset].name);
             self.input
                 .update(cx, |input, cx| input.set_value(completed, window, cx));
         }
@@ -171,6 +263,79 @@ impl CommandPalette {
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
+        match self.jig_query(&query) {
+            Some(jig) => {
+                let jig = jig.to_string();
+                self.filter_jigs(&jig, !self.agent);
+            }
+            None if query.trim_start().starts_with('/') => self.filter_commands(&query),
+            None => self.filter_conversations(&query),
+        }
+        self.filtered_query = query;
+        cx.notify();
+    }
+
+    /// Agent mode: the typed message, then the earlier conversations it
+    /// matches (all of them before anything is typed).
+    fn filter_conversations(&mut self, query: &str) {
+        self.inline_note = None;
+        let query = query.trim();
+        let lower = query.to_lowercase();
+        self.rows = Vec::new();
+        if !query.is_empty() {
+            self.rows.push(Row::Custom(query.to_string()));
+        }
+        self.rows.extend(
+            self.conversations
+                .iter()
+                .enumerate()
+                .filter(|(_, conversation)| {
+                    lower
+                        .split_whitespace()
+                        .all(|word| conversation.title.to_lowercase().contains(word))
+                })
+                .map(|(index, _)| Row::Conversation(index)),
+        );
+        self.selected = 0;
+    }
+
+    /// Agent mode after "/": "/jig", then the commands and skills whose
+    /// names match. Text after the name is the command's arguments. With
+    /// nothing matching, the text goes to the agent as it is.
+    fn filter_commands(&mut self, query: &str) {
+        self.inline_note = None;
+        let typed = query.trim_start().trim_start_matches('/');
+        let (name, arguments) = typed.split_once(' ').unwrap_or((typed, ""));
+        let name = name.to_lowercase();
+        self.rows = Vec::new();
+        if arguments.is_empty() && JIG_PREFIX[1..].starts_with(&name) {
+            self.rows.push(Row::Jigs);
+        }
+        let mut matches: Vec<(u32, usize)> = self
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, command)| {
+                let own = command.name.to_lowercase();
+                if arguments.is_empty() {
+                    crate::presets::score(&own, &name).map(|score| (score, index))
+                } else {
+                    (own == name).then_some((0, index))
+                }
+            })
+            .collect();
+        matches.sort();
+        self.rows
+            .extend(matches.into_iter().map(|(_, index)| Row::Command(index)));
+        if self.rows.is_empty() {
+            self.rows.push(Row::Custom(query.trim().to_string()));
+        }
+        self.selected = 0;
+    }
+
+    /// The jigs `query` matches, after the typed text as a prompt when
+    /// `with_prompt` is set.
+    fn filter_jigs(&mut self, query: &str, with_prompt: bool) {
         // "docs: terse" is the Add docs command with the note "terse", as
         // long as something matches "docs".
         let inline = query.split_once(':').and_then(|(name, note)| {
@@ -185,39 +350,52 @@ impl CommandPalette {
             }
             None => {
                 self.inline_note = None;
-                let matches = presets::filter(&self.presets, &query);
+                let matches = presets::filter(&self.presets, query);
                 let named = matches
                     .first()
-                    .is_some_and(|&first| presets::names(&self.presets[first], &query));
+                    .is_some_and(|&first| presets::names(&self.presets[first], query));
                 (matches, named)
             }
         };
         // The typed text as a prompt first, then the commands it matches.
         // Enter takes the command only when the text clearly names it.
         self.rows = Vec::new();
-        if !query.trim().is_empty() {
+        if with_prompt && !query.trim().is_empty() {
             self.rows.push(Row::Custom(query.trim().to_string()));
         }
         let has_prompt = !self.rows.is_empty();
         self.rows.extend(matches.into_iter().map(Row::Preset));
-        self.filtered_query = query;
         self.selected = if named && has_prompt { 1 } else { 0 };
-        cx.notify();
     }
 
     /// The rest of the highlighted jig's name when the text typed so far is
     /// how it starts and the cursor is at its end: "ain" after "Expl".
     fn completion(&self, cx: &App) -> Option<String> {
-        let Some(Row::Preset(preset)) = self.rows.get(self.selected) else {
-            return None;
-        };
         let input = self.input.read(cx);
         let query = input.value();
         let at_end = input.selected_range() == (query.len()..query.len());
-        if self.note.is_some() || !at_end || query.contains(':') {
+        if self.note.is_some() || !at_end {
             return None;
         }
-        presets::completion(&self.presets[*preset].name, &query).map(str::to_string)
+        let command = |name: &str| -> Option<String> {
+            let typed = query.trim_start().strip_prefix('/')?;
+            if typed.contains(' ') {
+                return None;
+            }
+            presets::completion(name, typed).map(str::to_string)
+        };
+        match self.rows.get(self.selected)? {
+            Row::Preset(preset) => {
+                let jig = self.jig_query(&query)?;
+                if jig.contains(':') {
+                    return None;
+                }
+                presets::completion(&self.presets[*preset].name, jig).map(str::to_string)
+            }
+            Row::Command(index) => command(&self.commands[*index].name),
+            Row::Jigs => command(&JIG_PREFIX[1..]),
+            _ => None,
+        }
     }
 
     /// → or End at the end of the text completes the highlighted jig's name;
@@ -269,6 +447,28 @@ impl CommandPalette {
             Some(Row::Custom(text)) => cx.emit(PaletteEvent::Run(
                 Invocation::custom(text, self.has_selection).on_agent(self.agent),
             )),
+            Some(Row::Conversation(index)) => {
+                cx.emit(PaletteEvent::Resume(self.conversations[*index].id.clone()))
+            }
+            Some(Row::Command(index)) => {
+                let query = self.query(cx);
+                let arguments = query
+                    .trim_start()
+                    .split_once(' ')
+                    .map(|(_, arguments)| arguments.trim().to_string())
+                    .unwrap_or_default();
+                cx.emit(PaletteEvent::RunAgentCommand {
+                    name: self.commands[*index].name.clone(),
+                    arguments,
+                })
+            }
+            // Choosing "/jig" lists the jigs.
+            Some(Row::Jigs) => {
+                let text = format!("{JIG_PREFIX} ");
+                self.input
+                    .update(cx, |input, cx| input.set_value(text, window, cx));
+                self.refilter(cx);
+            }
             None => {}
         }
     }
@@ -344,7 +544,7 @@ impl CommandPalette {
         }
     }
 
-    /// Tab switches between the quick and the agent lane.
+    /// Tab switches between Jig and Agent mode.
     fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.set_agent(!self.agent, window, cx);
@@ -359,17 +559,22 @@ impl CommandPalette {
     }
 
     fn set_agent(&mut self, agent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let switched = self.agent != agent;
         self.agent = agent;
         if self.note.is_none() {
             let placeholder = Self::list_placeholder(self.has_selection, agent);
             self.input.update(cx, |input, cx| {
                 input.set_placeholder(placeholder, window, cx)
             });
+            self.refilter(cx);
+        }
+        if switched && agent {
+            cx.emit(PaletteEvent::AgentMode);
         }
         cx.notify();
     }
 
-    /// Quick | Agent, as a segmented control.
+    /// Jig | Agent, as a segmented control.
     fn render_lane_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let agent = self.agent_lane();
@@ -381,7 +586,7 @@ impl CommandPalette {
                 .id(if lane {
                     "jig-lane-agent"
                 } else {
-                    "jig-lane-quick"
+                    "jig-lane-jig"
                 })
                 .gap_1()
                 .px_2()
@@ -502,13 +707,40 @@ impl CommandPalette {
             }
             Row::Custom(text) => (
                 format!("“{text}”").into(),
-                if selected {
+                if selected && !self.agent {
                     "⌘↩ save as jig".into()
                 } else {
                     "".into()
                 },
             ),
+            Row::Conversation(index) => {
+                let conversation = &self.conversations[*index];
+                (
+                    conversation.title.clone().into(),
+                    conversation.when.clone().into(),
+                )
+            }
+            Row::Command(index) => {
+                let command = &self.commands[*index];
+                let kind = if command.skill { "skill" } else { "command" };
+                (format!("/{}", command.name).into(), kind.into())
+            }
+            Row::Jigs => (JIG_PREFIX.into(), "run a jig on the agent".into()),
         };
+        // What a command does, after its name.
+        let description = match row {
+            Row::Command(index) => Some(self.commands[*index].description.clone()),
+            _ => None,
+        }
+        .filter(|description| !description.is_empty())
+        .map(|description| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(12.))
+                .opacity(0.7)
+                .child(description)
+        });
         let row_agent = self.agent || matches!(row, Row::Preset(i) if self.presets[*i].agent);
         let accent = crate::surface::lane_accent(row_agent, cx);
         let theme = cx.theme();
@@ -555,10 +787,13 @@ impl CommandPalette {
                     .child(
                         div()
                             .truncate()
-                            .when(note.is_some(), |this| this.flex_none())
+                            .when(note.is_some() || description.is_some(), |this| {
+                                this.flex_none()
+                            })
                             .child(label),
                     )
                     .children(note)
+                    .children(description)
                     .children(tag.map(|tag| {
                         tag.when(selected, |tag| {
                             tag.bg(theme.primary_foreground.opacity(0.2))
@@ -633,17 +868,11 @@ impl Render for CommandPalette {
                 .skip(first)
                 .take(MAX_ROWS)
                 .flat_map(|(index, row)| {
-                    // Label the two kinds of row: the typed prompt, and the
-                    // commands below it.
-                    let section = match row {
-                        Row::Custom(_) => Some("Prompt"),
-                        Row::Preset(_)
-                            if index == 0 || matches!(self.rows[index - 1], Row::Custom(_)) =>
-                        {
-                            Some("Jigs")
-                        }
-                        Row::Preset(_) => None,
-                    };
+                    // Label each kind of row where it starts: the typed
+                    // prompt, and the jigs, commands or conversations below.
+                    let section = (index == first
+                        || self.rows[index - 1].section() != row.section())
+                    .then(|| row.section());
                     let header = section.map(|title| {
                         div()
                             .px_2p5()
@@ -671,7 +900,13 @@ impl Render for CommandPalette {
         let input = self.render_input(agent, accent, cx).into_any_element();
         let theme = cx.theme();
         let footer = if agent {
-            "Works across the project · you review every edit".to_string()
+            match self.rows.get(self.selected) {
+                Some(Row::Conversation(_)) => "Picks up this conversation where it left off".into(),
+                Some(Row::Command(_)) => {
+                    "Runs in a new conversation · you review every edit".to_string()
+                }
+                _ => "Works across the project · you review every edit".to_string(),
+            }
         } else {
             let target = if self.has_selection {
                 "the selection"
@@ -682,7 +917,7 @@ impl Render for CommandPalette {
                 .chain(self.context.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("Quick edit of {target} · sees {sees}")
+            format!("Edits {target} · sees {sees}")
         };
 
         let palette = crate::surface::panel(cx)
@@ -804,6 +1039,8 @@ mod tests {
     struct Host {
         palette: Entity<CommandPalette>,
         events: Vec<Option<Invocation>>,
+        /// Everything else it said, by kind: "resume ses_1", "command review main".
+        other: Vec<String>,
         _subscription: Subscription,
     }
 
@@ -843,14 +1080,24 @@ mod tests {
                         cx.new(|cx| CommandPalette::new(presets, has_selection, window, cx));
                     let subscription =
                         cx.subscribe(&palette, |host: &mut Host, _, event: &PaletteEvent, _| {
-                            host.events.push(match event {
-                                PaletteEvent::Run(invocation) => Some(invocation.clone()),
-                                PaletteEvent::Dismissed | PaletteEvent::SaveAsCommand(_) => None,
-                            })
+                            match event {
+                                PaletteEvent::Run(invocation) => {
+                                    host.events.push(Some(invocation.clone()))
+                                }
+                                PaletteEvent::Dismissed | PaletteEvent::SaveAsCommand(_) => {
+                                    host.events.push(None)
+                                }
+                                PaletteEvent::Resume(id) => host.other.push(format!("resume {id}")),
+                                PaletteEvent::RunAgentCommand { name, arguments } => host
+                                    .other
+                                    .push(format!("command {name} {arguments}").trim().into()),
+                                PaletteEvent::AgentMode => host.other.push("agent mode".into()),
+                            }
                         });
                     Host {
                         palette,
                         events: Vec::new(),
+                        other: Vec::new(),
                         _subscription: subscription,
                     }
                 })
@@ -1085,12 +1332,150 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn end_completes_in_the_agent_lane_too(cx: &mut TestAppContext) {
+    fn end_completes_a_jig_after_slash_jig_in_agent_mode(cx: &mut TestAppContext) {
         let (window, host) = open(cx, true);
         step(cx, window, |window, cx| window.press("tab", cx));
-        step(cx, window, |window, cx| window.input("Add t", cx));
+        step(cx, window, |window, cx| window.input("/jig Add t", cx));
         step(cx, window, |window, cx| window.press("end", cx));
-        assert_eq!(query(cx, &host), "Add tests");
+        assert_eq!(query(cx, &host), "/jig Add tests");
+    }
+
+    /// Agent mode with two earlier conversations and two commands listed.
+    fn open_agent(cx: &mut TestAppContext) -> (gpui_kit::AnyWindowHandle, Entity<Host>) {
+        let (window, host) = open(cx, true);
+        step(cx, window, |window, cx| window.press("tab", cx));
+        cx.update(|cx| {
+            let palette = host.read(cx).palette.clone();
+            palette.update(cx, |palette, cx| {
+                palette.set_agent_catalog(
+                    vec![
+                        super::PastConversation {
+                            id: "ses_1".into(),
+                            title: "Add docs to the parser".into(),
+                            when: "2 h ago".into(),
+                        },
+                        super::PastConversation {
+                            id: "ses_2".into(),
+                            title: "Fix the flaky test".into(),
+                            when: "yesterday".into(),
+                        },
+                    ],
+                    vec![
+                        super::AgentCommandInfo {
+                            name: "review".into(),
+                            description: "review changes".into(),
+                            skill: false,
+                        },
+                        super::AgentCommandInfo {
+                            name: "init".into(),
+                            description: "guided AGENTS.md setup".into(),
+                            skill: false,
+                        },
+                    ],
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        (window, host)
+    }
+
+    fn rows(cx: &mut TestAppContext, host: &Entity<Host>) -> Vec<super::Row> {
+        cx.update(|cx| host.read(cx).palette.read(cx).rows.clone())
+    }
+
+    #[gpui_kit::test]
+    fn agent_mode_lists_earlier_conversations_instead_of_jigs(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).other.clone()),
+            ["agent mode"],
+            "switching asks for the conversations"
+        );
+        assert_eq!(
+            rows(cx, &host),
+            [super::Row::Conversation(0), super::Row::Conversation(1)]
+        );
+        // Text is a message for the agent, above the conversations it matches.
+        step(cx, window, |window, cx| window.input("flaky", cx));
+        assert_eq!(
+            rows(cx, &host),
+            [
+                super::Row::Custom("flaky".into()),
+                super::Row::Conversation(1)
+            ]
+        );
+        step(cx, window, |window, cx| {
+            window.press("down", cx);
+            window.press("enter", cx);
+        });
+        assert_eq!(
+            cx.update(|cx| host.read(cx).other.clone()),
+            ["agent mode", "resume ses_2"]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn typing_in_agent_mode_runs_a_prompt_even_when_it_names_a_jig(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        step(cx, window, |window, cx| window.input("explain", cx));
+        assert_eq!(rows(cx, &host), [super::Row::Custom("explain".into())]);
+        step(cx, window, |window, cx| window.press("enter", cx));
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name, None);
+        assert!(invocation.agent);
+    }
+
+    #[gpui_kit::test]
+    fn slash_lists_commands_and_runs_one_with_arguments(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        step(cx, window, |window, cx| window.input("/", cx));
+        assert_eq!(
+            rows(cx, &host),
+            [
+                super::Row::Jigs,
+                super::Row::Command(0),
+                super::Row::Command(1)
+            ]
+        );
+        step(cx, window, |window, cx| window.input("rev", cx));
+        assert_eq!(rows(cx, &host), [super::Row::Command(0)]);
+        step(cx, window, |window, cx| window.press("right", cx));
+        assert_eq!(query(cx, &host), "/review");
+        step(cx, window, |window, cx| window.input(" main", cx));
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(
+            cx.update(|cx| host.read(cx).other.clone()),
+            ["agent mode", "command review main"]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn slash_jig_runs_a_jig_on_the_agent(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        step(cx, window, |window, cx| window.input("/j", cx));
+        // Enter on "/jig" lists the jigs.
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(query(cx, &host), "/jig ");
+        assert!(events(cx, &host).is_empty());
+        step(cx, window, |window, cx| window.input("docs: terse", cx));
+        step(cx, window, |window, cx| window.press("enter", cx));
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.name.as_deref(), Some("Add docs"));
+        assert_eq!(invocation.comment.as_deref(), Some("terse"));
+        assert!(invocation.agent);
+    }
+
+    #[gpui_kit::test]
+    fn an_unknown_slash_command_goes_to_the_agent_as_text(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        step(cx, window, |window, cx| {
+            window.input("/nothing like it", cx)
+        });
+        assert_eq!(
+            rows(cx, &host),
+            [super::Row::Custom("/nothing like it".into())]
+        );
     }
 
     #[gpui_kit::test]

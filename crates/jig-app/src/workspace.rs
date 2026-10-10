@@ -60,6 +60,7 @@ actions!(
         SaveAs,
         CloseWindow,
         OpenCommand,
+        OpenAgentConversations,
         AddCommand,
         EditCommands,
         EditAgentsFile,
@@ -147,6 +148,8 @@ pub struct Workspace {
     home_focus: FocusHandle,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
+    /// What the palette's Agent mode lists, from the last time it asked.
+    agent_catalog: Option<agent::AgentCatalog>,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
     /// Rename Symbol's field, while it's open.
@@ -238,6 +241,7 @@ impl Workspace {
             home_focus: cx.focus_handle(),
             presets: Rc::new(presets),
             palette: None,
+            agent_catalog: None,
             quick_open: None,
             find_in_files: None,
             rename: None,
@@ -628,6 +632,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::open_command))
+            .on_action(cx.listener(Self::open_agent_conversations))
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
             .on_action(cx.listener(Self::edit_agents_file))
@@ -739,7 +744,8 @@ impl Render for Workspace {
                             })
                             .children(self.render_run_panel(cx))
                             .when(!self.home, |this| this.child(self.render_status_bar(cx))),
-                    ),
+                    )
+                    .children(self.render_pinned_agent_chat(cx)),
             )
             .children(self.render_sidebar_handle(cx))
             .children(self.render_floating_settings(cx))
@@ -773,17 +779,22 @@ impl Render for Workspace {
                     .child(self.tab().hover.clone())
             })
             .child(self.selection_button.clone())
-            .when_some(self.run.as_ref(), |this, run| {
-                let floating = self
-                    .render_agent_chat(cx)
-                    .unwrap_or_else(|| run.bubble.clone().into_any_element());
-                this.child(deferred(
-                    anchored()
-                        .position(run.anchor)
-                        .snap_to_window_with_margin(px(8.))
-                        .child(floating),
-                ))
-            })
+            .when_some(
+                self.run
+                    .as_ref()
+                    .filter(|_| !self.floating_agent_chat_pinned()),
+                |this, run| {
+                    let floating = self
+                        .render_agent_chat(cx)
+                        .unwrap_or_else(|| run.bubble.clone().into_any_element());
+                    this.child(deferred(
+                        anchored()
+                            .position(run.anchor)
+                            .snap_to_window_with_margin(px(8.))
+                            .child(floating),
+                    ))
+                },
+            )
     }
 }
 

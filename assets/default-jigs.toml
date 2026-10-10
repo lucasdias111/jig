@@ -11,7 +11,7 @@
 # diagnostics = true: send the problems the language server reports on the
 # lines it works on (the selection's, or the cursor's line) with the prompt.
 #
-# In the ⌘K input, Tab switches between Quick and Agent, and a colon
+# In the ⌘K input, Tab switches between Jig and Agent mode, and a colon
 # adds a one-off note: "docs: terse" runs Add docs with the note "terse".
 
 [[jig]]

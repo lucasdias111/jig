@@ -38,7 +38,7 @@ pub(super) struct CommandRun {
     pub(super) anchor: Point<Pixels>,
     /// The buffer when the command started. A reply for a buffer that has
     /// since changed is discarded.
-    snapshot: String,
+    pub(super) snapshot: String,
     pub(super) target: Range<usize>,
     /// Set while the change sits in the buffer awaiting accept or reject.
     pub(super) preview: Option<Preview>,
@@ -140,7 +140,10 @@ impl Workspace {
         let events = cx.subscribe_in(
             &view,
             window,
-            |this, _, event: &PaletteEvent, window, cx| {
+            |this, palette, event: &PaletteEvent, window, cx| {
+                if let PaletteEvent::AgentMode = event {
+                    return this.load_agent_catalog(Some(palette.clone()), window, cx);
+                }
                 this.close_palette(window, cx);
                 match event {
                     PaletteEvent::Run(invocation) => {
@@ -149,7 +152,11 @@ impl Workspace {
                     PaletteEvent::SaveAsCommand(text) => {
                         this.open_add_command(Some(text.clone()), window, cx)
                     }
-                    PaletteEvent::Dismissed => {}
+                    PaletteEvent::Resume(id) => this.resume_agent(id.clone(), window, cx),
+                    PaletteEvent::RunAgentCommand { name, arguments } => {
+                        this.run_agent_command(name.clone(), arguments.clone(), window, cx)
+                    }
+                    PaletteEvent::AgentMode | PaletteEvent::Dismissed => {}
                 }
             },
         );
@@ -432,7 +439,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if !self.keys_elsewhere(window, cx)
-            && (self.accept_preview(cx) || self.snippet_step(true, cx))
+            && (self.settle_agent_request(true, window, cx)
+                || self.accept_preview(cx)
+                || self.snippet_step(true, cx))
         {
             cx.stop_propagation();
         } else {
@@ -463,8 +472,12 @@ impl Workspace {
         self.accept_or_propagate(window, cx);
     }
 
-    fn accept_or_propagate(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if !self.keys_elsewhere(window, cx) && self.accept_preview(cx) {
+    /// Enter or Tab: accept the change under review, or allow what the
+    /// agent asks to do.
+    fn accept_or_propagate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.keys_elsewhere(window, cx)
+            && (self.settle_agent_request(true, window, cx) || self.accept_preview(cx))
+        {
             cx.stop_propagation();
         } else {
             cx.propagate();
@@ -538,8 +551,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc rejects a pending change, stops the agent's turn, cancels a
-    /// running command or dismisses its bubble or the agent conversation.
+    /// Esc rejects a pending change or what the agent asks to do, stops the
+    /// agent's turn, cancels a running command or dismisses its bubble or
+    /// the agent conversation.
     /// With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
@@ -554,6 +568,7 @@ impl Workspace {
         } else if self.keys_elsewhere(window, cx) {
             cx.propagate();
         } else if self.reject_preview(window, cx)
+            || self.settle_agent_request(false, window, cx)
             || self.stop_agent_turn(window, cx)
             || self.close_hunk_popup(cx)
             || self.close_find_panel(cx)
