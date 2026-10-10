@@ -17,8 +17,9 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use jig_ai::PromptRequest;
 use jig_ai::agent::{
-    AgentEvent, AgentRequest, AgentSession, EditRequest, PermissionRequest, QuestionRequest, Turn,
+    AgentEvent, AgentRequest, EditRequest, PermissionRequest, QuestionRequest, Turn,
 };
+use jig_ai::harness::Session;
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus,
     CommandPalette, Conversation, LiveStep, PastConversation,
@@ -27,13 +28,13 @@ use jig_editor::EditorHandle;
 
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
-use super::{OpenAgentConversations, OpenCommand, Workspace};
+use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
 
 /// What the agent's thread reports to the window.
 enum Message {
-    Started(AgentSession),
+    Started(Session),
     /// An earlier conversation, picked up again.
-    Resumed(AgentSession, Vec<Turn>),
+    Resumed(Session, Vec<Turn>),
     Event(AgentEvent),
     Failed(String),
 }
@@ -58,6 +59,8 @@ enum Request {
 /// The earlier conversations and OpenCode's commands for one project, kept
 /// so the palette can list them at once the next time.
 pub(super) struct AgentCatalog {
+    /// The agent's key, as Settings > Agent picked it.
+    agent: String,
     directory: PathBuf,
     conversations: Vec<jig_ai::agent::Conversation>,
     commands: Vec<AgentCommandInfo>,
@@ -66,7 +69,7 @@ pub(super) struct AgentCatalog {
 /// The agent side of a [`CommandRun`].
 pub(super) struct AgentRun {
     /// `None` until the session is set up.
-    session: Option<AgentSession>,
+    session: Option<Session>,
     /// What's on screen, awaiting the user.
     pending: Option<Pending>,
     /// Requests that came in while another was on screen.
@@ -121,6 +124,8 @@ struct PendingEdit {
     path: PathBuf,
     /// The file didn't exist; it is removed again if the edit is rejected.
     created: bool,
+    /// The agent left the writing to Jig.
+    jig_writes: bool,
 }
 
 impl Drop for AgentRun {
@@ -229,13 +234,13 @@ impl Workspace {
             run.agent = Some(agent);
         }
 
-        let target = crate::providers::agent_target(cx);
+        let choice = crate::agent::choice(cx);
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
             let result = (|| {
-                let target = target.map_err(anyhow::Error::msg)?;
-                let server = crate::agent::server(target.config.as_ref())?;
-                let session = AgentSession::open(server, &directory, &session_id)?;
+                let choice = choice.map_err(anyhow::Error::msg)?;
+                let backend = crate::agent::connect(&choice)?;
+                let session = backend.open(&directory, &session_id)?;
                 let turns = session.history()?;
                 anyhow::Ok(Message::Resumed(session, turns))
             })();
@@ -310,6 +315,33 @@ impl Workspace {
         palette.update(cx, |palette, cx| palette.switch_to_agent(window, cx));
     }
 
+    /// Open `agents.toml`, starting it with a commented example.
+    pub(super) fn edit_agents(
+        &mut self,
+        _: &EditAgents,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = crate::agents::user_path() else {
+            return;
+        };
+        if !path.exists() {
+            let created = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, crate::agents::USER_TEMPLATE));
+            if let Err(error) = created {
+                self.show_error(
+                    &format!("Couldn't create {}: {error}", path.display()),
+                    window,
+                    cx,
+                );
+                return;
+            }
+        }
+        self.open_file(&path, window, cx);
+    }
+
     /// Fill the palette's Agent mode: what's known at once, then what
     /// OpenCode says now. Without a palette, just learn the commands, so a
     /// reply can run one.
@@ -323,22 +355,23 @@ impl Workspace {
             return;
         };
         let directory = crate::project::root_for(&path);
+        let agent = crate::agents::chosen(cx).key.clone();
         if let Some(catalog) = self
             .agent_catalog
             .as_ref()
-            .filter(|catalog| catalog.directory == directory)
+            .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
             && let Some(palette) = &palette
         {
             show_catalog(catalog, palette, cx);
         }
-        let target = crate::providers::agent_target(cx);
+        let choice = crate::agent::choice(cx);
         let task = cx.background_executor().spawn({
             let directory = directory.clone();
             async move {
-                let target = target.map_err(anyhow::Error::msg)?;
-                let server = crate::agent::server(target.config.as_ref())?;
-                let conversations = server.conversations(&directory)?;
-                let commands = server.commands(&directory)?;
+                let choice = choice.map_err(anyhow::Error::msg)?;
+                let backend = crate::agent::connect(&choice)?;
+                let conversations = backend.conversations(&directory)?;
+                let commands = backend.commands(&directory)?;
                 anyhow::Ok((conversations, commands))
             }
         });
@@ -350,6 +383,7 @@ impl Workspace {
             };
             this.update(cx, |this, cx| {
                 let catalog = AgentCatalog {
+                    agent,
                     directory,
                     conversations,
                     commands: commands
@@ -400,7 +434,7 @@ impl Workspace {
             title: asked.clone(),
             touched: Vec::new(),
             step: LiveStep::default(),
-            label: name.unwrap_or_else(|| "Agent".into()),
+            label: name.unwrap_or_else(|| crate::agents::chosen(cx).name.clone()),
             started: std::time::Instant::now(),
             context,
             finished: true,
@@ -478,15 +512,15 @@ impl Workspace {
         if self.agent_catalog.is_none() {
             self.load_agent_catalog(None, window, cx);
         }
-        // Read on this thread: the keys and lanes live in the app.
-        let target = crate::providers::agent_target(cx);
+        // Read on this thread: the keys and settings live in the app.
+        let choice = crate::agent::choice(cx);
         let Some(agent) = self.agent_run(id) else {
             return;
         };
         let session = agent.session.clone();
         let directory = agent.directory.clone();
         let title = agent.title.clone();
-        let permissions = crate::settings::get(cx).agent;
+        let permissions = crate::settings::get(cx).agent.permissions;
         agent.step = LiveStep::default();
         agent.step.set(if session.is_some() {
             "Thinking".into()
@@ -509,13 +543,12 @@ impl Workspace {
                 let _ = sender.unbounded_send(message);
             };
             let result = (|| {
-                let target = target.map_err(anyhow::Error::msg)?;
+                let choice = choice.map_err(anyhow::Error::msg)?;
                 let session = match session {
                     Some(session) => session,
                     None => {
-                        let server = crate::agent::server(target.config.as_ref())?;
-                        let session =
-                            AgentSession::create(server, &directory, &title, &permissions)?;
+                        let backend = crate::agent::connect(&choice)?;
+                        let session = backend.create(&directory, &title, &permissions)?;
                         send(Message::Started(session.clone()));
                         session
                     }
@@ -527,7 +560,7 @@ impl Workspace {
                 let request = AgentRequest {
                     directory,
                     prompt,
-                    model: target.model,
+                    model: choice.model(),
                     command,
                     permissions,
                 };
@@ -985,6 +1018,10 @@ impl Workspace {
             Message::Event(AgentEvent::Question(request)) => {
                 agent.queue.push_back(Request::Question(request))
             }
+            Message::Event(AgentEvent::Commands(commands)) => {
+                let directory = agent.directory.clone();
+                self.learn_commands(directory, commands, cx);
+            }
             Message::Event(AgentEvent::Did(text)) => {
                 agent.entries.push(ChatEntry::Did(text));
                 agent.scroll.scroll_to_bottom();
@@ -1006,6 +1043,40 @@ impl Workspace {
         // A request may have queued up behind one the user just settled.
         self.show_next_request(id, window, cx);
         true
+    }
+
+    /// What the agent just said it offers, for the palette's "/" and for
+    /// replies.
+    fn learn_commands(
+        &mut self,
+        directory: PathBuf,
+        commands: Vec<jig_ai::agent::AgentCommand>,
+        cx: &App,
+    ) {
+        let agent = crate::agents::chosen(cx).key.clone();
+        let commands = commands
+            .into_iter()
+            .map(|command| AgentCommandInfo {
+                name: command.name,
+                description: command.description,
+                skill: command.skill,
+            })
+            .collect();
+        match self
+            .agent_catalog
+            .as_mut()
+            .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
+        {
+            Some(catalog) => catalog.commands = commands,
+            None => {
+                self.agent_catalog = Some(AgentCatalog {
+                    agent,
+                    directory,
+                    conversations: Vec::new(),
+                    commands,
+                })
+            }
+        }
     }
 
     /// Put the next queued request on screen, unless one is already there.
@@ -1056,7 +1127,7 @@ impl Workspace {
     ) -> Result<(), String> {
         let created = !edit.path.exists();
         let disk = std::fs::read_to_string(&edit.path).unwrap_or_default();
-        let new = jig_ai::agent::apply_diff(&disk, &edit.diff).map_err(|error| {
+        let new = edit.change.apply(&disk).map_err(|error| {
             format!("Jig couldn't apply that edit: {error:#}. Read the file again.")
         })?;
         if created {
@@ -1099,6 +1170,7 @@ impl Workspace {
                 id: edit.id.clone(),
                 path: edit.path.clone(),
                 created,
+                jig_writes: edit.change.written_by_jig(),
             }));
         }
         self.editor().clear_highlights(cx);
@@ -1181,9 +1253,15 @@ impl Workspace {
         }
         self.editor().clear_highlights(cx);
         self.editor().set_readonly(false, cx);
+        let mut note = None;
         if accept {
-            // OpenCode writes the same text to disk.
+            // The agent writes the same text to disk, or leaves it to Jig.
             let text = self.editor().text(cx);
+            if pending.jig_writes
+                && let Err(error) = std::fs::write(&pending.path, &text)
+            {
+                note = Some(format!("Jig couldn't write the file: {error}"));
+            }
             let tab = self.tab_mut();
             tab.document.saved_text = text;
             tab.dirty = false;
@@ -1198,7 +1276,8 @@ impl Workspace {
                 self.refresh_tree(cx);
             }
         }
-        self.answer_edit(&pending.id, accept, None, cx);
+        let written = note.is_none();
+        self.answer_edit(&pending.id, accept && written, note.as_deref(), cx);
         cx.notify();
         true
     }

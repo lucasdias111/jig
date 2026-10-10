@@ -344,7 +344,7 @@ pub struct Conversation {
 }
 
 /// A command or skill OpenCode runs by name, as in "/review".
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentCommand {
     pub name: String,
     /// Its first line.
@@ -383,7 +383,7 @@ fn conversations(sessions: &Value) -> Vec<Conversation> {
     found
 }
 
-fn canonical(directory: &Path) -> String {
+pub(crate) fn canonical(directory: &Path) -> String {
     directory
         .canonicalize()
         .unwrap_or_else(|_| directory.to_path_buf())
@@ -486,8 +486,46 @@ pub struct AgentRequest {
 pub struct EditRequest {
     pub id: String,
     pub path: PathBuf,
-    /// A unified diff against the file on disk.
-    pub diff: String,
+    pub change: EditChange,
+}
+
+/// How an agent says what an edit changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditChange {
+    /// A unified diff against the file on disk. The agent writes it once
+    /// it's accepted.
+    Diff(String),
+    /// `old` replaced by `new`, each the whole file or a part of it; `old`
+    /// is `None` for a new file. The agent writes it once it's accepted.
+    Replace { old: Option<String>, new: String },
+    /// The file's whole new text. Jig writes it once it's accepted.
+    Write(String),
+}
+
+impl EditChange {
+    /// The file's text after the edit, from its text on disk.
+    pub fn apply(&self, disk: &str) -> Result<String> {
+        match self {
+            EditChange::Diff(diff) => apply_diff(disk, diff),
+            EditChange::Write(text) => Ok(text.clone()),
+            EditChange::Replace { old, new } => {
+                match old.as_deref().filter(|old| !old.is_empty()) {
+                    None => Ok(new.clone()),
+                    Some(old) if old == disk => Ok(new.clone()),
+                    Some(old) => match disk.matches(old).count() {
+                        1 => Ok(disk.replacen(old, new, 1)),
+                        0 => bail!("the file changed since the agent read it"),
+                        _ => bail!("the text to change is in the file more than once"),
+                    },
+                }
+            }
+        }
+    }
+
+    /// Jig, not the agent, puts the accepted text on disk.
+    pub fn written_by_jig(&self) -> bool {
+        matches!(self, EditChange::Write(_))
+    }
 }
 
 /// Something else the agent wants to do that waits for the user: run a
@@ -525,6 +563,8 @@ pub enum AgentEvent {
     /// Something it did that belongs in the transcript, e.g. a command it
     /// ran: "Ran `cargo test`".
     Did(String),
+    /// The commands and skills it offers, when it says.
+    Commands(Vec<AgentCommand>),
     /// The agent finished; its closing words.
     Done(String),
 }
@@ -737,7 +777,9 @@ impl AgentSession {
                 Some(AgentEvent::Edit(EditRequest {
                     id: properties["id"].as_str().unwrap_or_default().to_string(),
                     path: PathBuf::from(metadata["filepath"].as_str().unwrap_or_default()),
-                    diff: metadata["diff"].as_str().unwrap_or_default().to_string(),
+                    change: EditChange::Diff(
+                        metadata["diff"].as_str().unwrap_or_default().to_string(),
+                    ),
                 }))
             }
             "permission.asked" => match permission(properties) {
@@ -970,7 +1012,7 @@ fn path_of(input: &Value) -> String {
         .to_string()
 }
 
-fn relative(path: &str, directory: &str) -> String {
+pub(crate) fn relative(path: &str, directory: &str) -> String {
     let relative = path
         .strip_prefix(directory)
         .map(|rest| rest.trim_start_matches('/'))
@@ -1302,6 +1344,24 @@ mod tests {
             Some("deny"),
             "always"
         );
+    }
+
+    #[test]
+    fn replacements_apply_to_the_whole_file_or_a_part() {
+        let replace = |old: Option<&str>, new: &str| EditChange::Replace {
+            old: old.map(str::to_string),
+            new: new.into(),
+        };
+        let disk = "a\nb\nc\n";
+        assert_eq!(replace(Some(disk), "x\n").apply(disk).unwrap(), "x\n");
+        assert_eq!(
+            replace(Some("b\n"), "B\n").apply(disk).unwrap(),
+            "a\nB\nc\n"
+        );
+        assert_eq!(replace(None, "new\n").apply("").unwrap(), "new\n");
+        assert!(replace(Some("zzz"), "y").apply(disk).is_err());
+        assert!(replace(Some("\n"), "y").apply(disk).is_err(), "ambiguous");
+        assert!(EditChange::Write("w".into()).written_by_jig());
     }
 
     #[test]

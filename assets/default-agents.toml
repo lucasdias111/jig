@@ -1,0 +1,48 @@
+# The agents Agent mode can run, chosen in Settings > Agent. Yours go in
+# ~/.config/jig/agents.toml; one with the same key replaces a built-in.
+#
+# key      its name in settings.toml ([agent] use = "...")
+# name     as Settings shows it
+# kind     "opencode" for Jig's own OpenCode client, "acp" (the default) for
+#          any agent that speaks the Agent Client Protocol on stdio
+# command  the program to start, found on the PATH or in Jig's agents
+#          folder (where Install puts it); the rest of the words are its
+#          arguments
+# env      variables to start it with
+# install  a shell command that installs it; ${agents} is Jig's agents
+#          folder, whose node_modules/.bin and bin are searched
+# about    a line for Settings: how it signs in, how it asks
+#
+# Jig previews every edit the agent asks about before it's written. Agents
+# are set up below to ask; one that edits without asking can't be stopped,
+# and the conversation says what it changed.
+
+[[agent]]
+key = "opencode"
+name = "OpenCode"
+kind = "opencode"
+command = ["opencode"]
+install = "curl -fsSL https://opencode.ai/install | bash"
+about = "Jig's own OpenCode client: every edit asks, and it can ask questions with choices. Uses the Agent model from Settings > Model."
+
+[[agent]]
+key = "claude-code"
+name = "Claude Code"
+command = ["claude-agent-acp"]
+install = "npm install --prefix \"${agents}\" @agentclientprotocol/claude-agent-acp"
+about = "Through its ACP adapter, with your CLAUDE.md, skills and commands. Signs in with your Claude Code login or ANTHROPIC_API_KEY."
+
+[[agent]]
+key = "codex"
+name = "Codex"
+command = ["codex-acp"]
+env = { INITIAL_AGENT_MODE = "read-only" }
+install = "npm install --prefix \"${agents}\" @agentclientprotocol/codex-acp"
+about = "Through its ACP adapter, started read-only so it asks before edits and commands. Signs in with ChatGPT, CODEX_API_KEY or OPENAI_API_KEY."
+
+[[agent]]
+key = "gemini"
+name = "Gemini CLI"
+command = ["gemini", "--experimental-acp"]
+install = "npm install --prefix \"${agents}\" @google/gemini-cli"
+about = "Gemini CLI's own ACP mode. Signs in with your Google login or GEMINI_API_KEY."

@@ -2,10 +2,12 @@
 //!
 //! Calls are blocking; the app runs them on a background thread.
 
+pub mod acp;
 pub mod agent;
 mod anthropic;
 pub mod config;
 pub mod config_file;
+pub mod harness;
 mod http;
 pub mod keys;
 mod models;

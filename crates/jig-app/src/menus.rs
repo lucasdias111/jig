@@ -6,9 +6,9 @@ use gpui_kit::*;
 use crate::settings_window::OpenSettings;
 use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
-    DuplicateLine, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations, Find,
-    FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoToFile, GoToLine,
-    MoveLineDown, MoveLineUp, NewBranch, NewFile, NextProblem, NextTab, Open,
+    DuplicateLine, EditAgents, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations,
+    Find, FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoToFile,
+    GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NextProblem, NextTab, Open,
     OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
     ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
     SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
@@ -108,6 +108,7 @@ pub fn set(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Run Jig…", OpenCommand),
                 MenuItem::action("Agent Conversations…", OpenAgentConversations),
+                MenuItem::action("Edit Agents", EditAgents),
                 MenuItem::action("Add Jig…", AddCommand),
                 MenuItem::action("Edit Jigs File", EditCommands),
                 MenuItem::action("Edit AGENTS.md", EditAgentsFile),

@@ -25,8 +25,8 @@ pub struct Settings {
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,
     pub formatting: FormatSettings,
-    /// What the agent may do without asking, or at all.
-    pub agent: jig_ai::agent::Permissions,
+    /// Which agent Agent mode runs, and what it may do without asking.
+    pub agent: AgentSettings,
     pub colors: ColorSettings,
     /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
     pub shortcuts: BTreeMap<String, String>,
@@ -201,6 +201,26 @@ impl DebugSettings {
     }
 }
 
+/// Agent mode: the agent, by its key in `agents.toml`, and its permissions,
+/// all under `[agent]`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentSettings {
+    #[serde(rename = "use")]
+    pub using: String,
+    #[serde(flatten)]
+    pub permissions: jig_ai::agent::Permissions,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            using: crate::agents::DEFAULT.into(),
+            permissions: Default::default(),
+        }
+    }
+}
+
 /// What happens to a file as it's saved. All off to begin with: nothing
 /// changes what you saved unless you asked.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,8 +379,9 @@ mod tests {
         settings.languages.set_off("java", true);
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
-        settings.agent.shell = jig_ai::agent::Access::Allow;
-        settings.agent.questions = false;
+        settings.agent.using = "codex".into();
+        settings.agent.permissions.shell = jig_ai::agent::Access::Allow;
+        settings.agent.permissions.questions = false;
         settings
             .languages
             .set_extensions("typescript", Some("ts".into()), "ts, mts, cts");
@@ -384,8 +405,8 @@ mod tests {
         assert_eq!(partial.formatting, FormatSettings::default(), "off");
         assert_eq!(
             partial.agent,
-            jig_ai::agent::Permissions::default(),
-            "everything asks"
+            AgentSettings::default(),
+            "OpenCode, and everything asks"
         );
     }
 

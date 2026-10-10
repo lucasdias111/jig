@@ -1005,7 +1005,10 @@ impl SettingsWindow {
                 },
             ),
         )
-        .description("Works across the project through OpenCode. A stronger model helps.");
+        .description(
+            "Agent mode's model when it runs OpenCode; other agents use their own. A stronger \
+             model helps.",
+        );
 
         SettingGroup::new()
             .title("Models")
@@ -1393,7 +1396,7 @@ impl Render for SettingsWindow {
                         shortcuts_page,
                         self.commands_page(),
                         model_page,
-                        self.agent_page(),
+                        self.agent_page(cx),
                     ]);
                 #[cfg(test)]
                 let settings =
@@ -1497,14 +1500,14 @@ mod tests {
         for access in jig_ai::agent::Access::ALL {
             cx.update(|cx| {
                 settings::update(cx, |s| {
-                    s.agent.shell = access;
-                    s.agent.questions = !s.agent.questions;
+                    s.agent.permissions.shell = access;
+                    s.agent.permissions.questions = !s.agent.permissions.questions;
                 })
             });
             draw(cx);
         }
         assert_eq!(
-            cx.update(|cx| settings::get(cx).agent.shell),
+            cx.update(|cx| settings::get(cx).agent.permissions.shell),
             jig_ai::agent::Access::Deny
         );
         START_PAGE.set(0);

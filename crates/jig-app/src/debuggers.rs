@@ -676,7 +676,7 @@ pub fn debuggers_dir() -> Option<PathBuf> {
     })
 }
 
-fn data_dir() -> Option<PathBuf> {
+pub(crate) fn data_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     if cfg!(target_os = "macos") {
         return Some(home.join("Library/Application Support"));
