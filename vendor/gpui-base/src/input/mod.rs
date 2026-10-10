@@ -82,7 +82,7 @@ pub use crate::number_input::{NumberInputEvent, NumberStep};
 pub use base::{InputBase, InputContextMenuCapabilities, InputStyles};
 pub use cursor::Selection;
 pub use decorations::{
-    GutterClickHandler, LineChange, LineChangeKind, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, TextDecoration,
+    ActiveIndentGuide, GutterClickHandler, LineChange, LineChangeKind, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, TextDecoration,
     TextDecorationCollection,
 };
 pub use diagnostics::{

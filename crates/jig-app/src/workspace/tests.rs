@@ -2,6 +2,7 @@
 //! The helpers here are shared; the tests are grouped by feature below.
 
 mod agent;
+mod brackets;
 mod code;
 mod debug;
 mod diagnostics;

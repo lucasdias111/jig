@@ -51,6 +51,17 @@ pub struct LineChange {
     pub color: Hsla,
 }
 
+/// Jig patch: the indent guide of the block the cursor is in, drawn in
+/// `color` over the plain ones.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActiveIndentGuide {
+    /// 0-based buffer lines it runs down.
+    pub rows: Range<usize>,
+    /// Its indent column, in spaces (a tab counts as the tab size).
+    pub column: usize,
+    pub color: Hsla,
+}
+
 impl RangeDecoration {
     /// Create a frame using the editor foreground color.
     pub fn new(range: Range<usize>) -> Self {
@@ -567,6 +578,24 @@ impl InputBaseState<EditorMode> {
             self.extras.line_changes = changes;
             cx.notify();
         }
+    }
+
+    /// Jig patch: draw `guide` stronger than the other indent guides, or
+    /// none. By line, so whoever sets it sets it again after edits.
+    pub fn set_active_indent_guide(
+        &mut self,
+        guide: Option<ActiveIndentGuide>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.extras.active_indent_guide != guide {
+            self.extras.active_indent_guide = guide;
+            cx.notify();
+        }
+    }
+
+    /// Jig patch: the guide `set_active_indent_guide` last set.
+    pub fn active_indent_guide(&self) -> Option<&ActiveIndentGuide> {
+        self.extras.active_indent_guide.as_ref()
     }
 
     /// Jig patch: call `handler` with the first line of the change clicked.

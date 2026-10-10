@@ -2,6 +2,7 @@
 //! sidebar.
 
 mod agent;
+mod brackets;
 mod breakpoints;
 mod code_menu;
 mod commands;

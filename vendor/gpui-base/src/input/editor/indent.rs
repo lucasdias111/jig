@@ -1,4 +1,4 @@
-use crate::input::InputModeKind;
+use crate::input::{InputExtras as _, InputModeKind};
 use crate::input::{
     Indent, IndentInline, InputBaseState, Outdent, OutdentInline, RopeExt, cursor::CursorSelection,
     element::TextElement, layout::LastLayout, mode::LayoutMode,
@@ -108,10 +108,14 @@ impl<M: InputModeKind> TextElement<M> {
         last_layout: &LastLayout,
         text_style: &TextStyle,
         window: &mut Window,
-    ) -> Option<Path<Pixels>> {
+    ) -> Option<IndentGuidePaths> {
         if !state.is_multi_line() || !state.mode.has_indent_guides() {
             return None;
         }
+        // Jig patch: the active guide goes in a path of its own.
+        let active = state.extras.active_indent_guide();
+        let mut active_builder = PathBuilder::stroke(px(1.));
+        let mut has_active = false;
 
         let indent_width =
             self.measure_indent_width(text_style, state.mode.tab_size().tab_size, window);
@@ -139,18 +143,23 @@ impl<M: InputModeKind> TextElement<M> {
                     };
 
                     let pos = point(x + last_layout.line_number_width, offset_y);
-
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                    current_indents.push(pos.x);
+                    current_indents.push((pos.x, offset));
                 }
             } else if last_indents.len() > 0 {
-                for x in &last_indents {
-                    let pos = point(*x, offset_y);
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                }
                 current_indents = last_indents.clone();
+            }
+            for &(x, column) in &current_indents {
+                let is_active = active.is_some_and(|guide| {
+                    guide.column == column && guide.rows.contains(&buffer_line)
+                });
+                let target = if is_active {
+                    has_active = true;
+                    &mut active_builder
+                } else {
+                    &mut builder
+                };
+                target.move_to(point(x, offset_y));
+                target.line_to(point(x, offset_y + line_height));
             }
 
             offset_y += line_layout.wrapped_lines.len() * line_height;
@@ -158,9 +167,20 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         builder.translate(bounds.origin);
-        let path = builder.build().unwrap();
-        Some(path)
+        active_builder.translate(bounds.origin);
+        Some(IndentGuidePaths {
+            plain: builder.build().ok(),
+            active: active
+                .filter(|_| has_active)
+                .and_then(|guide| Some((active_builder.build().ok()?, guide.color))),
+        })
     }
+}
+
+/// Jig patch: the indent guides, and the active one apart in its colour.
+pub(super) struct IndentGuidePaths {
+    pub(super) plain: Option<Path<Pixels>>,
+    pub(super) active: Option<(Path<Pixels>, Hsla)>,
 }
 
 /// Indent guides are a code-editor affordance.

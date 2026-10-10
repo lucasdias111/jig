@@ -43,5 +43,8 @@ anyhow = "1"
 # - Jig draws the hover itself, after a delay it sets, and hears what is
 #   typed, which also puts the hover away (input/editor/lsp/mod.rs, hover.rs,
 #   overlay.rs, input/editor/mod.rs).
+# - The indent guide of the block the cursor is in, drawn stronger
+#   (`set_active_indent_guide`; input/editor/indent.rs, decorations.rs,
+#   base/kind.rs, base/element.rs).
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }

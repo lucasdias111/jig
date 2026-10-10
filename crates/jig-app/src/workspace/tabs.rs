@@ -43,6 +43,8 @@ pub(super) struct Tab {
     /// What the language server says about the name under the pointer and
     /// the call being typed.
     pub(super) hover: Entity<super::hover::CodeHover>,
+    /// The brackets at the cursor and the guide of its block.
+    pub(super) structure: super::brackets::Structure,
     _events: Subscription,
 }
 
@@ -119,6 +121,7 @@ impl Workspace {
                     this.lsp_changed(ix, cx);
                     this.snippet_changed(ix, cx);
                     this.git_buffer_changed(ix, cx);
+                    this.show_structure(ix, true, cx);
                     if ix == this.active {
                         this.on_buffer_changed(cx);
                     }
@@ -131,6 +134,7 @@ impl Workspace {
         self.install_git(&state, &document, cx);
         let problems = super::diagnostics::Problems::new(&state, document.path.as_deref(), cx);
         let hover = super::hover::install(&state, &problems.hover, cx);
+        let structure = self.install_structure(&state, cx);
         let lsp = document.path.as_deref().and_then(|path| {
             let language = document.language(&self.settings.languages);
             super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
@@ -147,6 +151,7 @@ impl Workspace {
             marks,
             problems,
             hover,
+            structure,
             _events: events,
         }
     }

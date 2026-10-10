@@ -141,6 +141,11 @@ pub trait InputExtras: Default + 'static {
     fn line_change_click_handler(&self) -> Option<crate::input::GutterClickHandler> {
         None
     }
+
+    /// Jig patch: the indent guide to draw stronger than the others.
+    fn active_indent_guide(&self) -> Option<&crate::input::ActiveIndentGuide> {
+        None
+    }
 }
 
 /// A mode with nothing extra to render.
@@ -380,6 +385,8 @@ pub struct EditorExtras {
     pub(crate) line_changes: Vec<crate::input::LineChange>,
     /// Jig patch: see `on_line_change_click`.
     pub(crate) line_change_click: Option<crate::input::GutterClickHandler>,
+    /// Jig patch: see `set_active_indent_guide`.
+    pub(crate) active_indent_guide: Option<crate::input::ActiveIndentGuide>,
     pub(crate) inline_completion: InlineCompletion,
     pub(crate) context_menu_content: ContextMenuContent,
     pub(crate) hover_popover: Option<HoverPopoverState>,
@@ -396,6 +403,7 @@ impl Default for EditorExtras {
             gutter_click: None,
             line_changes: Vec::new(),
             line_change_click: None,
+            active_indent_guide: None,
             inline_completion: InlineCompletion::default(),
             context_menu_content: ContextMenuContent::default(),
             hover_popover: None,

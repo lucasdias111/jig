@@ -2448,7 +2448,7 @@ pub(super) struct PrepaintState {
     range_decoration_fills: Vec<(Path<Pixels>, Hsla)>,
     range_decoration_frames: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
-    indent_guides_path: Option<Path<Pixels>>,
+    indent_guides_path: Option<crate::input::indent::IndentGuidePaths>,
     /// The whole input, for deciding whether a long press started in it.
     hitbox: Hitbox,
     bounds: Bounds<Pixels>,
@@ -3241,8 +3241,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
         }
 
         // Paint indent guides
-        if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, editor_style.border.opacity(0.85));
+        if let Some(paths) = prepaint.indent_guides_path.take() {
+            if let Some(path) = paths.plain {
+                window.paint_path(path, editor_style.border.opacity(0.85));
+            }
+            if let Some((path, color)) = paths.active {
+                window.paint_path(path, color);
+            }
         }
 
         // Application decorations sit below the user's selection.

@@ -268,6 +268,10 @@ impl crate::input::InputExtras for super::EditorExtras {
         self.line_change_click.clone()
     }
 
+    fn active_indent_guide(&self) -> Option<&crate::input::ActiveIndentGuide> {
+        self.active_indent_guide.as_ref()
+    }
+
     fn semantic_token_styles(
         &self,
         text: &ropey::Rope,
