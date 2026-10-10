@@ -14,7 +14,7 @@ fn the_agent_conversation_moves_by_its_header(cx: &mut TestAppContext) {
     let header = vcx
         .debug_bounds("agent-chat-header")
         .expect("the conversation is open");
-    let before = vcx.update(|_, cx| workspace.read(cx).run.as_ref().unwrap().anchor);
+    let before = vcx.update(|_, cx| workspace.read(cx).chat.as_ref().unwrap().anchor);
 
     let (from, by) = (header.center(), gpui_kit::point(px(60.), px(90.)));
     let none = gpui_kit::Modifiers::none();
@@ -26,7 +26,7 @@ fn the_agent_conversation_moves_by_its_header(cx: &mut TestAppContext) {
     vcx.simulate_mouse_up(from + by, gpui_kit::MouseButton::Left, none);
     vcx.run_until_parked();
 
-    let after = vcx.update(|_, cx| workspace.read(cx).run.as_ref().unwrap().anchor);
+    let after = vcx.update(|_, cx| workspace.read(cx).chat.as_ref().unwrap().anchor);
     // Within a pixel: positions are snapped to whole pixels when drawn.
     let near = |a: gpui_kit::Point<gpui_kit::Pixels>, b: gpui_kit::Point<gpui_kit::Pixels>| {
         (a.x - b.x).abs() <= px(1.) && (a.y - b.y).abs() <= px(1.)
@@ -64,7 +64,7 @@ fn clicking_anywhere_in_the_reply_box_focuses_it(cx: &mut TestAppContext) {
     vcx.update(|window, cx| {
         let this = workspace.read(cx);
         let input = this
-            .run
+            .chat
             .as_ref()
             .unwrap()
             .agent
@@ -102,7 +102,7 @@ fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppCon
                 .read(cx)
                 .range_to_bounds(&(line.end - 1..line.end - 1))
                 .unwrap();
-            (this.run.as_ref().unwrap().anchor, end)
+            (this.chat.as_ref().unwrap().anchor, end)
         })
     };
 
@@ -125,6 +125,7 @@ fn permission(detail: &str) -> jig_ai::agent::AgentEvent {
         id: "per_1".into(),
         title: "Run a command".into(),
         detail: detail.into(),
+        always: None,
     })
 }
 
@@ -162,6 +163,72 @@ fn a_command_runs_only_once_allowed(cx: &mut TestAppContext) {
     assert_eq!(
         entries.last(),
         Some(&ChatEntry::Note("Not allowed: rm -rf target".into()))
+    );
+}
+
+#[gpui_kit::test]
+fn always_allowing_stops_the_asking_for_the_conversation(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(permission("cargo test"), window, cx);
+        })
+    });
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    // The buttons are drawn, and the middle one allows it always.
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let always = vcx
+        .debug_bounds("agent-decide-1")
+        .expect("an Always allow button");
+    assert!(
+        vcx.debug_bounds("agent-decide-0").is_some()
+            && vcx.debug_bounds("agent-decide-2").is_some()
+    );
+    vcx.simulate_click(always.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    assert_eq!(waiting(cx), None);
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries.last(),
+        Some(&ChatEntry::Note(
+            "Run a command: allowed for this conversation.".into()
+        ))
+    );
+
+    // The next command goes through without asking; the agent can't
+    // remember, so Jig does.
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.test_agent_request(permission("cargo build"), window, cx)
+        })
+    });
+    assert_eq!(waiting(cx), None, "not asked again");
+
+    // ⌘↩ in the code allows always too, rather than opening a line.
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            let mut asking = permission("ls");
+            if let jig_ai::agent::AgentEvent::Permission(request) = &mut asking {
+                request.title = "Use the web".into();
+                request.always = Some("Always allow `ls`".into());
+            }
+            this.test_agent_request(asking, window, cx)
+        })
+    });
+    assert_eq!(waiting(cx), Some("permission"));
+    let text = cx.update(|cx| workspace.read(cx).editor().text(cx));
+    step(cx, window, |window, cx| window.press("secondary-enter", cx));
+    assert_eq!(waiting(cx), None);
+    assert_eq!(cx.update(|cx| workspace.read(cx).editor().text(cx)), text);
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries.last(),
+        Some(&ChatEntry::Note("Always allow `ls`.".into()))
     );
 }
 
@@ -204,6 +271,135 @@ fn the_agent_s_question_is_answered_by_number_or_in_words(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn an_agent_that_wants_a_sign_in_offers_its_ways(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let needed = jig_ai::acp::SignInNeeded {
+        agent: "Claude Code".into(),
+        methods: vec![jig_ai::acp::SignIn {
+            id: "claude-ai-login".into(),
+            name: "Claude Subscription".into(),
+            description: String::new(),
+            terminal: None,
+        }],
+    };
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_sign_in(needed, window, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+        Some("sign-in")
+    );
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries.last(),
+        Some(&ChatEntry::Note("Claude Code needs you to sign in.".into()))
+    );
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+}
+
+#[gpui_kit::test]
+fn the_conversation_belongs_to_the_project_not_the_tab(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = three_files(cx);
+    let b = dir.path().join("b.rs");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            // The agent proposes an edit to b.rs, which opens there.
+            let edit = jig_ai::agent::EditRequest {
+                id: "per_edit".into(),
+                path: b.clone(),
+                change: jig_ai::agent::EditChange::Write("// b.rs, edited\n".into()),
+            };
+            this.test_agent_request(jig_ai::agent::AgentEvent::Edit(edit), window, cx);
+        })
+    });
+    let file = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            this.document()
+                .path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+    };
+    assert_eq!(file(cx).as_deref(), Some("b.rs"));
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+        Some("edit")
+    );
+
+    // To another file: the conversation stays, the edit waits in b.rs, and
+    // this file isn't locked by it.
+    let a = dir.path().join("a.rs");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_file(&a, window, cx))
+    });
+    assert_eq!(file(cx).as_deref(), Some("a.rs"));
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert!(
+            this.chat.as_ref().is_some_and(|run| run.agent.is_some()),
+            "still open"
+        );
+        assert!(!this.previewing(), "a.rs isn't under review");
+    });
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+        Some("edit")
+    );
+
+    // Esc goes back to the edit rather than stopping the agent; then Enter
+    // takes it.
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(file(cx).as_deref(), Some("b.rs"));
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(cx.update(|cx| workspace.read(cx).agent_waiting_on()), None);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.rs")).unwrap(),
+        "// b.rs, edited\n",
+        "Jig wrote it, as the agent asked"
+    );
+}
+
+#[gpui_kit::test]
+fn command_k_leaves_the_conversation_open(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    let open = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).chat.is_some());
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-k", cx);
+    });
+    assert!(cx.update(|cx| workspace.read(cx).palette.is_some()));
+    assert!(open(cx), "the palette opens beside it");
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert!(open(cx), "and closing it leaves the conversation");
+    // A note from ⌘K's side shows without touching the conversation.
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.show_note("Done.".into(), window, cx))
+    });
+    assert!(open(cx));
+    // Esc dismisses the note first, then closes the conversation.
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert!(cx.update(|cx| workspace.read(cx).run.is_none()));
+    assert!(open(cx));
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert!(!open(cx));
+}
+
+#[gpui_kit::test]
 fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     let ws = workspace.clone();
@@ -225,6 +421,48 @@ fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
     // Pinned, it stays through the next frame and doesn't float too.
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.update(|_, cx| workspace.read(cx).floating_agent_chat_pinned()));
+
+    // Its left edge resizes it: dragged left, it grows.
+    let width = |vcx: &mut gpui_kit::VisualTestContext| {
+        vcx.debug_bounds("agent-chat-header").unwrap().size.width
+    };
+    let before = width(&mut vcx);
+    let edge = vcx
+        .debug_bounds("agent-dock-resize")
+        .expect("a resize edge");
+    let none = gpui_kit::Modifiers::none();
+    let from = edge.center();
+    vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, none);
+    for i in 1..=4 {
+        let at = from - gpui_kit::point(px(25. * i as f32), px(0.));
+        vcx.simulate_mouse_move(at, Some(gpui_kit::MouseButton::Left), none);
+    }
+    vcx.simulate_mouse_up(
+        from - gpui_kit::point(px(100.), px(0.)),
+        gpui_kit::MouseButton::Left,
+        none,
+    );
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    let after = width(&mut vcx);
+    assert!(
+        (after - before - px(100.)).abs() <= px(2.),
+        "100 px wider: {before:?} → {after:?}"
+    );
+    assert!(
+        vcx.update(|_, cx| workspace.read(cx).agent_dock.is_some()),
+        "the next conversation opens docked, this wide"
+    );
+
+    // Docked, ⌘K opens the palette on Jig, with Agent mode in the panel.
+    vcx.update(|window, cx| window.press("secondary-k", cx));
+    vcx.run_until_parked();
+    vcx.update(|_, cx| {
+        let this = workspace.read(cx);
+        let palette = this.palette.as_ref().expect("the palette opens");
+        assert!(this.chat.is_some(), "the docked conversation stays");
+        assert!(palette.view.read(cx).is_jig_only());
+    });
 }
 
 #[gpui_kit::test]
@@ -282,12 +520,15 @@ fn wait_for_agent(
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(500));
         cx.run_until_parked();
-        let bubble = bubble(cx, workspace);
+        let bubble = chat_bubble(cx, workspace);
         if done(&bubble) {
             return bubble;
         }
     }
-    panic!("timed out waiting for {what}: {:?}", bubble(cx, workspace));
+    panic!(
+        "timed out waiting for {what}: {:?}",
+        chat_bubble(cx, workspace)
+    );
 }
 
 /// Talks to a real OpenCode: `cargo test -p jig-app agent_live -- --ignored`.
@@ -311,7 +552,7 @@ fn agent_live_edit_is_reviewed_then_written(cx: &mut TestAppContext) {
         window.input("Add a one-line doc comment to add. Nothing else.", cx);
         window.press("enter", cx);
     });
-    let started = bubble(cx, &workspace);
+    let started = chat_bubble(cx, &workspace);
     assert!(
         matches!(started, Some(Bubble::Running { .. })),
         "{started:?}"
@@ -354,7 +595,7 @@ fn agent_live_edit_is_reviewed_then_written(cx: &mut TestAppContext) {
         window.press("enter", cx);
     });
     assert!(matches!(
-        bubble(cx, &workspace),
+        chat_bubble(cx, &workspace),
         Some(Bubble::Running { .. })
     ));
     let answer = wait_for_agent(cx, &workspace, "the reply", |b| {
@@ -377,4 +618,15 @@ fn agent_live_edit_is_reviewed_then_written(cx: &mut TestAppContext) {
     );
     eprintln!("agent answered: {answer:?}");
     crate::agent::stop();
+}
+
+/// The agent conversation's status, which it keeps apart from ⌘K's bubble.
+fn chat_bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<Bubble> {
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .chat
+            .as_ref()
+            .map(|chat| chat.bubble.clone())
+    })
 }

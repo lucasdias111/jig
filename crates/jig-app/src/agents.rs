@@ -210,6 +210,20 @@ pub fn install(agent: &Agent) -> Result<()> {
     let dir = agents_dir().context("No home folder to install into")?;
     std::fs::create_dir_all(&dir).with_context(|| format!("Couldn't create {}", dir.display()))?;
     let script = script.replace("${agents}", &dir.to_string_lossy());
+    // Say what's missing rather than letting the shell say "not found".
+    if let Some(tool) = script.split_whitespace().next()
+        && !tool.contains('/')
+        && !std::env::split_paths(&search_path()).any(|dir| dir.join(tool).is_file())
+    {
+        let get = match tool {
+            "npm" | "npx" => " Install Node.js from nodejs.org, then try again.",
+            _ => "",
+        };
+        bail!(
+            "Installing {} needs {tool}, which isn't installed.{get}",
+            agent.name
+        );
+    }
     let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
     let output = Command::new(sh)
         .arg("-c")

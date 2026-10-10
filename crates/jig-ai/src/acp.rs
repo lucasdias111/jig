@@ -41,7 +41,54 @@ pub struct AgentCommandLine {
     pub path: Option<std::ffi::OsString>,
 }
 
-type Reply = Box<dyn FnOnce(Result<Value, String>) + Send>;
+/// An error the agent answered with.
+#[derive(Clone, Debug)]
+struct RpcError {
+    code: i64,
+    message: String,
+}
+
+impl RpcError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: 0,
+            message: message.into(),
+        }
+    }
+}
+
+/// ACP's code for "sign in first".
+const AUTH_REQUIRED: i64 = -32000;
+
+/// The agent needs the user to sign in before it can work. Carried in the
+/// `anyhow::Error` of whatever asked, for the UI to offer [`SignIn`]s.
+#[derive(Clone, Debug)]
+pub struct SignInNeeded {
+    pub agent: String,
+    pub methods: Vec<SignIn>,
+}
+
+impl std::fmt::Display for SignInNeeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} needs you to sign in.", self.agent)
+    }
+}
+
+impl std::error::Error for SignInNeeded {}
+
+/// One way to sign in to an agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignIn {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Run this in a terminal, where the agent's own login takes over; the
+    /// agent then works once it's done. `None`: the agent signs in itself
+    /// when asked ([`Connection::authenticate`]), e.g. in the browser.
+    pub terminal: Option<AgentCommandLine>,
+}
+
+type Reply = Box<dyn FnOnce(Result<Value, RpcError>) + Send>;
 
 /// What the agent sends a session.
 enum Incoming {
@@ -53,13 +100,17 @@ enum Incoming {
         params: Value,
     },
     /// The answer to the turn's `session/prompt`.
-    Finished(Result<Value, String>),
+    Finished(Result<Value, RpcError>),
 }
 
 /// A running agent process. One serves every conversation with it; it is
 /// stopped when dropped.
 pub struct Connection {
     name: String,
+    /// How it was started, which its terminal sign-in reuses.
+    command: AgentCommandLine,
+    /// How it says users sign in.
+    sign_ins: Mutex<Vec<Value>>,
     child: Mutex<Child>,
     stdin: Mutex<ChildStdin>,
     next_id: AtomicU64,
@@ -95,6 +146,8 @@ impl Connection {
         let stdout = child.stdout.take().context("no stdout")?;
         let connection = Arc::new(Self {
             name: name.to_string(),
+            command: command.clone(),
+            sign_ins: Mutex::default(),
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(0),
@@ -124,12 +177,76 @@ impl Connection {
                 "clientCapabilities": {
                     "fs": {"readTextFile": true, "writeTextFile": true},
                     "terminal": false,
+                    // Jig opens a terminal for an agent's own login.
+                    "auth": {"terminal": true},
                 },
                 "clientInfo": {"name": "jig", "title": "Jig", "version": env!("CARGO_PKG_VERSION")},
             }),
         )?;
         *lock(&connection.capabilities) = initialized["agentCapabilities"].clone();
+        *lock(&connection.sign_ins) = initialized["authMethods"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         Ok(connection)
+    }
+
+    /// The ways to sign in the agent offers.
+    pub fn sign_ins(&self) -> Vec<SignIn> {
+        lock(&self.sign_ins)
+            .iter()
+            .filter_map(|method| {
+                let terminal = (method["type"] == "terminal").then(|| AgentCommandLine {
+                    args: self
+                        .command
+                        .args
+                        .iter()
+                        .cloned()
+                        .chain(
+                            method["args"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|arg| arg.as_str().map(str::to_string)),
+                        )
+                        .collect(),
+                    ..self.command.clone()
+                });
+                Some(SignIn {
+                    id: method["id"].as_str()?.to_string(),
+                    name: method["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                    description: method["description"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                    terminal,
+                })
+            })
+            .collect()
+    }
+
+    /// Ask the agent to sign in with `method`, or to pick up a sign-in
+    /// just done in the terminal.
+    pub fn authenticate(&self, method: &str) -> Result<()> {
+        self.request("authenticate", json!({"methodId": method}))
+            .map(|_| ())
+    }
+
+    /// The error to report for `error`: [`SignInNeeded`] when that's what it
+    /// says.
+    fn failure(&self, error: RpcError) -> anyhow::Error {
+        if error.code == AUTH_REQUIRED && error.message.starts_with("Authentication required") {
+            return anyhow::Error::new(SignInNeeded {
+                agent: self.name.clone(),
+                methods: self.sign_ins(),
+            });
+        }
+        anyhow!("{}", error.message)
     }
 
     /// Still running.
@@ -221,7 +338,7 @@ impl Connection {
         receiver
             .recv_timeout(TIMEOUT)
             .map_err(|_| anyhow!("{} didn't answer", self.name))?
-            .map_err(|error| anyhow!("{error}"))
+            .map_err(|error| self.failure(error))
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<()> {
@@ -254,10 +371,13 @@ impl Connection {
                 reply(if error.is_null() {
                     Ok(message["result"].clone())
                 } else {
-                    Err(error["message"]
-                        .as_str()
-                        .unwrap_or("the agent failed")
-                        .to_string())
+                    Err(RpcError {
+                        code: error["code"].as_i64().unwrap_or(0),
+                        message: error["message"]
+                            .as_str()
+                            .unwrap_or("the agent failed")
+                            .to_string(),
+                    })
                 });
             }
             (Some("session/update"), None) => {
@@ -298,10 +418,10 @@ impl Connection {
         let why = format!("{} stopped", self.name);
         *lock(&self.gone) = Some(why.clone());
         for (_, reply) in lock(&self.pending).drain() {
-            reply(Err(why.clone()));
+            reply(Err(RpcError::new(why.clone())));
         }
         for (_, sender) in lock(&self.sessions).drain() {
-            let _ = sender.send(Incoming::Finished(Err(why.clone())));
+            let _ = sender.send(Incoming::Finished(Err(RpcError::new(why.clone()))));
         }
     }
 
@@ -403,7 +523,7 @@ impl Session {
                 while let Ok(Incoming::Update(update)) = updates.try_recv() {
                     transcript.add(&update);
                 }
-                result.map_err(|error| anyhow!("{error}"))?;
+                result.map_err(|error| self.connection.failure(error))?;
                 return Ok(transcript.finish());
             }
             match updates.recv_timeout(Duration::from_millis(50)) {
@@ -413,7 +533,7 @@ impl Session {
                         .connection
                         .respond(&id, Err("Not while loading.".into()));
                 }
-                Ok(Incoming::Finished(Err(error))) => bail!("{error}"),
+                Ok(Incoming::Finished(Err(error))) => return Err(self.connection.failure(error)),
                 _ => {}
             }
         }
@@ -451,7 +571,7 @@ impl Session {
                     }
                 }
                 Incoming::Finished(result) => {
-                    let result = result.map_err(|error| anyhow!("{error}"))?;
+                    let result = result.map_err(|error| self.connection.failure(error))?;
                     if result["stopReason"] == "refusal" {
                         bail!("{} refused.", self.connection.name);
                     }
@@ -495,17 +615,31 @@ impl Session {
                     Access::Allow => answer(&["allow_once", "allow_always"])?,
                     Access::Deny => answer(&["reject_once", "reject_always"])?,
                     Access::Ask => {
+                        // The agent's own "don't ask again", if it has one.
+                        let always = options.as_array().and_then(|options| {
+                            let option = options
+                                .iter()
+                                .find(|option| option["kind"] == "allow_always")?;
+                            Some(
+                                option["name"]
+                                    .as_str()
+                                    .unwrap_or("Always allow")
+                                    .to_string(),
+                            )
+                        });
+                        let request = PermissionRequest {
+                            id: ours.clone(),
+                            title: call.asking(),
+                            detail: call.detail(&self.directory),
+                            always,
+                        };
                         let waiting = Waiting::Permission {
                             id,
                             options,
                             edit: None,
                         };
-                        lock(&self.waiting).insert(ours.clone(), waiting);
-                        return Ok(Some(AgentEvent::Permission(PermissionRequest {
-                            id: ours,
-                            title: call.asking(),
-                            detail: call.detail(&self.directory),
-                        })));
+                        lock(&self.waiting).insert(ours, waiting);
+                        return Ok(Some(AgentEvent::Permission(request)));
                     }
                 }
                 Ok(None)
@@ -579,6 +713,17 @@ impl Session {
                 },
             ),
         }
+    }
+
+    /// Let a request through with the agent's own "don't ask again", or
+    /// just this once when it has none.
+    pub fn allow_always(&self, request_id: &str) -> Result<()> {
+        let Some(Waiting::Permission { id, options, .. }) = lock(&self.waiting).remove(request_id)
+        else {
+            return Ok(());
+        };
+        let option = pick(&options, &["allow_always", "allow_once"]);
+        self.connection.respond(&id, Ok(outcome(option.as_deref())))
     }
 
     /// Stop the agent's turn; whatever it was waiting on is called off.
@@ -1054,6 +1199,51 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agent that wants a sign-in: it answers `initialize` with a
+    /// terminal login, and every `session/new` with "Authentication required".
+    #[cfg(unix)]
+    fn agent_wanting_a_sign_in() -> AgentCommandLine {
+        let script = r#"
+read -r line
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{},"authMethods":[{"id":"login","name":"Log in","description":"Use your account ","type":"terminal","args":["--cli","login"]},{"id":"browser","name":"Browser"}]}}'
+read -r line
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}'
+read -r line
+"#;
+        AgentCommandLine {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into(), "agent".into()],
+            env: Vec::new(),
+            path: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn says_when_the_agent_wants_a_sign_in_and_how() {
+        let command = agent_wanting_a_sign_in();
+        let connection = Connection::start("Fake", &command).unwrap();
+        let error = match Session::create(connection, Path::new("/")) {
+            Err(error) => error,
+            Ok(_) => panic!("it wants a sign-in first"),
+        };
+        let needed = error.downcast_ref::<SignInNeeded>().expect("a sign-in");
+        assert_eq!(needed.to_string(), "Fake needs you to sign in.");
+        let [terminal, browser] = needed.methods.as_slice() else {
+            panic!("two ways: {:?}", needed.methods);
+        };
+        assert_eq!(terminal.name, "Log in");
+        assert_eq!(terminal.description, "Use your account");
+        let login = terminal.terminal.as_ref().expect("in a terminal");
+        assert_eq!(login.program, command.program);
+        assert_eq!(
+            login.args[3..],
+            ["--cli", "login"],
+            "after its own arguments"
+        );
+        assert_eq!(browser.terminal, None, "the agent does it itself");
+    }
 
     #[test]
     fn parses_iso_times() {

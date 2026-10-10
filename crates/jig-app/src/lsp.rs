@@ -304,12 +304,65 @@ pub(crate) fn search_path() -> &'static OsString {
             ] {
                 dirs.push(home.join(dir));
             }
+            dirs.extend(node_dirs(&home));
         }
         dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
         let mut seen = std::collections::HashSet::new();
         dirs.retain(|dir| seen.insert(dir.clone()));
         std::env::join_paths(dirs).unwrap_or_default()
     })
+}
+
+/// Where Node version managers keep `node` and `npm`. They set the `PATH`
+/// up in `.zshrc` and the like, which a login shell doesn't read.
+fn node_dirs(home: &Path) -> Vec<PathBuf> {
+    let nvm = std::env::var_os("NVM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".nvm"));
+    let mut dirs: Vec<PathBuf> = nvm_bin(&nvm).into_iter().collect();
+    dirs.extend(
+        [
+            ".volta/bin",
+            ".local/share/fnm/aliases/default/bin",
+            "Library/Application Support/fnm/aliases/default/bin",
+            ".asdf/shims",
+            ".local/share/mise/shims",
+            "Library/pnpm",
+            ".local/share/pnpm",
+        ]
+        .map(|dir| home.join(dir)),
+    );
+    dirs
+}
+
+/// nvm's default Node, by its `alias/default` ("24", "v24.1.0"), or the
+/// newest one installed.
+fn nvm_bin(nvm: &Path) -> Option<PathBuf> {
+    let versions = nvm.join("versions/node");
+    let mut installed: Vec<(Vec<u64>, String)> = std::fs::read_dir(&versions)
+        .ok()?
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            let numbers = name
+                .trim_start_matches('v')
+                .split('.')
+                .map(|part| part.parse().ok())
+                .collect::<Option<Vec<u64>>>()?;
+            Some((numbers, name))
+        })
+        .collect();
+    installed.sort();
+    let alias = std::fs::read_to_string(nvm.join("alias/default")).unwrap_or_default();
+    let alias = alias.trim().trim_start_matches('v');
+    let chosen = installed
+        .iter()
+        .rev()
+        .find(|(_, name)| {
+            let name = name.trim_start_matches('v');
+            !alias.is_empty() && (name == alias || name.starts_with(&format!("{alias}.")))
+        })
+        .or(installed.last())?;
+    Some(versions.join(&chosen.1).join("bin"))
 }
 
 /// The LSP position of byte `offset` in `text`.
@@ -639,5 +692,22 @@ mod tests {
         };
         files.sort();
         assert_eq!(files, ["lib.rs", "util.rs"]);
+    }
+
+    #[test]
+    fn finds_nvm_s_default_node() {
+        let nvm = tempfile::tempdir().unwrap();
+        for version in ["v18.20.0", "v24.2.0", "v24.19.0", "v9.0.0"] {
+            std::fs::create_dir_all(nvm.path().join("versions/node").join(version).join("bin"))
+                .unwrap();
+        }
+        let bin = |version: &str| nvm.path().join("versions/node").join(version).join("bin");
+        assert_eq!(nvm_bin(nvm.path()), Some(bin("v24.19.0")), "the newest");
+        std::fs::create_dir_all(nvm.path().join("alias")).unwrap();
+        std::fs::write(nvm.path().join("alias/default"), "18\n").unwrap();
+        assert_eq!(nvm_bin(nvm.path()), Some(bin("v18.20.0")), "the default");
+        std::fs::write(nvm.path().join("alias/default"), "v24.2.0").unwrap();
+        assert_eq!(nvm_bin(nvm.path()), Some(bin("v24.2.0")));
+        assert_eq!(nvm_bin(&nvm.path().join("nowhere")), None);
     }
 }

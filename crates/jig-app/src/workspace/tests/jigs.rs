@@ -269,3 +269,27 @@ fn saving_the_commands_file_reloads_presets(cx: &mut TestAppContext) {
     });
     assert!(preset_names(cx, &workspace).contains(&"From file".to_string()));
 }
+
+#[gpui_kit::test]
+fn command_k_and_the_jig_button_toggle_the_palette(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let open = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).palette.is_some());
+    press(cx, window, "secondary-k");
+    assert!(open(cx));
+    press(cx, window, "secondary-k");
+    assert!(!open(cx), "⌘K again closes it");
+
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let button = vcx.debug_bounds("open-command").expect("the Jig button");
+    vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    assert!(vcx.update(|_, cx| workspace.read(cx).palette.is_some()));
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    assert!(
+        vcx.update(|_, cx| workspace.read(cx).palette.is_none()),
+        "clicking it again closes it, and doesn't open it anew"
+    );
+}

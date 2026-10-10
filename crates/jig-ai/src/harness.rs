@@ -109,6 +109,14 @@ impl Session {
         }
     }
 
+    /// Let a request through, and the agent not ask about ones like it again.
+    pub fn allow_always(&self, request_id: &str) -> Result<()> {
+        match self {
+            Session::OpenCode(session) => session.allow_always(request_id),
+            Session::Acp(session) => session.allow_always(request_id),
+        }
+    }
+
     /// Answer the agent's questions; only OpenCode asks them this way.
     pub fn answer(&self, question_id: &str, answers: Option<&[String]>) -> Result<()> {
         match self {

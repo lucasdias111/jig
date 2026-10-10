@@ -93,7 +93,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let reviewing = self.run.as_ref().is_some_and(|run| run.preview.is_some());
+        let reviewing = self.previewing();
         for ix in 0..self.tabs.len() {
             let tab = &self.tabs[ix];
             if tab.dirty || (ix == self.active && reviewing) {

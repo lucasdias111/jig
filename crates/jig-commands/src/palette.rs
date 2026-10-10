@@ -108,6 +108,9 @@ pub struct CommandPalette {
     inline_note: Option<String>,
     conversations: Vec<PastConversation>,
     commands: Vec<AgentCommandInfo>,
+    /// The agent conversation is docked beside the code: Agent mode lives
+    /// there meanwhile, so the switch stays on Jig.
+    agent_docked: bool,
     _subscription: Subscription,
 }
 
@@ -160,6 +163,7 @@ impl CommandPalette {
             inline_note: None,
             conversations: Vec::new(),
             commands: Vec::new(),
+            agent_docked: false,
             _subscription: subscription,
         };
         this.refilter(cx);
@@ -175,8 +179,21 @@ impl CommandPalette {
         }
     }
 
-    /// Switch to Agent mode, e.g. to pick up an earlier conversation.
+    /// Kept to Jig mode, the agent being docked.
+    pub fn is_jig_only(&self) -> bool {
+        self.agent_docked && !self.agent
+    }
+
+    /// Keep to Jig mode while the agent conversation is docked.
+    pub fn with_agent_docked(mut self, docked: bool) -> Self {
+        self.agent_docked = docked;
+        self
+    }
+
+    /// Switch to Agent mode, e.g. to pick up an earlier conversation. This
+    /// works while the conversation is docked too: it's how to pick another.
     pub fn switch_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_docked = false;
         self.set_agent(true, window, cx);
     }
 
@@ -544,10 +561,12 @@ impl CommandPalette {
         }
     }
 
-    /// Tab switches between Jig and Agent mode.
+    /// Tab switches between Jig and Agent mode, unless the agent is docked.
     fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.set_agent(!self.agent, window, cx);
+        if !self.agent_docked {
+            self.set_agent(!self.agent, window, cx);
+        }
     }
 
     /// Backspace in an empty note goes back to the list.
@@ -582,6 +601,7 @@ impl CommandPalette {
             let theme = cx.theme();
             let accent = crate::surface::lane_accent(lane, cx);
             let active = lane == agent;
+            let locked = lane && self.agent_docked;
             h_flex()
                 .id(if lane {
                     "jig-lane-agent"
@@ -607,20 +627,27 @@ impl CommandPalette {
                 .when(active, |this| {
                     this.bg(accent.opacity(0.16)).text_color(accent)
                 })
-                .when(!active, |this| {
+                .when(!active && !locked, |this| {
                     this.text_color(theme.muted_foreground)
                         .hover(|this| this.bg(theme.foreground.opacity(0.06)))
+                })
+                .when(locked, |this| {
+                    this.text_color(theme.muted_foreground).opacity(0.45)
                 })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.set_agent(lane, window, cx);
+                        if !locked {
+                            this.set_agent(lane, window, cx);
+                        }
                     }),
                 )
         };
         let right = if self.agent_by_command() && !self.agent {
             crate::surface::hint("set by this jig", cx)
+        } else if self.agent_docked {
+            crate::surface::hint("the agent is in its panel", cx)
         } else {
             crate::surface::hint("⇥ switch", cx)
         };
@@ -1597,6 +1624,23 @@ mod tests {
         let invocation = events(cx, &host)[0].clone().unwrap();
         assert!(invocation.agent);
         assert_eq!(invocation.instruction, "rename things");
+    }
+
+    #[gpui_kit::test]
+    fn a_docked_agent_keeps_the_switch_on_jig(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        cx.update(|cx| {
+            let palette = host.read(cx).palette.clone();
+            palette.update(cx, |palette, _| palette.agent_docked = true);
+        });
+        step(cx, window, |window, cx| window.press("tab", cx));
+        cx.update(|cx| assert!(!host.read(cx).palette.read(cx).agent_lane()));
+        // Picking an earlier conversation still works.
+        let palette = cx.update(|cx| host.read(cx).palette.clone());
+        step(cx, window, move |window, cx| {
+            palette.update(cx, |palette, cx| palette.switch_to_agent(window, cx))
+        });
+        cx.update(|cx| assert!(host.read(cx).palette.read(cx).agent_lane()));
     }
 
     #[gpui_kit::test]

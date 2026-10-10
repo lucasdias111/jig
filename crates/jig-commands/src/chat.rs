@@ -52,7 +52,12 @@ pub enum ChatStatus {
     Reviewing { path: String, removed: String },
     /// The agent wants to do something else that needs the user's go-ahead,
     /// e.g. run a command.
-    Asking { title: String, detail: String },
+    Asking {
+        title: String,
+        detail: String,
+        /// The label of the button that allows it always.
+        always: String,
+    },
     /// The agent asked a question; the user picks an option or answers in
     /// the reply box.
     Question {
@@ -60,6 +65,12 @@ pub enum ChatStatus {
         options: Vec<String>,
         /// Which of how many questions this is, when it asked several.
         position: (usize, usize),
+    },
+    /// The agent wants the user to sign in; each option is a way to.
+    SignIn {
+        options: Vec<String>,
+        /// A terminal was opened for the login.
+        opened: bool,
     },
     /// An earlier conversation is being fetched.
     Loading,
@@ -131,6 +142,8 @@ pub struct Conversation {
     on_pin: Option<ClickHandler>,
     on_history: Option<ClickHandler>,
     on_option: Option<OptionHandler>,
+    on_decide: Option<OptionHandler>,
+    on_show_edit: Option<ClickHandler>,
 }
 
 impl Conversation {
@@ -154,7 +167,25 @@ impl Conversation {
             on_pin: None,
             on_history: None,
             on_option: None,
+            on_decide: None,
+            on_show_edit: None,
         }
+    }
+
+    /// Called when the edit under review is clicked, to show its file.
+    pub fn on_show_edit(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_show_edit = Some(Rc::new(handler));
+        self
+    }
+
+    /// Called with the button pressed on a request: 0 allows it, 1 allows
+    /// it always, 2 denies it.
+    pub fn on_decide(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_decide = Some(Rc::new(handler));
+        self
     }
 
     /// Called by the header's pin button.
@@ -325,9 +356,15 @@ impl RenderOnce for Conversation {
                 .gap_2()
                 .child(
                     h_flex()
+                        .id("jig-agent-edit-file")
+                        .debug_selector(|| "agent-edit-file".into())
                         .gap_2()
+                        .cursor_pointer()
                         .child("Wants to edit")
-                        .child(file_name(path, cx)),
+                        .child(file_name(path, cx))
+                        .when_some(self.on_show_edit.clone(), |this, on_show| {
+                            this.on_click(move |event, window, cx| on_show(event, window, cx))
+                        }),
                 )
                 .when(!removed.trim().is_empty(), |this| {
                     this.child(crate::bubble::removed_lines(&removed, cx))
@@ -336,29 +373,67 @@ impl RenderOnce for Conversation {
                     "tab or enter to accept · esc to reject",
                     cx,
                 )),
-            ChatStatus::Asking { title, detail } => v_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(format!("{title}?")),
-                )
-                .when(!detail.trim().is_empty(), |this| {
-                    this.child(
+            ChatStatus::Asking {
+                title,
+                detail,
+                always,
+            } => {
+                let on_decide = self.on_decide.clone();
+                let button = |index: usize, label: String, key: &'static str, primary: bool| {
+                    let on_decide = on_decide.clone();
+                    let theme = cx.theme();
+                    h_flex()
+                        .id(("jig-agent-decide", index))
+                        .debug_selector(move || format!("agent-decide-{index}"))
+                        .gap_1p5()
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(accent.opacity(0.35))
+                        .when(primary, |this| this.bg(accent.opacity(0.16)))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(accent.opacity(0.22)))
+                        .text_xs()
+                        .child(div().truncate().child(label))
+                        .child(div().text_color(theme.muted_foreground).child(key))
+                        .when_some(on_decide, |this, on_decide| {
+                            this.on_click(move |_, window, cx| on_decide(&index, window, cx))
+                        })
+                };
+                let shortcut = if cfg!(target_os = "macos") {
+                    "⌘↩"
+                } else {
+                    "ctrl ↩"
+                };
+                v_flex()
+                    .gap_2()
+                    .child(
                         div()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(theme.foreground.opacity(0.05))
-                            .font_family(theme.mono_font_family.clone())
-                            .text_xs()
-                            .child(detail),
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(format!("{title}?")),
                     )
-                })
-                .child(crate::surface::hint(
-                    "tab or enter to allow · esc to deny",
-                    cx,
-                )),
+                    .when(!detail.trim().is_empty(), |this| {
+                        this.child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(6.))
+                                .bg(theme.foreground.opacity(0.05))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_xs()
+                                .child(detail),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_1p5()
+                            .child(button(0, "Allow".into(), "↩", true))
+                            .child(button(1, always, shortcut, false))
+                            .child(button(2, "Deny".into(), "esc", false)),
+                    )
+            }
             ChatStatus::Question {
                 question,
                 options,
@@ -397,6 +472,45 @@ impl RenderOnce for Conversation {
                     .child(reply_box(&self.input, accent, cx))
                     .child(crate::surface::hint(
                         "a number or your own answer · enter to answer · esc to decline",
+                        cx,
+                    ))
+            }
+            ChatStatus::SignIn { options, opened } => {
+                let on_option = self.on_option.clone();
+                v_flex()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .children(options.into_iter().enumerate().map(|(index, option)| {
+                                let on_option = on_option.clone();
+                                div()
+                                    .id(("jig-agent-sign-in", index))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(accent.opacity(0.35))
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(accent.opacity(0.12)))
+                                    .text_xs()
+                                    .child(option)
+                                    .when_some(on_option, |this, on_option| {
+                                        this.on_click(move |_, window, cx| {
+                                            on_option(&index, window, cx)
+                                        })
+                                    })
+                            })),
+                    )
+                    .when(opened, |this| {
+                        this.child(reply_box(&self.input, accent, cx))
+                    })
+                    .child(crate::surface::hint(
+                        if opened {
+                            "finish in the terminal, then enter to try again"
+                        } else {
+                            "click one to sign in · esc to close"
+                        },
                         cx,
                     ))
             }

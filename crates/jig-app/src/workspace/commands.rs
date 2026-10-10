@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, OutdentInline, Undo};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Reply};
 use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
@@ -70,6 +71,9 @@ impl Workspace {
         }
         let theme = cx.theme();
         let accent = jig_commands::surface::lane_accent(false, cx);
+        // Pressed while the palette is open: it toggles.
+        let open = self.palette.is_some();
+        let measured = self.palette_motion.button.clone();
         let shortcut = if cfg!(target_os = "macos") {
             "⌘K"
         } else {
@@ -79,6 +83,7 @@ impl Workspace {
             h_flex()
                 .id("open-command")
                 .debug_selector(|| "open-command".into())
+                .relative()
                 .flex_none()
                 .ml_2()
                 .h(px(26.))
@@ -87,7 +92,8 @@ impl Workspace {
                 .rounded(px(6.))
                 .text_size(px(12.5))
                 .text_color(theme.foreground.opacity(0.85))
-                .hover(|s| s.bg(theme.foreground.opacity(0.08)))
+                .when(open, |s| s.bg(accent.opacity(0.16)).text_color(accent))
+                .when(!open, |s| s.hover(|s| s.bg(theme.foreground.opacity(0.08))))
                 .child(
                     Icon::default()
                         .data(COMMAND_ICON)
@@ -96,6 +102,14 @@ impl Workspace {
                         .text_color(accent),
                 )
                 .child(div().flex_none().whitespace_nowrap().child("Jig"))
+                // Where the palette grows from.
+                .child(
+                    canvas(move |drawn, _, _| measured.set(drawn), |_, _, _, _| {})
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                )
                 .child(
                     div()
                         .flex_none()
@@ -118,24 +132,41 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.palette.is_some() || self.home {
+        if self.home {
             return;
+        }
+        // ⌘K and the Jig button toggle it.
+        if self.palette.is_some() {
+            return self.close_palette(window, cx);
+        }
+        // Two changes under review in one buffer would tangle their undo.
+        if self.agent_edit_here() {
+            return self.show_note(
+                "Accept or reject the agent's edit first.".into(),
+                window,
+                cx,
+            );
         }
         self.quick_open = None;
         self.find_in_files = None;
         // Its matches would muddle the change's highlights.
         self.close_find_panel(cx);
         // A new command replaces whatever the last one left on screen; a
-        // pending change counts as accepted.
-        self.accept_preview(cx);
-        self.run = None;
-        self.editor().clear_highlights(cx);
+        // pending change counts as accepted. The agent's conversation stays.
+        self.accept_quick_preview(cx);
+        if self.run.take().is_some() {
+            self.editor().clear_highlights(cx);
+        }
         let has_selection = !self.editor().selection(cx).is_empty();
         let anchor = self.floating_anchor(cx);
         let presets = self.presets.clone();
         let context = self.context_names();
+        // A docked conversation is where Agent mode lives meanwhile.
+        let docked = self.floating_agent_chat_pinned();
         let view = cx.new(|cx| {
-            CommandPalette::new(presets, has_selection, window, cx).with_context(context)
+            CommandPalette::new(presets, has_selection, window, cx)
+                .with_context(context)
+                .with_agent_docked(docked)
         });
         let events = cx.subscribe_in(
             &view,
@@ -160,16 +191,22 @@ impl Workspace {
                 }
             },
         );
+        self.palette_motion.openings += 1;
         self.palette = Some(OpenPalette {
             view,
             anchor,
+            grow_from: self.palette_motion.grow_from(),
+            opened: std::time::Instant::now(),
+            serial: self.palette_motion.openings,
             _events: events,
         });
+        self.after_palette_grows(window, cx);
         cx.notify();
     }
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.take().is_some() {
+            self.shrink_palette(window, cx);
             self.editor().focus(window, cx);
             cx.notify();
         }
@@ -219,9 +256,11 @@ impl Workspace {
             },
         };
         if invocation.agent {
+            // A new conversation, in place of the one on screen.
+            self.close_chat(window, cx);
             self.editor()
                 .highlight(vec![(target.clone(), working_color(cx))], cx);
-            self.run = Some(CommandRun {
+            self.chat = Some(CommandRun {
                 id,
                 bubble: Bubble::Message(String::new()),
                 anchor,
@@ -380,17 +419,38 @@ impl Workspace {
             || self.find_in_files.is_some()
     }
 
+    /// A change is under review in the tab on screen: a jig's, or the
+    /// agent's. An agent's edit in another tab waits there.
     pub(super) fn previewing(&self) -> bool {
+        self.quick_previewing() || self.agent_edit_here()
+    }
+
+    /// A jig's change is under review (always in the tab on screen).
+    fn quick_previewing(&self) -> bool {
         self.run.as_ref().is_some_and(|run| run.preview.is_some())
     }
 
-    /// Keep the change. It is already in the buffer as one undo step.
+    /// The agent's edit is under review in the tab on screen.
+    pub(super) fn agent_edit_here(&self) -> bool {
+        self.chat
+            .as_ref()
+            .is_some_and(|chat| chat.preview.is_some())
+            && self.agent_edit_elsewhere().is_none()
+    }
+
+    /// Keep the change on screen. It is already in the buffer as one undo
+    /// step.
     pub(super) fn accept_preview(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.previewing() {
-            return false;
-        }
-        if self.settle_agent_edit(true, None, cx) {
+        if self.accept_quick_preview(cx) {
             return true;
+        }
+        self.agent_edit_here() && self.settle_agent_edit(true, None, cx)
+    }
+
+    /// Keep a jig's change under review, if there is one.
+    pub(super) fn accept_quick_preview(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.quick_previewing() {
+            return false;
         }
         self.run = None;
         self.editor().clear_highlights(cx);
@@ -399,14 +459,11 @@ impl Workspace {
         true
     }
 
-    /// Drop the change by undoing it, which leaves no trace in the history
-    /// beyond a redo step.
+    /// Drop the change on screen by undoing it, which leaves no trace in
+    /// the history beyond a redo step.
     fn reject_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.previewing() {
-            return false;
-        }
-        if self.settle_agent_edit(false, Some(window), cx) {
-            return true;
+        if !self.quick_previewing() {
+            return self.agent_edit_here() && self.settle_agent_edit(false, Some(window), cx);
         }
         self.run = None;
         self.editor().clear_highlights(cx);
@@ -416,12 +473,20 @@ impl Workspace {
         true
     }
 
+    /// Enter accepts or allows; ⌘↩ allows the agent's request always.
     pub(super) fn on_accept_enter(
         &mut self,
-        _: &Enter,
+        action: &Enter,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if action.secondary
+            && !self.keys_elsewhere(window, cx)
+            && self.allow_agent_request_always(window, cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         self.accept_or_propagate(window, cx);
     }
 
@@ -551,9 +616,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc rejects a pending change or what the agent asks to do, stops the
-    /// agent's turn, cancels a running command or dismisses its bubble or
-    /// the agent conversation.
+    /// Esc rejects a pending change or what the agent asks to do, cancels a
+    /// running jig or dismisses its bubble, goes back to an agent edit
+    /// waiting in another tab, stops the agent's turn, or closes the agent
+    /// conversation.
     /// With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
@@ -569,7 +635,6 @@ impl Workspace {
             cx.propagate();
         } else if self.reject_preview(window, cx)
             || self.settle_agent_request(false, window, cx)
-            || self.stop_agent_turn(window, cx)
             || self.close_hunk_popup(cx)
             || self.close_find_panel(cx)
             || self.close_code_hover(cx)
@@ -577,11 +642,19 @@ impl Workspace {
         {
             cx.stop_propagation();
         } else if self.run.take().is_some() {
+            // A jig's bubble, or the jig still running, goes first.
             self.editor().clear_highlights(cx);
+            cx.stop_propagation();
+            cx.notify();
+        } else if self.show_agent_edit(window, cx) || self.stop_agent_turn(window, cx) {
+            // An edit waiting in another tab: Esc goes back to it. Else Esc
+            // stops the agent's turn.
+            cx.stop_propagation();
+        } else if self.chat.is_some() {
+            self.close_chat(window, cx);
             // The agent's reply box may have had the keyboard.
             self.editor().focus(window, cx);
             cx.stop_propagation();
-            cx.notify();
         } else {
             // The first Escape closes the completion list, the next leaves
             // the snippet.
@@ -598,10 +671,7 @@ impl Workspace {
         if self
             .run
             .as_ref()
-            // The agent's conversation stays until it's closed.
-            .is_some_and(|run| {
-                !run.bubble.is_running() && run.preview.is_none() && run.agent.is_none()
-            })
+            .is_some_and(|run| !run.bubble.is_running() && run.preview.is_none())
         {
             self.run = None;
             cx.notify();

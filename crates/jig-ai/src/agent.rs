@@ -537,6 +537,10 @@ pub struct PermissionRequest {
     pub title: String,
     /// The command, address or task.
     pub detail: String,
+    /// What allowing it always would cover, as the agent remembers it,
+    /// e.g. "Always allow `cargo test *`". `None` when the agent can't
+    /// remember; Jig then stops asking for the rest of the conversation.
+    pub always: Option<String>,
 }
 
 /// Questions the agent asks with its question tool, answered all at once.
@@ -861,6 +865,18 @@ impl AgentSession {
             .map(|_| ())
     }
 
+    /// Let a request through, and others like it from now on.
+    pub fn allow_always(&self, request_id: &str) -> Result<()> {
+        self.server
+            .request(
+                "POST",
+                &format!("/permission/{request_id}/reply"),
+                &self.directory,
+                Some(&json!({"reply": "always"})),
+            )
+            .map(|_| ())
+    }
+
     /// Answer the agent's questions, one answer each, in order; `None`
     /// declines them.
     pub fn answer(&self, question_id: &str, answers: Option<&[String]>) -> Result<()> {
@@ -976,10 +992,24 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
         "doom_loop" => ("Repeat the same step again", pattern.into()),
         _ => return None,
     };
+    // OpenCode remembers these patterns once allowed always.
+    let patterns: Vec<String> = properties["always"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pattern| pattern.as_str())
+        .filter(|pattern| *pattern != "*")
+        .map(|pattern| format!("`{pattern}`"))
+        .collect();
     Some(PermissionRequest {
         id: properties["id"].as_str()?.to_string(),
         title: title.into(),
         detail,
+        always: Some(if patterns.is_empty() {
+            "Always allow".into()
+        } else {
+            format!("Always allow {}", patterns.join(", "))
+        }),
     })
 }
 
@@ -1309,7 +1339,14 @@ mod tests {
                 id: "per_1".into(),
                 title: "Run a command".into(),
                 detail: "cargo test".into(),
+                always: Some("Always allow".into()),
             })
+        );
+        let with_pattern = json!({"id": "per_4", "permission": "bash", "patterns": ["cargo test"], "always": ["cargo test *"], "metadata": {}});
+        assert_eq!(
+            permission(&with_pattern).unwrap().always.as_deref(),
+            Some("Always allow `cargo test *`"),
+            "says what OpenCode will remember"
         );
         let fetch = json!({"id": "per_2", "permission": "webfetch", "patterns": [], "metadata": {"url": "https://x.dev"}});
         assert_eq!(permission(&fetch).unwrap().detail, "https://x.dev");

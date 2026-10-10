@@ -83,13 +83,14 @@ impl Workspace {
         if self.modal_open() || self.previewing() {
             return true;
         }
-        let Some(run) = self.run.as_ref() else {
-            return false;
-        };
-        let floating = self
-            .agent_chat_bounds()
-            .unwrap_or_else(|| Bounds::new(run.anchor, BUBBLE_AREA));
-        floating.intersects(&area)
+        let bubble = self
+            .run
+            .as_ref()
+            .map(|run| Bounds::new(run.anchor, BUBBLE_AREA));
+        bubble
+            .into_iter()
+            .chain(self.agent_chat_bounds())
+            .any(|floating| floating.intersects(&area))
     }
 
     /// The tab of the editor `editor`, and its server and URI there.

@@ -88,6 +88,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // ⌘↩ while the agent asks for something allows it always.
+        if self.allow_agent_request_always(window, cx) {
+            return;
+        }
         self.line_edit(
             |text, selection| Some(lines::open_line(text, selection, true)),
             window,

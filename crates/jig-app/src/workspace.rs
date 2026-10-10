@@ -21,6 +21,7 @@ mod home;
 mod hover;
 mod line_edits;
 mod lsp;
+mod palette_motion;
 mod preferences;
 mod rename;
 mod run;
@@ -149,8 +150,15 @@ pub struct Workspace {
     home_focus: FocusHandle,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
+    /// The palette growing from the Jig button and shrinking back.
+    palette_motion: palette_motion::PaletteMotion,
     /// What the palette's Agent mode lists, from the last time it asked.
     agent_catalog: Option<agent::AgentCatalog>,
+    /// The docked conversation's width, when the last one was left docked:
+    /// the next opens the same way.
+    agent_dock: Option<Pixels>,
+    /// The docked conversation's edge is being dragged.
+    resizing_agent_dock: bool,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
     /// Rename Symbol's field, while it's open.
@@ -176,6 +184,9 @@ pub struct Workspace {
     /// The settings as last applied, to tell what a change touched.
     settings: Settings,
     run: Option<CommandRun>,
+    /// The agent conversation, apart from ⌘K's runs: a jig can run while
+    /// it's open. Its `agent` is always set.
+    chat: Option<CommandRun>,
     /// The button beside the selection that opens the command input.
     selection_button: Entity<selection_button::SelectionButton>,
     next_run_id: u64,
@@ -199,6 +210,11 @@ struct OpenPalette {
     view: Entity<CommandPalette>,
     /// Window position of the palette's top-left corner, fixed when it opens.
     anchor: Point<Pixels>,
+    /// The Jig button it grows out of, and when it opened.
+    grow_from: Option<Bounds<Pixels>>,
+    opened: std::time::Instant,
+    /// Which opening it is, so each one animates afresh.
+    serial: usize,
     _events: Subscription,
 }
 
@@ -242,7 +258,10 @@ impl Workspace {
             home_focus: cx.focus_handle(),
             presets: Rc::new(presets),
             palette: None,
+            palette_motion: Default::default(),
             agent_catalog: None,
+            agent_dock: None,
+            resizing_agent_dock: false,
             quick_open: None,
             find_in_files: None,
             rename: None,
@@ -258,6 +277,7 @@ impl Workspace {
             config_path: jig_ai::Config::user_path(),
             settings,
             run: None,
+            chat: None,
             next_run_id: 0,
             runs: run::RunState::new(cx),
             breakpoints: breakpoints::Breakpoints::load(),
@@ -621,6 +641,7 @@ impl Render for Workspace {
         let title = self.render_title(cx);
         let tab_bar = self.render_tab_bar(cx);
         let root = v_flex();
+        let root = self.agent_dock_drag_handlers(root, cx);
         self.run_panel_drag_handlers(self.sidebar_drag_handlers(root, cx), cx)
             .key_context(CONTEXT)
             .relative()
@@ -761,14 +782,8 @@ impl Render for Workspace {
                         .child(form.view.clone()),
                 ))
             })
-            .when_some(self.palette.as_ref(), |this, palette| {
-                this.child(deferred(
-                    anchored()
-                        .position(palette.anchor)
-                        .snap_to_window_with_margin(px(8.))
-                        .child(palette.view.clone()),
-                ))
-            })
+            .children(self.render_palette(cx).into_iter().flatten())
+            .children(self.render_palette_closing(cx))
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
             .children(self.render_rename())
@@ -781,22 +796,30 @@ impl Render for Workspace {
                     .child(self.tab().hover.clone())
             })
             .child(self.selection_button.clone())
+            // The agent conversation, unless it's docked, and a jig's bubble:
+            // apart, so a jig can run while the conversation is open.
             .when_some(
-                self.run
+                self.chat
                     .as_ref()
-                    .filter(|_| !self.floating_agent_chat_pinned()),
-                |this, run| {
-                    let floating = self
-                        .render_agent_chat(cx)
-                        .unwrap_or_else(|| run.bubble.clone().into_any_element());
+                    .filter(|_| !self.floating_agent_chat_pinned())
+                    .zip(self.render_agent_chat(cx)),
+                |this, (chat, conversation)| {
                     this.child(deferred(
                         anchored()
-                            .position(run.anchor)
+                            .position(chat.anchor)
                             .snap_to_window_with_margin(px(8.))
-                            .child(floating),
+                            .child(conversation),
                     ))
                 },
             )
+            .when_some(self.run.as_ref(), |this, run| {
+                this.child(deferred(
+                    anchored()
+                        .position(run.anchor)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(run.bubble.clone()),
+                ))
+            })
     }
 }
 
