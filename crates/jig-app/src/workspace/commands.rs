@@ -71,9 +71,9 @@ impl Workspace {
         }
         let theme = cx.theme();
         let accent = jig_commands::surface::lane_accent(false, cx);
-        // Pressed while the palette is open: it toggles.
-        let open = self.palette.is_some();
-        let measured = self.palette_motion.button.clone();
+        // Pressed while the palette is open: it toggles. It glows as the
+        // palette opens, so the two read as one.
+        let opened = self.palette.as_ref().map(|palette| palette.serial);
         let shortcut = if cfg!(target_os = "macos") {
             "⌘K"
         } else {
@@ -92,8 +92,26 @@ impl Workspace {
                 .rounded(px(6.))
                 .text_size(px(12.5))
                 .text_color(theme.foreground.opacity(0.85))
-                .when(open, |s| s.bg(accent.opacity(0.16)).text_color(accent))
-                .when(!open, |s| s.hover(|s| s.bg(theme.foreground.opacity(0.08))))
+                // Behind the label: bright as the palette opens, settling to
+                // the pressed tint.
+                .children(opened.map(|serial| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .rounded(px(6.))
+                        .with_animation(
+                            ("jig-button-glow", serial),
+                            Animation::new(Duration::from_millis(420))
+                                .with_easing(ease_out_quint()),
+                            move |glow, delta| glow.bg(accent.opacity(0.38 - 0.22 * delta)),
+                        )
+                }))
+                .when(opened.is_some(), |s| s.text_color(accent))
+                .when(opened.is_none(), |s| {
+                    s.hover(|s| s.bg(theme.foreground.opacity(0.08)))
+                })
                 .child(
                     Icon::default()
                         .data(COMMAND_ICON)
@@ -102,14 +120,6 @@ impl Workspace {
                         .text_color(accent),
                 )
                 .child(div().flex_none().whitespace_nowrap().child("Jig"))
-                // Where the palette grows from.
-                .child(
-                    canvas(move |drawn, _, _| measured.set(drawn), |_, _, _, _| {})
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                )
                 .child(
                     div()
                         .flex_none()
@@ -191,22 +201,18 @@ impl Workspace {
                 }
             },
         );
-        self.palette_motion.openings += 1;
+        self.palette_openings += 1;
         self.palette = Some(OpenPalette {
             view,
             anchor,
-            grow_from: self.palette_motion.grow_from(),
-            opened: std::time::Instant::now(),
-            serial: self.palette_motion.openings,
+            serial: self.palette_openings,
             _events: events,
         });
-        self.after_palette_grows(window, cx);
         cx.notify();
     }
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.take().is_some() {
-            self.shrink_palette(window, cx);
             self.editor().focus(window, cx);
             cx.notify();
         }

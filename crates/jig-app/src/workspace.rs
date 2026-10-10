@@ -21,7 +21,6 @@ mod home;
 mod hover;
 mod line_edits;
 mod lsp;
-mod palette_motion;
 mod preferences;
 mod rename;
 mod run;
@@ -150,8 +149,8 @@ pub struct Workspace {
     home_focus: FocusHandle,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
-    /// The palette growing from the Jig button and shrinking back.
-    palette_motion: palette_motion::PaletteMotion,
+    /// How many times the palette has opened, for the Jig button's glow.
+    palette_openings: usize,
     /// What the palette's Agent mode lists, from the last time it asked.
     agent_catalog: Option<agent::AgentCatalog>,
     /// The docked conversation's width, when the last one was left docked:
@@ -210,10 +209,7 @@ struct OpenPalette {
     view: Entity<CommandPalette>,
     /// Window position of the palette's top-left corner, fixed when it opens.
     anchor: Point<Pixels>,
-    /// The Jig button it grows out of, and when it opened.
-    grow_from: Option<Bounds<Pixels>>,
-    opened: std::time::Instant,
-    /// Which opening it is, so each one animates afresh.
+    /// Which opening it is, so the Jig button's glow plays afresh.
     serial: usize,
     _events: Subscription,
 }
@@ -258,7 +254,7 @@ impl Workspace {
             home_focus: cx.focus_handle(),
             presets: Rc::new(presets),
             palette: None,
-            palette_motion: Default::default(),
+            palette_openings: 0,
             agent_catalog: None,
             agent_dock: None,
             resizing_agent_dock: false,
@@ -782,8 +778,14 @@ impl Render for Workspace {
                         .child(form.view.clone()),
                 ))
             })
-            .children(self.render_palette(cx).into_iter().flatten())
-            .children(self.render_palette_closing(cx))
+            .when_some(self.palette.as_ref(), |this, palette| {
+                this.child(deferred(
+                    anchored()
+                        .position(palette.anchor)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(palette.view.clone()),
+                ))
+            })
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
             .children(self.render_rename())
