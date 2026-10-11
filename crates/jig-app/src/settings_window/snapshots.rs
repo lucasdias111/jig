@@ -17,6 +17,11 @@ use crate::settings::{self, ThemeChoice};
 
 pub fn run(dir: &Path) {
     std::fs::create_dir_all(dir).expect("making the snapshots folder");
+    // Taller pictures show more of a long page.
+    let height: f32 = std::env::var("JIG_SNAPSHOT_HEIGHT")
+        .ok()
+        .and_then(|height| height.parse().ok())
+        .unwrap_or(600.);
     let config = std::env::temp_dir().join(format!("jig-snapshots-{}", std::process::id()));
     std::fs::create_dir_all(&config).expect("making a scratch config folder");
     // Each page, then a search.
@@ -55,7 +60,7 @@ pub fn run(dir: &Path) {
                         WindowOptions {
                             window_bounds: Some(WindowBounds::Windowed(Bounds {
                                 origin: Default::default(),
-                                size: size(px(820.), px(600.)),
+                                size: size(px(820.), px(height)),
                             })),
                             focus: false,
                             show: false,

@@ -94,49 +94,26 @@ impl SettingsWindow {
                 .opens(self.opener(Nav::detail(Page::Languages, Detail::Language(ix)), cx))
         });
 
-        // Debuggers the user added for languages Jig doesn't highlight.
-        let others: Vec<Row> = registry
-            .debuggers
-            .iter()
-            .filter(|debugger| {
-                !debugger
-                    .languages
-                    .iter()
-                    .any(|name| BUNDLED.iter().any(|language| language.name == name))
-            })
-            .map(|debugger| self.debugger_row(debugger.clone(), cx))
-            .collect();
-
-        let mut sections = vec![Section::new().rows(rows)];
-        if !others.is_empty() {
-            sections.push(Section::titled("Other Debuggers").rows(others));
-        }
-        let formatters_error = formatters::registry().error.clone();
         let debuggers_error = registry.error.clone();
-        sections.push(
-            Section::titled("Tools")
-                .row(
-                    Row::new("formatters-file", "Formatters")
-                        .description_opt(formatters_error.clone().or(Some(
-                            "Add a formatter, or change a built-in one, in formatters.toml.".into(),
-                        )))
-                        .warning(formatters_error.is_some())
-                        .keywords(["format", "formatter", "toml", "file"])
-                        .control(|_, _| {
-                            ui::button("edit-formatters", "Edit…").on_click(|_, _, cx| {
-                                send_to_workspace(Box::new(EditFormatters), cx)
-                            })
-                        }),
+        let formatters_error = formatters::registry().error.clone();
+        vec![
+            Section::new().rows(rows),
+            Section::titled("Debuggers")
+                .footer(
+                    "Debuggers turned on take breakpoints and debug with ⌃D. Each also shows \
+                     on its languages' pages.",
+                )
+                .rows(
+                    registry
+                        .debuggers
+                        .iter()
+                        .map(|debugger| self.debugger_row(debugger.clone(), cx)),
                 )
                 .row(
-                    Row::new("debuggers-file", "Debuggers")
-                        .description_opt(
-                            debuggers_error.clone().or(Some(
-                                "Add any Debug Adapter Protocol debugger, or change a built-in \
-                             one, in debuggers.toml."
-                                    .into(),
-                            )),
-                        )
+                    Row::new("debuggers-file", "Add or change debuggers")
+                        .description_opt(debuggers_error.clone().or(Some(
+                            "Any Debug Adapter Protocol debugger, in debuggers.toml.".into(),
+                        )))
                         .warning(debuggers_error.is_some())
                         .keywords(["debug", "debugger", "dap", "toml", "file"])
                         .control(|_, _| {
@@ -144,8 +121,22 @@ impl SettingsWindow {
                                 .on_click(|_, _, cx| send_to_workspace(Box::new(EditDebuggers), cx))
                         }),
                 ),
-        );
-        sections
+            Section::titled("Formatters").row(
+                Row::new("formatters-file", "Add or change formatters")
+                    .description_opt(
+                        formatters_error.clone().or(Some(
+                            "For files whose language server doesn't format, in formatters.toml."
+                                .into(),
+                        )),
+                    )
+                    .warning(formatters_error.is_some())
+                    .keywords(["format", "formatter", "toml", "file"])
+                    .control(|_, _| {
+                        ui::button("edit-formatters", "Edit…")
+                            .on_click(|_, _, cx| send_to_workspace(Box::new(EditFormatters), cx))
+                    }),
+            ),
+        ]
     }
 
     pub(super) fn language_sections(&self, ix: usize, cx: &Context<Self>) -> Vec<Section> {

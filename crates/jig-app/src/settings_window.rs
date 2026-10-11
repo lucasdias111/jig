@@ -460,6 +460,8 @@ impl SettingsWindow {
     /// Every row matching the search, under the page and section it's in.
     fn search_results(&self, query: &str, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let mut found = Vec::new();
+        // A row shown on two pages, like a debugger, is listed once.
+        let mut seen = std::collections::HashSet::new();
         for nav in Nav::everywhere() {
             let place = match nav.detail {
                 Some(_) => format!("{} › {}", nav.page.title(), nav.title()),
@@ -467,6 +469,10 @@ impl SettingsWindow {
             };
             for section in self.sections(nav, cx) {
                 if let Some(mut section) = section.matching(query) {
+                    section.rows.retain(|row| seen.insert(row.id.clone()));
+                    if section.rows.is_empty() {
+                        continue;
+                    }
                     section.title = Some(match &section.title {
                         Some(title) => format!("{place} › {title}").into(),
                         None => place.clone().into(),
