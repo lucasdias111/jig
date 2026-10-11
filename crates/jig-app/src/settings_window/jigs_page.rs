@@ -1,15 +1,17 @@
 //! Jigs: add one, open the jigs file, and turn each jig, the user's and the
 //! built-in ones, on or off in the ⌘K input.
+//!
+//! Add Jig… opens the form over Settings itself, so Settings stays in front.
 
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::h_flex;
 use gpui_kit::*;
-use jig_commands::{Preset, presets};
+use jig_commands::{NewCommandEvent, NewCommandForm, Preset, Scope, presets};
 
 use super::ui::{self, Row, Section};
-use super::{SettingsWindow, send_to_workspace};
+use super::{SettingsWindow, send_to_every_workspace, send_to_workspace};
 use crate::settings;
-use crate::workspace::{AddCommand, EditCommands};
+use crate::workspace::{EditCommands, ReloadJigs};
 
 /// Longest prompt shown under a jig's name.
 const MAX_PROMPT_CHARS: usize = 90;
@@ -59,7 +61,54 @@ impl CommandRow {
     }
 }
 
+/// The Add Jig form, while it's open.
+pub(super) struct NewJig {
+    pub(super) view: Entity<NewCommandForm>,
+    _events: Subscription,
+}
+
 impl SettingsWindow {
+    pub(super) fn open_new_jig(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.new_jig.is_some() {
+            return;
+        }
+        let view = cx.new(|cx| NewCommandForm::new(None, Scope::Selection, window, cx));
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            |this, view, event: &NewCommandEvent, _, cx| match event {
+                NewCommandEvent::Cancel => this.close_new_jig(cx),
+                NewCommandEvent::Save(preset) => {
+                    let saved = presets::user_jigs_path()
+                        .ok_or_else(|| "Couldn't find your home folder.".to_string())
+                        .and_then(|path| {
+                            presets::add_user_preset(&path, preset)
+                                .map_err(|error| format!("{error:#}"))
+                        });
+                    match saved {
+                        Ok(()) => {
+                            this.reload_commands();
+                            this.close_new_jig(cx);
+                            send_to_every_workspace(|| Box::new(ReloadJigs), cx);
+                        }
+                        Err(error) => view.update(cx, |form, cx| form.set_error(error, cx)),
+                    }
+                }
+            },
+        );
+        self.new_jig = Some(NewJig {
+            view,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close_new_jig(&mut self, cx: &mut Context<Self>) {
+        if self.new_jig.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub(super) fn reload_commands(&mut self) {
         let path = presets::user_jigs_path();
         let user = path
@@ -94,8 +143,9 @@ impl SettingsWindow {
         self.user_commands = user.iter().map(CommandRow::new).collect();
     }
 
-    pub(super) fn jigs_sections(&self) -> Vec<Section> {
+    pub(super) fn jigs_sections(&self, cx: &Context<Self>) -> Vec<Section> {
         let error = self.commands_error.clone();
+        let this = cx.entity().downgrade();
         let mut sections = vec![
             Section::new()
                 .footer("Jigs turned off leave the ⌘K input but stay defined.")
@@ -106,14 +156,18 @@ impl SettingsWindow {
                         )))
                         .warning(error.is_some())
                         .keywords(["add", "new", "file", "toml", "jig"])
-                        .control(|_, _| {
+                        .control(move |_, _| {
+                            let this = this.clone();
                             h_flex()
                                 .gap_2()
                                 .child(ui::button("edit-jigs", "Edit…").on_click(|_, _, cx| {
                                     send_to_workspace(Box::new(EditCommands), cx)
                                 }))
                                 .child(ui::button("add-jig", "Add Jig…").primary().on_click(
-                                    |_, _, cx| send_to_workspace(Box::new(AddCommand), cx),
+                                    move |_, window, cx| {
+                                        this.update(cx, |this, cx| this.open_new_jig(window, cx))
+                                            .ok();
+                                    },
                                 ))
                         }),
                 ),

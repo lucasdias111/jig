@@ -71,7 +71,9 @@ impl SettingsWindow {
                 .warning(true),
             ),
         };
-        std::iter::once(model).chain(self.jigs_sections()).collect()
+        std::iter::once(model)
+            .chain(self.jigs_sections(cx))
+            .collect()
     }
 
     /// The model Jig mode uses, from what the connected providers offer.

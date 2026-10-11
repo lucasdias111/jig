@@ -64,6 +64,7 @@ actions!(
         EditAgents,
         AddCommand,
         EditCommands,
+        ReloadJigs,
         EditAgentsFile,
         EditModelConfig,
         ToggleSidebar,
@@ -666,6 +667,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::edit_agents))
             .on_action(cx.listener(Self::add_command))
             .on_action(cx.listener(Self::edit_commands))
+            .on_action(
+                cx.listener(|this, _: &ReloadJigs, window, cx| this.reload_presets(window, cx)),
+            )
             .on_action(cx.listener(Self::edit_agents_file))
             .on_action(cx.listener(Self::edit_model_config))
             .on_action(cx.listener(Self::toggle_sidebar))

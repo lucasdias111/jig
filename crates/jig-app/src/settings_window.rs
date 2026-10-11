@@ -228,6 +228,19 @@ fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
     });
 }
 
+/// Send `action` to every editor window, leaving Settings in front.
+fn send_to_every_workspace(action: impl Fn() -> Box<dyn Action> + 'static, cx: &mut App) {
+    cx.defer(move |cx| {
+        for target in cx.windows() {
+            if !is_settings_window(target, cx) {
+                target
+                    .update(cx, |_, window, cx| window.dispatch_action(action(), cx))
+                    .ok();
+            }
+        }
+    });
+}
+
 /// Work Settings started: installing something, or testing a model.
 enum Fetch<T> {
     /// What's happening, e.g. "Installing…".
@@ -260,6 +273,8 @@ pub struct SettingsWindow {
     color_pickers: Vec<Entity<ColorPickerState>>,
     /// The shortcut taking new keys, on the Keyboard page.
     recording: Option<shortcuts_page::Recording>,
+    /// The Add Jig form, shown over the window.
+    new_jig: Option<jigs_page::NewJig>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -344,6 +359,7 @@ impl SettingsWindow {
             providers_error: None,
             color_pickers,
             recording: None,
+            new_jig: None,
             _subscriptions: subscriptions,
         };
         this.reload_commands();
@@ -532,6 +548,26 @@ impl SettingsWindow {
             )
     }
 
+    /// The Add Jig form as a sheet near the top, over a dimmed window that
+    /// takes no clicks while it's open.
+    fn render_new_jig(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        let form = self.new_jig.as_ref()?.view.clone();
+        let backdrop = cx.theme().overlay;
+        Some(deferred(
+            div()
+                .id("new-jig-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(backdrop)
+                .flex()
+                .justify_center()
+                .items_start()
+                .pt(px(TITLE_BAR_HEIGHT + 8.))
+                .child(div().child(form)),
+        ))
+    }
+
     /// Show a failed change to the providers until the next one works.
     fn report(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
         self.providers_error = result.err().map(SharedString::from);
@@ -610,6 +646,7 @@ impl Render for SettingsWindow {
                         .child(self.render_title(cx)),
                 ),
             )
+            .children(self.render_new_jig(cx))
     }
 }
 
@@ -752,6 +789,24 @@ mod tests {
             )
         });
         update(handle, cx, |this, _, cx| assert!(this.query(cx).is_empty()));
+        draw(handle, cx);
+    }
+
+    #[gpui_kit::test]
+    fn add_jig_opens_its_form_over_settings(cx: &mut TestAppContext) {
+        let _dir = providers::init_temp(cx);
+        let handle = open_on(Nav::page(Page::JigMode), cx);
+        update(handle, cx, |this, window, cx| this.open_new_jig(window, cx));
+        draw(handle, cx);
+        update(handle, cx, |this, _, _| assert!(this.new_jig.is_some()));
+        assert_eq!(cx.update(|cx| cx.windows().len()), 1, "no other window");
+
+        update(handle, cx, |this, _, cx| {
+            let form = this.new_jig.as_ref().unwrap().view.clone();
+            form.update(cx, |_, cx| cx.emit(jig_commands::NewCommandEvent::Cancel));
+        });
+        cx.run_until_parked();
+        update(handle, cx, |this, _, _| assert!(this.new_jig.is_none()));
         draw(handle, cx);
     }
 
