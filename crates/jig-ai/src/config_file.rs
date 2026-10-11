@@ -115,6 +115,14 @@ pub const TEMPLATES: &[ProviderTemplate] = &[
         "http://localhost:1234/v1",
         None,
     ),
+    // `llama-server` from llama.cpp, on its default port.
+    template(
+        "llama.cpp",
+        "llama-cpp",
+        ProviderKind::Openai,
+        "http://localhost:8080/v1",
+        None,
+    ),
 ];
 
 /// The template a provider was made from, by name.

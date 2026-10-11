@@ -56,7 +56,7 @@ Per project: `.jig/run.toml` (run configurations). User files live in `~/.config
 
 - Prompt (`jig-ai/src/prompt.rs`): instruction, optional note, optional `<diagnostics>` (the problems on the target's lines, `line N, severity: message`, for jigs with `diagnostics = true` such as Fix), language, file name, `AGENTS.md` as `<project_rules>`, and the file with the region marked `<<<SELECTION>>>…<<<END>>>` or `<<<CURSOR>>>`. Files over 24 KB are cut to whole lines around the region. The reply format is repeated after the file.
 - Reply: `{"replace": "<new text for the region>", "message": "<≤20 words>"}`. Anthropic-format providers must return it through a forced `apply_edit` tool call; OpenAI-format ones use JSON mode. Anything that doesn't parse is an error and never changes the buffer.
-- Thinking is off by default (`thinking: {type: disabled}` / `reasoning_effort: none`); with it on, reasoning models took 30-75 s and sometimes returned nothing. `thinking = true` on a provider turns it back on.
+- Thinking is off by default (`thinking: {type: disabled}` / `reasoning_effort: none`, plus `chat_template_kwargs: {enable_thinking: false}` for servers on this computer, such as llama.cpp's `llama-server`, LM Studio or vLLM, which run the model's own chat template); with it on, reasoning models took 30-75 s and sometimes returned nothing. `thinking = true` on a provider turns it back on.
 - Default model for both lanes: OpenCode Go `qwen3.8-flash` (Anthropic format, needs `OPENCODE_API_KEY` and an `x-opencode-session` header). API keys never go in `config.toml`: one typed in Settings goes in the system keychain (macOS Keychain, Windows Credential Manager; elsewhere a 0600 `keys.toml`) and wins over the `api_key_env` variable.
 
 ## Working on Jig

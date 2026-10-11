@@ -9,11 +9,13 @@ use crate::http::{Fallback, Lenient};
 use crate::{Provider, http};
 
 /// What servers that claim OpenAI compatibility still reject: JSON mode,
-/// the reasoning switch, temperature on reasoning models, and `max_tokens`,
-/// which OpenAI's reasoning models want as `max_completion_tokens`.
+/// the reasoning switches, temperature on reasoning models, and
+/// `max_tokens`, which OpenAI's reasoning models want as
+/// `max_completion_tokens`.
 const FALLBACKS: &[Fallback] = &[
     Fallback::Drop("response_format"),
     Fallback::Drop("reasoning_effort"),
+    Fallback::Drop("chat_template_kwargs"),
     Fallback::Drop("temperature"),
     Fallback::Rename("max_tokens", "max_completion_tokens"),
 ];
@@ -66,7 +68,7 @@ impl OpenAiCompatProvider {
         self
     }
 
-    fn send(&self, messages: &[Value]) -> Result<Value> {
+    fn body(&self, messages: &[Value]) -> Value {
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -78,7 +80,30 @@ impl OpenAiCompatProvider {
         }
         if !self.thinking {
             body["reasoning_effort"] = json!("none");
+            // Servers on this computer (llama.cpp, LM Studio, vLLM) run the
+            // model's own chat template, whose switch this is; Qwen3 and
+            // the like think by default otherwise. Cloud APIs don't need it.
+            if self.is_local() {
+                body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+            }
         }
+        body
+    }
+
+    /// The server runs on this computer.
+    fn is_local(&self) -> bool {
+        let address = self.base_url.split("://").nth(1).unwrap_or(&self.base_url);
+        ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]
+            .iter()
+            .any(|host| {
+                address
+                    .strip_prefix(host)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
+            })
+    }
+
+    fn send(&self, messages: &[Value]) -> Result<Value> {
+        let body = self.body(messages);
         let headers: Vec<(&str, String)> = self
             .api_key
             .iter()
@@ -109,5 +134,41 @@ impl Provider for OpenAiCompatProvider {
             json!({ "role": "user", "content": user }),
         ];
         text_of(&self.send(&messages)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(base_url: &str) -> OpenAiCompatProvider {
+        OpenAiCompatProvider::new(base_url, None, "m", 100, true)
+    }
+
+    #[test]
+    fn local_servers_are_told_not_to_think_by_their_chat_template() {
+        let local = provider("http://localhost:8080/v1").body(&[]);
+        assert_eq!(local["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(local["reasoning_effort"], "none");
+        for url in ["http://127.0.0.1:1234/v1", "http://[::1]:8080/v1"] {
+            assert!(
+                provider(url).body(&[])["chat_template_kwargs"].is_object(),
+                "{url}"
+            );
+        }
+        let cloud = provider("https://api.openai.com/v1").body(&[]);
+        assert!(cloud.get("chat_template_kwargs").is_none());
+        assert!(
+            provider("https://localhost.example.com/v1").body(&[])["chat_template_kwargs"]
+                .is_null(),
+            "not fooled by the name"
+        );
+        let thinking = provider("http://localhost:8080/v1")
+            .with_thinking(true)
+            .body(&[]);
+        assert!(
+            thinking.get("chat_template_kwargs").is_none(),
+            "left to think when asked"
+        );
     }
 }
