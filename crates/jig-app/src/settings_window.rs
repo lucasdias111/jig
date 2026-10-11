@@ -105,7 +105,7 @@ impl Page {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Detail {
     Colors,
-    /// An index into `languages::BUNDLED`.
+    /// An index into `languages::bundled()`.
     Language(usize),
 }
 
@@ -141,7 +141,7 @@ impl Nav {
         Page::ALL.into_iter().flat_map(|page| {
             let details: Vec<Detail> = match page {
                 Page::Appearance => vec![Detail::Colors],
-                Page::Languages => (0..languages::BUNDLED.len())
+                Page::Languages => (0..languages::bundled().len())
                     .map(Detail::Language)
                     .collect(),
                 _ => Vec::new(),
@@ -156,7 +156,7 @@ impl Nav {
 }
 
 fn language(ix: usize) -> &'static Language {
-    &languages::BUNDLED[ix]
+    &languages::bundled()[ix]
 }
 
 #[cfg(any(test, feature = "snapshots"))]
@@ -483,7 +483,12 @@ impl SettingsWindow {
         let mut found = Vec::new();
         // A row shown on two pages, like a debugger, is listed once.
         let mut seen = std::collections::HashSet::new();
-        for nav in Nav::everywhere() {
+        let languages = &settings::get(cx).languages;
+        let shown = |nav: &Nav| match nav.detail {
+            Some(Detail::Language(ix)) => languages.is_added(language(ix).name),
+            _ => true,
+        };
+        for nav in Nav::everywhere().filter(shown) {
             let place = match nav.detail {
                 Some(_) => format!("{} › {}", nav.page.title(), nav.title()),
                 None => nav.page.title().to_string(),

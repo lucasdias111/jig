@@ -51,6 +51,7 @@ impl Workspace {
                         .update(cx, |state, cx| state.set_highlighter(language, cx));
                 }
             }
+            self.reopen_in_servers(true, cx);
         }
         if new.commands != old.commands {
             self.reload_presets(window, cx);

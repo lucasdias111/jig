@@ -438,24 +438,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = debuggers::user_path() else {
-            return;
-        };
-        if !path.exists() {
-            let created = path
-                .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, debuggers::USER_TEMPLATE));
-            if let Err(error) = created {
-                self.show_error(
-                    &format!("Couldn't create {}: {error}", path.display()),
-                    window,
-                    cx,
-                );
-                return;
-            }
-        }
-        self.open_file(&path, window, cx);
+        self.edit_user_file(debuggers::user_path(), debuggers::USER_TEMPLATE, window, cx);
     }
 
     /// Cargo's JSON messages while building: the one naming the executable.

@@ -8,6 +8,7 @@
 
 mod client;
 pub mod diagnostics;
+pub mod install;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -17,6 +18,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::{App, Global};
+use serde::Deserialize;
 
 pub use client::{Client, Response};
 
@@ -28,100 +30,77 @@ pub enum Encoding {
     Utf16,
 }
 
+/// A language server, as `assets/default-languages.toml` describes it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Server {
-    pub name: &'static str,
-    /// Commands to try, in order; the first installed one is run.
-    pub commands: &'static [&'static [&'static str]],
+    pub name: String,
     /// Jig's names for the languages it serves.
-    pub languages: &'static [&'static str],
-    /// Files whose folder is the project root.
-    pub root_markers: &'static [&'static str],
+    pub languages: Vec<String>,
+    /// Commands to try, in order; the first installed one is run.
+    pub commands: Vec<Vec<String>>,
+    /// Files whose folder is the project root; `*.ext` matches any file
+    /// with that extension.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
     /// Take the outermost folder with a marker rather than the nearest: a
     /// Cargo or Go workspace contains its members' manifests.
+    #[serde(default)]
     pub outermost: bool,
+    /// A shell command installing it into `${dir}`, its own folder.
+    install: Option<String>,
+    help: Option<crate::debuggers::Help>,
 }
 
-pub const SERVERS: &[Server] = &[
-    Server {
-        name: "rust-analyzer",
-        commands: &[&["rust-analyzer"]],
-        languages: &["rust"],
-        root_markers: &["Cargo.toml"],
-        outermost: true,
-    },
-    Server {
-        name: "typescript-language-server",
-        commands: &[&["typescript-language-server", "--stdio"]],
-        languages: &["typescript", "tsx", "javascript"],
-        root_markers: &["tsconfig.json", "jsconfig.json", "package.json"],
-        outermost: false,
-    },
-    Server {
-        name: "pyright",
-        commands: &[
-            &["basedpyright-langserver", "--stdio"],
-            &["pyright-langserver", "--stdio"],
-            &["pylsp"],
-        ],
-        languages: &["python"],
-        root_markers: &[
-            "pyproject.toml",
-            "pyrightconfig.json",
-            "setup.py",
-            "setup.cfg",
-            "requirements.txt",
-        ],
-        outermost: false,
-    },
-    Server {
-        name: "gopls",
-        commands: &[&["gopls"]],
-        languages: &["go"],
-        root_markers: &["go.work", "go.mod"],
-        outermost: true,
-    },
-    Server {
-        name: "jdtls",
-        commands: &[&["jdtls"]],
-        languages: &["java"],
-        root_markers: &[
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-        ],
-        outermost: true,
-    },
-    // Godot's editor serves GDScript over TCP while it's open; `nc` bridges
-    // that to stdio. Start Godot before opening a script.
-    Server {
-        name: "godot",
-        commands: &[&["nc", "127.0.0.1", "6005"]],
-        languages: &["gdscript"],
-        root_markers: &["project.godot"],
-        outermost: false,
-    },
-];
+impl Server {
+    pub fn installable(&self) -> bool {
+        self.install.is_some()
+    }
+
+    /// How to get it, for when it isn't installed.
+    pub fn help(&self) -> String {
+        self.help.as_ref().map_or_else(
+            || format!("Install {} and put it on the PATH.", self.name),
+            crate::debuggers::Help::text,
+        )
+    }
+
+    /// Whether `dir` holds one of the markers.
+    fn marks(&self, dir: &Path) -> bool {
+        self.root_markers
+            .iter()
+            .any(|marker| match marker.strip_prefix("*.") {
+                Some(extension) => std::fs::read_dir(dir).is_ok_and(|entries| {
+                    entries.flatten().any(|entry| {
+                        Path::new(&entry.file_name())
+                            .extension()
+                            .is_some_and(|ext| ext == extension)
+                    })
+                }),
+                None => dir.join(marker).exists(),
+            })
+    }
+}
 
 /// The server for `language`, if there is one.
 pub fn server_for(language: &str) -> Option<&'static Server> {
-    SERVERS.iter().find(|s| s.languages.contains(&language))
+    crate::languages::servers()
+        .iter()
+        .find(|s| s.languages.iter().any(|l| l == language))
+}
+
+/// A server by name.
+pub fn server_named(name: &str) -> Option<&'static Server> {
+    crate::languages::servers().iter().find(|s| s.name == name)
 }
 
 /// The protocol's name for a language.
 pub fn language_id(language: &str, path: &Path) -> &'static str {
     let jsx = path.extension().is_some_and(|e| e == "jsx");
-    match language {
-        "tsx" => "typescriptreact",
-        "javascript" if jsx => "javascriptreact",
-        "javascript" => "javascript",
-        "typescript" => "typescript",
-        "rust" => "rust",
-        "python" => "python",
-        "go" => "go",
-        "java" => "java",
-        "gdscript" => "gdscript",
-        _ => "plaintext",
+    match crate::languages::get(language) {
+        Some(_) if language == "javascript" && jsx => "javascriptreact",
+        Some(known) => known.lsp_id,
+        None => "plaintext",
     }
 }
 
@@ -129,9 +108,7 @@ pub fn language_id(language: &str, path: &Path) -> &'static str {
 /// markers, else the project root (the nearest `.git`).
 pub fn root_for(server: &Server, file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new("/"));
-    let mut marked = dir
-        .ancestors()
-        .filter(|dir| server.root_markers.iter().any(|m| dir.join(m).exists()));
+    let mut marked = dir.ancestors().filter(|dir| server.marks(dir));
     let found = if server.outermost {
         marked.last()
     } else {
@@ -186,7 +163,7 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     let server = server_for(language)?;
     let file = std::path::absolute(file).ok()?;
     let root = root_for(server, &file);
-    let key = (server.name, root.clone());
+    let key = (server.name.as_str(), root.clone());
     let registry = cx.default_global::<Registry>();
     if let Some(client) = registry.clients.get(&key) {
         return (!client.is_dead()).then(|| client.clone());
@@ -200,7 +177,7 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     // again.
     let command_root = root.clone();
     let init_options = init_options(server);
-    let client = Client::start(server.name, root, init_options, move || {
+    let client = Client::start(&server.name, root, init_options, move || {
         command_for(server, &command_root)
     });
     registry.clients.insert(key, client.clone());
@@ -210,39 +187,69 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
 
 /// Whether `server`, by name, is installed.
 pub fn is_installed(server: &str) -> bool {
-    SERVERS
-        .iter()
-        .find(|s| s.name == server)
-        .is_some_and(|s| command_for(s, Path::new("/")).is_some())
+    server_named(server).is_some_and(|s| program_for(s).is_some())
+}
+
+/// Bumped when a server is installed or uninstalled, for workspaces to
+/// open their files in it again.
+#[derive(Default)]
+pub struct ServersChanged(pub u64);
+
+impl Global for ServersChanged {}
+
+/// A server was installed or uninstalled: forget the ones that weren't
+/// found when last looked for, and tell the workspaces.
+pub fn servers_changed(cx: &mut App) {
+    cx.default_global::<Registry>()
+        .clients
+        .retain(|_, client| !client.is_dead());
+    cx.default_global::<ServersChanged>().0 += 1;
 }
 
 /// What `server` is told in `initialize`: for jdtls, the plugins debuggers
 /// ask it to load, such as java-debug.
 fn init_options(server: &Server) -> serde_json::Value {
-    let bundles = crate::debuggers::lsp_bundles(server.name);
+    let bundles = crate::debuggers::lsp_bundles(&server.name);
     if bundles.is_empty() {
         return serde_json::Value::Null;
     }
     serde_json::json!({"bundles": bundles})
 }
 
+/// The first of `server`'s commands that's installed, as its program and
+/// arguments.
+pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
+    let path = search_path();
+    let own = install::server_dir(server);
+    server.commands.iter().find_map(|argv| {
+        let (name, args) = argv.split_first()?;
+        let program = find_program(name, path)
+            .or_else(|| {
+                let own = own.as_ref()?;
+                [own.join("bin"), own.join("node_modules/.bin")]
+                    .into_iter()
+                    .map(|dir| dir.join(name))
+                    .find(|program| program.is_file())
+            })
+            // Debuggers' installers may have put it with them.
+            .or_else(|| {
+                crate::debuggers::debuggers_dir()
+                    .map(|dir| dir.join("bin").join(name))
+                    .filter(|program| program.is_file())
+            })?;
+        Some((program, args))
+    })
+}
+
 /// The command to run `server` with, if one of its commands is installed.
 fn command_for(server: &Server, root: &Path) -> Option<Command> {
-    let path = search_path();
-    server.commands.iter().find_map(|argv| {
-        // Debuggers' installers may have put it with them.
-        let program = find_program(argv[0], path).or_else(|| {
-            crate::debuggers::debuggers_dir()
-                .map(|dir| dir.join("bin").join(argv[0]))
-                .filter(|program| program.is_file())
-        })?;
-        let mut command = Command::new(program);
-        command.args(&argv[1..]).env("PATH", path);
-        if server.name == "jdtls" {
-            command.arg("-data").arg(jdtls_data(root));
-        }
-        Some(command)
-    })
+    let (program, args) = program_for(server)?;
+    let mut command = Command::new(program);
+    command.args(args).env("PATH", search_path());
+    if server.name == "jdtls" {
+        command.arg("-data").arg(jdtls_data(root));
+    }
+    Some(command)
 }
 
 /// jdtls keeps an index per project; somewhere out of the project.
@@ -649,7 +656,7 @@ mod tests {
         let server = server_for("rust").unwrap();
         let command_root = root.clone();
         let client = Client::start(
-            server.name,
+            &server.name,
             root.clone(),
             serde_json::Value::Null,
             move || command_for(server, &command_root),

@@ -1,0 +1,436 @@
+# The languages Jig knows, and the language servers that serve them.
+#
+# Each language's grammar is compiled into Jig (a `tree-sitter-*` feature in
+# the workspace Cargo.toml, or a module like `languages::gdscript`), so a new
+# one needs a new build. Formatters (default-formatters.toml) and debuggers
+# (default-debuggers.toml) name the languages they serve themselves.
+#
+# [[language]]
+# name           Jig's name for it: its grammar's, and in settings.toml.
+# label          What Settings calls it.
+# extensions     The files it takes; where two languages take one, the
+#                first in this file wins.
+# starter        true: in everyone's list from the start. Others are added
+#                from Settings > Languages.
+# line_comment   What starts a line comment, for Toggle Line Comment.
+# lsp_id         The protocol's languageId; defaults to the name.
+#
+# [[server]]
+# name           Its name, also what debuggers call it (`lsp = "jdtls"`).
+# languages      The languages it serves, by Jig's names.
+# commands       Commands to try in order; the first installed one runs.
+#                Jig looks on the PATH, then in the server's own folder in
+#                Jig's servers folder (its bin and node_modules/.bin).
+# root_markers   Files whose folder is the project root; none, the nearest
+#                folder with .git.
+# outermost      true: the outermost folder with a marker rather than the
+#                nearest, as a Cargo or Go workspace holds its members'.
+# install        A shell command Settings' Install button runs. ${dir} is
+#                the server's own folder, which Uninstall moves to the Trash.
+# help           How to get it, for when it isn't installed. A table of
+#                { macos, linux, default } when that differs.
+
+[[language]]
+name = "rust"
+label = "Rust"
+extensions = ["rs"]
+starter = true
+line_comment = "//"
+
+[[language]]
+name = "typescript"
+label = "TypeScript"
+extensions = ["ts", "mts", "cts"]
+starter = true
+line_comment = "//"
+
+[[language]]
+name = "tsx"
+label = "TSX"
+extensions = ["tsx"]
+starter = true
+line_comment = "//"
+lsp_id = "typescriptreact"
+
+[[language]]
+name = "javascript"
+label = "JavaScript"
+extensions = ["js", "mjs", "cjs", "jsx"]
+starter = true
+line_comment = "//"
+
+[[language]]
+name = "java"
+label = "Java"
+extensions = ["java"]
+starter = true
+line_comment = "//"
+
+[[language]]
+name = "python"
+label = "Python"
+extensions = ["py", "pyi"]
+starter = true
+line_comment = "#"
+
+[[language]]
+name = "go"
+label = "Go"
+extensions = ["go"]
+starter = true
+line_comment = "//"
+
+[[language]]
+name = "gdscript"
+label = "GDScript"
+extensions = ["gd"]
+starter = true
+line_comment = "#"
+
+[[language]]
+name = "toml"
+label = "TOML"
+extensions = ["toml"]
+starter = true
+line_comment = "#"
+
+[[language]]
+name = "json"
+label = "JSON"
+extensions = ["json", "jsonc"]
+starter = true
+
+[[language]]
+name = "markdown"
+label = "Markdown"
+extensions = ["md", "markdown"]
+starter = true
+
+[[language]]
+name = "bash"
+label = "Bash"
+extensions = ["sh", "bash", "zsh"]
+line_comment = "#"
+lsp_id = "shellscript"
+
+[[language]]
+name = "c"
+label = "C"
+extensions = ["c", "h"]
+line_comment = "//"
+
+[[language]]
+name = "cpp"
+label = "C++"
+extensions = ["cpp", "cc", "cxx", "c++", "h", "hpp", "hh", "hxx", "h++"]
+line_comment = "//"
+
+[[language]]
+name = "csharp"
+label = "C#"
+extensions = ["cs"]
+line_comment = "//"
+
+[[language]]
+name = "css"
+label = "CSS"
+extensions = ["css"]
+
+[[language]]
+name = "html"
+label = "HTML"
+extensions = ["html", "htm"]
+
+[[language]]
+name = "kotlin"
+label = "Kotlin"
+extensions = ["kt", "kts"]
+line_comment = "//"
+
+[[language]]
+name = "lua"
+label = "Lua"
+extensions = ["lua"]
+line_comment = "--"
+
+[[language]]
+name = "php"
+label = "PHP"
+extensions = ["php"]
+line_comment = "//"
+
+[[language]]
+name = "ruby"
+label = "Ruby"
+extensions = ["rb", "rake", "gemspec"]
+line_comment = "#"
+
+[[language]]
+name = "swift"
+label = "Swift"
+extensions = ["swift"]
+line_comment = "//"
+
+[[language]]
+name = "scala"
+label = "Scala"
+extensions = ["scala", "sc"]
+line_comment = "//"
+
+[[language]]
+name = "elixir"
+label = "Elixir"
+extensions = ["ex", "exs"]
+line_comment = "#"
+
+[[language]]
+name = "zig"
+label = "Zig"
+extensions = ["zig", "zon"]
+line_comment = "//"
+
+[[language]]
+name = "sql"
+label = "SQL"
+extensions = ["sql"]
+line_comment = "--"
+
+[[language]]
+name = "graphql"
+label = "GraphQL"
+extensions = ["graphql", "gql"]
+line_comment = "#"
+
+[[language]]
+name = "proto"
+label = "Protocol Buffers"
+extensions = ["proto"]
+line_comment = "//"
+
+[[language]]
+name = "svelte"
+label = "Svelte"
+extensions = ["svelte"]
+
+[[language]]
+name = "astro"
+label = "Astro"
+extensions = ["astro"]
+
+[[language]]
+name = "yaml"
+label = "YAML"
+extensions = ["yaml", "yml"]
+line_comment = "#"
+
+[[language]]
+name = "diff"
+label = "Diff"
+extensions = ["diff", "patch"]
+
+[[server]]
+name = "rust-analyzer"
+languages = ["rust"]
+commands = [["rust-analyzer"]]
+root_markers = ["Cargo.toml"]
+outermost = true
+install = "rustup component add rust-analyzer"
+help = "Install it with rustup component add rust-analyzer."
+
+[[server]]
+name = "typescript-language-server"
+languages = ["typescript", "tsx", "javascript"]
+commands = [["typescript-language-server", "--stdio"]]
+root_markers = ["tsconfig.json", "jsconfig.json", "package.json"]
+install = 'npm install --prefix "${dir}" typescript-language-server typescript'
+help = "Needs Node. Install it here, or with npm install -g typescript-language-server typescript."
+
+[[server]]
+name = "pyright"
+languages = ["python"]
+commands = [
+    ["basedpyright-langserver", "--stdio"],
+    ["pyright-langserver", "--stdio"],
+    ["pylsp"],
+]
+root_markers = [
+    "pyproject.toml",
+    "pyrightconfig.json",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+]
+install = 'npm install --prefix "${dir}" pyright'
+help = "Needs Node. Install it here, or with pip install basedpyright."
+
+[[server]]
+name = "gopls"
+languages = ["go"]
+commands = [["gopls"]]
+root_markers = ["go.work", "go.mod"]
+outermost = true
+install = 'GOBIN="${dir}/bin" go install golang.org/x/tools/gopls@latest'
+help = "Needs Go. Install it here, or with go install golang.org/x/tools/gopls@latest."
+
+[[server]]
+name = "jdtls"
+languages = ["java"]
+commands = [["jdtls"]]
+root_markers = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle"]
+outermost = true
+install = """
+set -e
+tmp=$(mktemp -d)
+curl --fail --silent --show-error --location --output "$tmp/jdtls.tar.gz" \
+  https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz
+mkdir -p "${dir}/jdtls" "${dir}/bin"
+tar -xzf "$tmp/jdtls.tar.gz" -C "${dir}/jdtls"
+rm -rf "$tmp"
+ln -sf "${dir}/jdtls/bin/jdtls" "${dir}/bin/jdtls"
+"""
+help = "Needs a JDK 21 or later. Install it here, or with brew install jdtls."
+
+# Godot's editor serves GDScript over TCP while it's open; `nc` bridges that
+# to stdio. Start Godot before opening a script.
+[[server]]
+name = "godot"
+languages = ["gdscript"]
+commands = [["nc", "127.0.0.1", "6005"]]
+root_markers = ["project.godot"]
+help = "Open the project in Godot's editor; it serves GDScript while it's open."
+
+[[server]]
+name = "taplo"
+languages = ["toml"]
+commands = [["taplo", "lsp", "stdio"]]
+install = 'cargo install --root "${dir}" --locked --features lsp taplo-cli'
+help = "Needs Rust. Install it here, or with cargo install --features lsp taplo-cli."
+
+[[server]]
+name = "vscode-json-language-server"
+languages = ["json"]
+commands = [["vscode-json-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" vscode-langservers-extracted'
+help = "Needs Node. Install it here, or with npm install -g vscode-langservers-extracted."
+
+[[server]]
+name = "marksman"
+languages = ["markdown"]
+commands = [["marksman", "server"]]
+help.macos = "Install it with brew install marksman."
+help.default = "Download it from github.com/artempyanykh/marksman/releases and put it on the PATH."
+
+[[server]]
+name = "bash-language-server"
+languages = ["bash"]
+commands = [["bash-language-server", "start"]]
+install = 'npm install --prefix "${dir}" bash-language-server'
+help = "Needs Node. Install it here, or with npm install -g bash-language-server."
+
+[[server]]
+name = "clangd"
+languages = ["c", "cpp"]
+commands = [["clangd"]]
+root_markers = ["compile_commands.json", "compile_flags.txt", ".clangd"]
+help.macos = "It comes with Xcode's command line tools: xcode-select --install"
+help.default = "Install clangd with your package manager, for example sudo apt install clangd."
+
+[[server]]
+name = "csharp-ls"
+languages = ["csharp"]
+commands = [["csharp-ls"]]
+root_markers = ["*.sln", "*.csproj"]
+install = 'dotnet tool install --tool-path "${dir}/bin" csharp-ls'
+help = "Needs the .NET SDK. Install it here, or with dotnet tool install --global csharp-ls."
+
+[[server]]
+name = "vscode-css-language-server"
+languages = ["css"]
+commands = [["vscode-css-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" vscode-langservers-extracted'
+help = "Needs Node. Install it here, or with npm install -g vscode-langservers-extracted."
+
+[[server]]
+name = "vscode-html-language-server"
+languages = ["html"]
+commands = [["vscode-html-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" vscode-langservers-extracted'
+help = "Needs Node. Install it here, or with npm install -g vscode-langservers-extracted."
+
+[[server]]
+name = "kotlin-language-server"
+languages = ["kotlin"]
+commands = [["kotlin-lsp", "--stdio"], ["kotlin-language-server"]]
+root_markers = ["settings.gradle.kts", "settings.gradle", "build.gradle.kts", "pom.xml"]
+outermost = true
+help.macos = "Install JetBrains' kotlin-lsp with brew install JetBrains/utils/kotlin-lsp."
+help.default = "Install JetBrains' kotlin-lsp from github.com/Kotlin/kotlin-lsp and put it on the PATH."
+
+[[server]]
+name = "lua-language-server"
+languages = ["lua"]
+commands = [["lua-language-server"]]
+root_markers = [".luarc.json", ".luarc.jsonc"]
+help.macos = "Install it with brew install lua-language-server."
+help.default = "Install lua-language-server with your package manager, or from github.com/LuaLS/lua-language-server/releases."
+
+[[server]]
+name = "intelephense"
+languages = ["php"]
+commands = [["intelephense", "--stdio"]]
+root_markers = ["composer.json"]
+install = 'npm install --prefix "${dir}" intelephense'
+help = "Needs Node. Install it here, or with npm install -g intelephense."
+
+[[server]]
+name = "ruby-lsp"
+languages = ["ruby"]
+commands = [["ruby-lsp"]]
+root_markers = ["Gemfile"]
+help = "Install it with gem install ruby-lsp."
+
+[[server]]
+name = "sourcekit-lsp"
+languages = ["swift"]
+commands = [["sourcekit-lsp"]]
+root_markers = ["Package.swift"]
+help.macos = "It comes with Xcode."
+help.default = "It comes with the Swift toolchain from swift.org."
+
+[[server]]
+name = "metals"
+languages = ["scala"]
+commands = [["metals"]]
+root_markers = ["build.sbt", "build.sc", "build.mill"]
+help = "Install it with Coursier: cs install metals."
+
+[[server]]
+name = "expert"
+languages = ["elixir"]
+commands = [["expert", "--stdio"], ["elixir-ls"]]
+root_markers = ["mix.exs"]
+outermost = true
+help = "Install Expert from github.com/elixir-lang/expert/releases, or elixir-ls, and put it on the PATH."
+
+[[server]]
+name = "zls"
+languages = ["zig"]
+commands = [["zls"]]
+root_markers = ["build.zig"]
+help.macos = "Install it with brew install zls."
+help.default = "Download it from github.com/zigtools/zls/releases and put it on the PATH."
+
+[[server]]
+name = "svelte-language-server"
+languages = ["svelte"]
+commands = [["svelteserver", "--stdio"]]
+root_markers = ["svelte.config.js", "package.json"]
+install = 'npm install --prefix "${dir}" svelte-language-server'
+help = "Needs Node. Install it here, or with npm install -g svelte-language-server."
+
+[[server]]
+name = "yaml-language-server"
+languages = ["yaml"]
+commands = [["yaml-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" yaml-language-server'
+help = "Needs Node. Install it here, or with npm install -g yaml-language-server."

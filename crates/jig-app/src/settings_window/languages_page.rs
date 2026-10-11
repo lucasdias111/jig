@@ -1,7 +1,8 @@
-//! Languages: one row per bundled language, summing up how it's set, each
+//! Languages: one row per added language, summing up how it's set, each
 //! opening a page with everything about it (highlighting, extensions,
-//! formatting on save, its debugger). The files that add formatters and
-//! debuggers are at the foot of the list.
+//! formatting on save, its debugger), and a menu to add more from the ones
+//! Jig bundles. The files that add formatters and debuggers are at the
+//! foot of the list.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -17,9 +18,10 @@ use super::ui::{self, Row, Section};
 use super::{Detail, Fetch, Nav, Page, SettingsWindow, language, send_to_workspace};
 use crate::debuggers::{self, Debugger};
 use crate::formatters;
-use crate::languages::{self, BUNDLED, Language};
+use crate::languages::{self, Language, bundled};
+use crate::lsp::{self, Server};
 use crate::settings;
-use crate::workspace::{EditDebuggers, EditFormatters};
+use crate::workspace::{EditDebuggers, EditFormatters, EditLanguageServers};
 
 /// A language's extensions as Settings shows and takes them: the user's,
 /// or the built-in ones.
@@ -29,7 +31,7 @@ fn extensions(language: &Language, cx: &App) -> String {
         .extensions
         .get(language.name)
         .cloned()
-        .unwrap_or_else(|| languages::format_extensions(language.extensions))
+        .unwrap_or_else(|| languages::format_extensions(&language.extensions))
 }
 
 /// What formats `language` when its language server doesn't.
@@ -52,13 +54,23 @@ fn names(languages: &[String]) -> String {
     let labels: Vec<&str> = languages
         .iter()
         .map(|name| {
-            BUNDLED
+            bundled()
                 .iter()
                 .find(|language| language.name == name)
                 .map_or(name.as_str(), |language| language.label)
         })
         .collect();
-    match labels.as_slice() {
+    sentence(&labels)
+}
+
+/// The languages' labels in a sentence.
+fn names_of(languages: &[&Language]) -> String {
+    let labels: Vec<&str> = languages.iter().map(|language| language.label).collect();
+    sentence(&labels)
+}
+
+fn sentence(labels: &[&str]) -> String {
+    match labels {
         [] => String::new(),
         [one] => one.to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
@@ -69,7 +81,11 @@ impl SettingsWindow {
     pub(super) fn languages_sections(&self, cx: &Context<Self>) -> Vec<Section> {
         let settings = settings::get(cx);
         let registry = debuggers::registry();
-        let rows = BUNDLED.iter().enumerate().map(|(ix, language)| {
+        let added = bundled()
+            .iter()
+            .enumerate()
+            .filter(|(_, language)| settings.languages.is_added(language.name));
+        let rows = added.map(|(ix, language)| {
             let shown_extensions = extensions(language, cx)
                 .split([',', ' '])
                 .filter(|ext| !ext.is_empty())
@@ -99,7 +115,7 @@ impl SettingsWindow {
         let debuggers_error = registry.error.clone();
         let formatters_error = formatters::registry().error.clone();
         vec![
-            Section::new().rows(rows),
+            Section::new().rows(rows).row(self.add_language_row(cx)),
             Section::titled("Debuggers")
                 .footer(
                     "Debuggers turned on take breakpoints and debug with ⌃D. Each also shows \
@@ -123,6 +139,25 @@ impl SettingsWindow {
                                 .on_click(|_, _, cx| send_to_workspace(Box::new(EditDebuggers), cx))
                         }),
                 ),
+            Section::titled("Language servers").row({
+                let error = languages::user_error();
+                Row::new("servers-file", "Add or change language servers")
+                    .description(error.map_or_else(
+                        || {
+                            "Any Language Server Protocol server, in language-servers.toml. \
+                             Restart Jig after changing it."
+                                .to_string()
+                        },
+                        |error| format!("{error}. Restart Jig after fixing it."),
+                    ))
+                    .warning(error.is_some())
+                    .keywords(["language server", "lsp", "server", "toml", "file"])
+                    .control(|_, _| {
+                        ui::button("edit-servers", "Edit…").on_click(|_, _, cx| {
+                            send_to_workspace(Box::new(EditLanguageServers), cx)
+                        })
+                    })
+            }),
             Section::titled("Formatters").row(
                 Row::new("formatters-file", "Add or change formatters")
                     .description_opt(
@@ -141,11 +176,74 @@ impl SettingsWindow {
         ]
     }
 
+    /// A menu of the bundled languages not in the list yet. Searching for
+    /// one finds this row.
+    fn add_language_row(&self, cx: &Context<Self>) -> Row {
+        let settings = settings::get(cx);
+        let missing: Vec<&'static Language> = bundled()
+            .iter()
+            .filter(|language| !settings.languages.is_added(language.name))
+            .collect();
+        let description = if missing.is_empty() {
+            "Every language Jig bundles is in the list.".to_string()
+        } else {
+            format!(
+                "{} more, such as {}.",
+                missing.len(),
+                names_of(&missing[..3.min(missing.len())])
+            )
+        };
+        let mut keywords = vec!["add", "language"];
+        keywords.extend(
+            missing
+                .iter()
+                .flat_map(|language| [language.name, language.label]),
+        );
+        let this = cx.entity().downgrade();
+        Row::new("add-language", "Add a language")
+            .description(description)
+            .keywords(keywords)
+            .control(move |_, cx| {
+                let this = this.clone();
+                let none_left = bundled()
+                    .iter()
+                    .all(|language| settings::get(cx).languages.is_added(language.name));
+                ui::button("add-language", "Add…")
+                    .disabled(none_left)
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
+                        menu = menu.scrollable(true).max_h(px(320.));
+                        let added = settings::get(cx).languages.added.clone();
+                        for (ix, language) in bundled().iter().enumerate() {
+                            if added.iter().any(|name| name == language.name) {
+                                continue;
+                            }
+                            let this = this.clone();
+                            menu = menu.item(PopupMenuItem::new(language.label).on_click(
+                                move |_, window, cx| {
+                                    settings::update(cx, |s| {
+                                        s.languages.set_added(language.name, true)
+                                    });
+                                    this.update(cx, |this, cx| {
+                                        this.go(
+                                            Nav::detail(Page::Languages, Detail::Language(ix)),
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .ok();
+                                },
+                            ));
+                        }
+                        menu
+                    })
+            })
+    }
+
     pub(super) fn language_sections(&self, ix: usize, cx: &Context<Self>) -> Vec<Section> {
         let language = language(ix);
         let name = language.name;
         let label = language.label;
-        let built_in = languages::format_extensions(language.extensions);
+        let built_in = languages::format_extensions(&language.extensions);
         let mut sections = vec![
             Section::new()
                 .row(
@@ -169,7 +267,7 @@ impl SettingsWindow {
                             format!("{name}-extensions"),
                             move |cx| extensions(language, cx).into(),
                             move |text, cx| {
-                                let built_in = languages::format_extensions(language.extensions);
+                                let built_in = languages::format_extensions(&language.extensions);
                                 settings::update(cx, |s| {
                                     s.languages.set_extensions(
                                         name,
@@ -180,6 +278,7 @@ impl SettingsWindow {
                             },
                         )),
                 ),
+            self.server_section(name, cx),
             Section::titled("Formatting").row(
                 Row::new(format!("{name}-format"), "Format on save")
                     .description(formatter_note(language))
@@ -209,7 +308,144 @@ impl SettingsWindow {
             }
             sections.push(section);
         }
+        let this = cx.entity().downgrade();
+        sections.push(
+            Section::new().row(
+                Row::new(format!("{name}-remove"), format!("Remove {label}"))
+                    .description(format!(
+                        "Takes it off the list; {label} files open as plain text."
+                    ))
+                    .keywords(["remove", "language", name])
+                    .control(move |_, _| {
+                        let this = this.clone();
+                        ui::button(format!("{name}-remove"), "Remove").on_click(
+                            move |_, window, cx| {
+                                settings::update(cx, |s| s.languages.set_added(name, false));
+                                this.update(cx, |this, cx| {
+                                    this.go(Nav::page(Page::Languages), window, cx)
+                                })
+                                .ok();
+                            },
+                        )
+                    }),
+            ),
+        );
         sections
+    }
+
+    /// The language's server: the program Jig runs, or how to get it, with
+    /// Install when Jig can fetch it and Uninstall once it has.
+    fn server_section(&self, language: &'static str, cx: &Context<Self>) -> Section {
+        let section = Section::titled("Language server");
+        let Some(server) = lsp::server_for(language) else {
+            return section.footer(
+                "Jig knows no language server for it, so go to definition and completion use \
+                 words from the file.",
+            );
+        };
+        let shared = names(
+            &server
+                .languages
+                .iter()
+                .filter(|other| *other != language)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let footer = if shared.is_empty() {
+            "Go to definition, completion, problems, hover and rename.".to_string()
+        } else {
+            format!(
+                "Go to definition, completion, problems, hover and rename. It serves {shared} too."
+            )
+        };
+        section.footer(footer).row(self.server_row(server, cx))
+    }
+
+    fn server_row(&self, server: &'static Server, cx: &Context<Self>) -> Row {
+        let (status, ready) = lsp::install::status(server);
+        let job = format!("server-{}", server.name);
+        let fetch = self.installs.get(&job);
+        let (description, ok) = match fetch {
+            Some(Fetch::Running(doing)) => (doing.to_string(), true),
+            Some(Fetch::Done(done)) => (format!("{done} {status}"), ready),
+            Some(Fetch::Failed(error)) => (error.to_string(), false),
+            None => (status, ready),
+        };
+        let busy = matches!(fetch, Some(Fetch::Running(_)));
+        let installable = server.installable();
+        let removable = lsp::install::installed_by_jig(server);
+        let this = cx.entity().downgrade();
+        let id = server.name.as_str();
+        Row::new(format!("server-{id}"), id)
+            .description(description)
+            .warning(!ok)
+            .keywords(["language server", "lsp", "install", "uninstall", id])
+            .control(move |_, _| {
+                let job = |doing: &'static str, run: fn(&Server) -> anyhow::Result<()>, done| {
+                    let this = this.clone();
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        this.update(cx, |this, cx| this.server_job(server, doing, run, done, cx))
+                            .ok();
+                    }
+                };
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .when(installable && !ready && !removable, |row| {
+                        row.child(
+                            ui::button(format!("install-{id}"), "Install")
+                                .disabled(busy)
+                                .on_click(job("Installing…", lsp::install::install, "Installed.")),
+                        )
+                    })
+                    .when(removable, |row| {
+                        row.child(
+                            ui::button(format!("uninstall-{id}"), "Uninstall")
+                                .disabled(busy)
+                                .on_click(job(
+                                    "Moving to the Trash…",
+                                    lsp::install::uninstall,
+                                    "Moved to the Trash.",
+                                )),
+                        )
+                    })
+            })
+    }
+
+    /// Install or uninstall `server` in the background, then have open
+    /// files look for it again.
+    fn server_job(
+        &mut self,
+        server: &'static Server,
+        doing: &'static str,
+        run: fn(&Server) -> anyhow::Result<()>,
+        done: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let key = format!("server-{}", server.name);
+        if matches!(self.installs.get(&key), Some(Fetch::Running(_))) {
+            return;
+        }
+        self.installs
+            .insert(key.clone(), Fetch::Running(doing.into()));
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { run(server) })
+                .await;
+            this.update(cx, |this, cx| {
+                let fetch = match result {
+                    Ok(()) => Fetch::Done(done.into()),
+                    Err(error) => Fetch::Failed(format!("{error:#}").into()),
+                };
+                lsp::servers_changed(cx);
+                this.installs.insert(key, fetch);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// A debugger's switch, where Jig found it or what's missing, and
@@ -366,6 +602,6 @@ mod tests {
             names(&["typescript".into(), "tsx".into(), "javascript".into()]),
             "TypeScript, TSX and JavaScript"
         );
-        assert_eq!(names(&["zig".into()]), "zig");
+        assert_eq!(names(&["cobol".into()]), "cobol");
     }
 }

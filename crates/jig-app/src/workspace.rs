@@ -100,6 +100,7 @@ actions!(
         ToggleLineComment,
         FormatDocument,
         EditFormatters,
+        EditLanguageServers,
         MoveLineUp,
         MoveLineDown,
         DuplicateLine,
@@ -313,6 +314,10 @@ impl Workspace {
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();
+        cx.observe_global::<crate::lsp::ServersChanged>(|this, cx| {
+            this.reopen_in_servers(false, cx)
+        })
+        .detach();
         cx.observe_global::<crate::providers::Providers>(|this, cx| {
             this.reload_provider(cx);
             // Model lists arriving fill in an open palette's chip.
@@ -710,6 +715,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_line_comment))
             .on_action(cx.listener(Self::format_document))
             .on_action(cx.listener(Self::edit_formatters))
+            .on_action(cx.listener(Self::edit_language_servers))
             .on_action(cx.listener(Self::move_line_up))
             .on_action(cx.listener(Self::move_line_down))
             .on_action(cx.listener(Self::duplicate_line))

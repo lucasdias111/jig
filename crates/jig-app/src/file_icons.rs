@@ -44,7 +44,7 @@ fn logo(language: &str) -> Option<Logo> {
 }
 
 /// The logo for `path`'s language and the color to draw it in, or `None`
-/// for a file in no bundled language.
+/// for a file in no added language or one without a logo.
 pub fn for_path(
     path: &Path,
     settings: &LanguageSettings,
@@ -60,8 +60,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_bundled_language_has_a_logo() {
-        for language in languages::BUNDLED {
+    fn every_starter_language_has_a_logo() {
+        for language in languages::bundled()
+            .iter()
+            .filter(|language| language.starter)
+        {
             let logo =
                 logo(language.name).unwrap_or_else(|| panic!("{} has no logo", language.name));
             assert!(std::str::from_utf8(logo.svg).unwrap().starts_with("<svg"));

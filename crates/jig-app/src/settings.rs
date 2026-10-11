@@ -132,9 +132,12 @@ impl CommandSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LanguageSettings {
+    /// The languages in the list, by name; files in any other open as
+    /// plain text.
+    pub added: Vec<String>,
     /// Languages left unhighlighted, by name.
     pub off: Vec<String>,
     /// File extensions per language, as typed, replacing the built-in ones:
@@ -142,7 +145,33 @@ pub struct LanguageSettings {
     pub extensions: BTreeMap<String, String>,
 }
 
+impl Default for LanguageSettings {
+    /// The starters added, the rest left to add.
+    fn default() -> Self {
+        Self {
+            added: crate::languages::bundled()
+                .iter()
+                .filter(|language| language.starter)
+                .map(|language| language.name.to_string())
+                .collect(),
+            off: Vec::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+}
+
 impl LanguageSettings {
+    pub fn is_added(&self, name: &str) -> bool {
+        self.added.iter().any(|added| added == name)
+    }
+
+    pub fn set_added(&mut self, name: &str, added: bool) {
+        self.added.retain(|other| other != name);
+        if added {
+            self.added.push(name.to_string());
+        }
+    }
+
     pub fn is_off(&self, name: &str) -> bool {
         self.off.iter().any(|off| off == name)
     }

@@ -187,7 +187,7 @@ fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
         });
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
@@ -286,7 +286,7 @@ fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContex
     let main_path = dir.path().join("src/main.rs");
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);
@@ -380,7 +380,7 @@ fn cmd_click_to_definition(cx: &mut TestAppContext, padding: usize) {
     let main_path = dir.path().join("src/main.rs");
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);
@@ -495,7 +495,7 @@ fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
     let main_path = dir.path().join("src/main.rs");
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);

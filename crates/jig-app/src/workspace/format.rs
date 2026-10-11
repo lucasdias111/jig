@@ -21,7 +21,7 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
-use super::{EditFormatters, FormatDocument, Workspace};
+use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
 use crate::formatters::{self, Formatter};
 use crate::lsp::{Client, Encoding};
 use crate::{languages, settings, text_edits};
@@ -338,14 +338,42 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = formatters::user_path() else {
+        self.edit_user_file(
+            formatters::user_path(),
+            formatters::USER_TEMPLATE,
+            window,
+            cx,
+        );
+    }
+
+    /// Open `~/.config/jig/language-servers.toml`, starting it from the
+    /// template.
+    pub(super) fn edit_language_servers(
+        &mut self,
+        _: &EditLanguageServers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_user_file(languages::user_path(), languages::USER_TEMPLATE, window, cx);
+    }
+
+    /// Open one of the user's config files, writing `template` to it first
+    /// if it isn't there yet.
+    pub(super) fn edit_user_file(
+        &mut self,
+        path: Option<std::path::PathBuf>,
+        template: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = path else {
             return;
         };
         if !path.exists() {
             let created = path
                 .parent()
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, formatters::USER_TEMPLATE));
+                .and_then(|()| std::fs::write(&path, template));
             if let Err(error) = created {
                 self.show_error(
                     &format!("Couldn't create {}: {error}", path.display()),

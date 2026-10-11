@@ -44,7 +44,7 @@ fn problems_show_count_and_can_be_stepped_through(cx: &mut TestAppContext) {
         crate::lsp::fake_server(dir.path().to_path_buf(), |_, _| serde_json::Value::Null);
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
     let counts = |cx: &mut TestAppContext| {
@@ -215,7 +215,7 @@ fn with_fake_server(
     let (client, _seen) = crate::lsp::fake_server(dir.path().to_path_buf(), answer);
     let server = crate::lsp::server_for("rust").unwrap();
     let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(server.name, root, client, cx));
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
     (window, workspace, path, dir)

@@ -24,7 +24,9 @@ command = ["rustfmt", "--emit", "stdout", "--edition", "2021"]
 [[formatter]]
 key = "prettier"
 name = "Prettier"
-languages = ["typescript", "tsx", "javascript", "json", "markdown"]
+languages = [
+    "typescript", "tsx", "javascript", "json", "markdown", "css", "html", "yaml", "graphql",
+]
 command = ["prettier", "--stdin-filepath", "${file}"]
 
 [[formatter]]

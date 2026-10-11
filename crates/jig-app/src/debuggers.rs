@@ -91,15 +91,42 @@ pub struct Debugger {
     launch_program: Option<toml::Table>,
 }
 
+/// How to get a tool: one text, or one per system.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-enum Help {
+pub(crate) enum Help {
     Text(String),
     PerOs {
         macos: Option<String>,
         linux: Option<String>,
         default: Option<String>,
     },
+}
+
+impl Help {
+    /// The text for this system.
+    pub(crate) fn text(&self) -> String {
+        match self {
+            Help::Text(text) => text.clone(),
+            Help::PerOs {
+                macos,
+                linux,
+                default,
+            } => {
+                let specific = if cfg!(target_os = "macos") {
+                    macos
+                } else if cfg!(target_os = "linux") {
+                    linux
+                } else {
+                    &None
+                };
+                specific
+                    .clone()
+                    .or_else(|| default.clone())
+                    .unwrap_or_default()
+            }
+        }
+    }
 }
 
 impl Debugger {
@@ -131,24 +158,7 @@ impl Debugger {
     pub fn help(&self) -> String {
         match &self.help {
             None => format!("Jig couldn't find {}'s debugger.", self.name),
-            Some(Help::Text(text)) => text.clone(),
-            Some(Help::PerOs {
-                macos,
-                linux,
-                default,
-            }) => {
-                let specific = if cfg!(target_os = "macos") {
-                    macos
-                } else if cfg!(target_os = "linux") {
-                    linux
-                } else {
-                    &None
-                };
-                specific
-                    .clone()
-                    .or_else(|| default.clone())
-                    .unwrap_or_default()
-            }
+            Some(help) => help.text(),
         }
     }
 

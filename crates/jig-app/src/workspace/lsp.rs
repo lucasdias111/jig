@@ -34,6 +34,25 @@ impl Drop for TabLsp {
 }
 
 impl Workspace {
+    /// Open each tab's file in its language's server again: tabs without
+    /// one after a server is installed, or every tab when `all`, as when
+    /// languages change in Settings.
+    pub(super) fn reopen_in_servers(&mut self, all: bool, cx: &mut Context<Self>) {
+        for ix in 0..self.tabs.len() {
+            let tab = &self.tabs[ix];
+            let Some(path) = tab.document.path.clone() else {
+                continue;
+            };
+            if tab.lsp.is_some() && !all {
+                continue;
+            }
+            let language = tab.document.language(&self.settings.languages);
+            let text = tab.editor.text(cx);
+            self.tabs[ix].lsp = None;
+            self.tabs[ix].lsp = TabLsp::open(&path, language, &text, cx);
+        }
+    }
+
     /// The tab at `ix` was edited.
     pub(super) fn lsp_changed(&self, ix: usize, cx: &App) {
         let tab = &self.tabs[ix];
