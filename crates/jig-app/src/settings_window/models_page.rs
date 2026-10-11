@@ -141,10 +141,10 @@ impl SettingsWindow {
     fn check_row(&self, config: &Config, cx: &Context<Self>) -> Row {
         let this = cx.entity().downgrade();
         let can_test = config.quick_model().is_some();
-        let testing = matches!(self.check, Some(Fetch::Running));
+        let testing = matches!(self.check, Some(Fetch::Running(_)));
         let (description, ok) = match &self.check {
             None => ("Sends the Jig model one small request.".into(), true),
-            Some(Fetch::Running) => ("Testing…".into(), true),
+            Some(Fetch::Running(doing)) => (doing.clone(), true),
             Some(Fetch::Done(result)) => (result.clone(), true),
             Some(Fetch::Failed(error)) => (error.clone(), false),
         };
@@ -184,7 +184,7 @@ impl SettingsWindow {
             }
         };
         let key = providers::api_key(&provider, cx).map(|(key, _)| key);
-        self.check = Some(Fetch::Running);
+        self.check = Some(Fetch::Running("Testing…".into()));
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()

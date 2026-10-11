@@ -71,6 +71,10 @@ pub struct Debugger {
     adapter_id: Option<String>,
     check: Option<Vec<String>>,
     install: Option<String>,
+    /// What `install` puts in the debuggers folder, relative to it, for
+    /// Uninstall to move to the Trash.
+    #[serde(default)]
+    uninstall: Vec<String>,
     help: Option<Help>,
     /// How the commands it debugs start, as words.
     #[serde(default)]
@@ -589,6 +593,43 @@ fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What Jig installed of `debugger` that is still there: the `uninstall`
+/// paths that exist in the debuggers folder. Paths reaching outside it
+/// are ignored, so Uninstall can't remove anything else.
+pub fn installed_files(debugger: &Debugger) -> Vec<PathBuf> {
+    debuggers_dir()
+        .map(|dir| installed_in(debugger, &dir))
+        .unwrap_or_default()
+}
+
+fn installed_in(debugger: &Debugger, dir: &Path) -> Vec<PathBuf> {
+    debugger
+        .uninstall
+        .iter()
+        .map(Path::new)
+        .filter(|path| {
+            path.components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        })
+        .map(|path| dir.join(path))
+        .filter(|path| path.symlink_metadata().is_ok())
+        .collect()
+}
+
+/// Move what Jig installed of `debugger` to the Trash.
+pub fn uninstall(debugger: &Debugger) -> Result<()> {
+    let files = installed_files(debugger);
+    if files.is_empty() {
+        bail!(
+            "Jig didn't install {}, so there's nothing to remove.",
+            debugger.name
+        );
+    }
+    let result = trash::delete_all(&files).context("Couldn't move it to the Trash");
+    *CHECKS.lock().unwrap() = None;
+    result
+}
+
 /// A program by name: on the `PATH`, or in `${debuggers}/bin`. A path must
 /// exist.
 fn resolve_program(word: &str) -> Result<PathBuf, String> {
@@ -780,6 +821,29 @@ mod tests {
         );
         assert_eq!(registry.for_language("tsx").unwrap().key, "typescript");
         assert!(registry.for_language("toml").is_none());
+    }
+
+    #[test]
+    fn uninstall_only_reaches_into_the_debuggers_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("bin")).unwrap();
+        fs::write(dir.path().join("bin/dlv"), "").unwrap();
+        let debugger = parse(
+            r#"
+[[debugger]]
+key = "go"
+name = "Go"
+adapter = ["dlv"]
+uninstall = ["bin/dlv", "missing", "../outside", "/etc/hosts"]
+[debugger.launch]
+"#,
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(
+            installed_in(&debugger, dir.path()),
+            [dir.path().join("bin/dlv")]
+        );
     }
 
     #[test]

@@ -230,7 +230,8 @@ fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
 
 /// Work Settings started: installing something, or testing a model.
 enum Fetch<T> {
-    Running,
+    /// What's happening, e.g. "Installing…".
+    Running(SharedString),
     Done(T),
     Failed(SharedString),
 }
@@ -246,8 +247,9 @@ pub struct SettingsWindow {
     /// A masked key field per provider that takes a key, in `TEMPLATES`
     /// order. A key is saved as it's typed and never read back in.
     key_inputs: Vec<(&'static ProviderTemplate, Entity<InputState>)>,
-    /// From Install, per debugger or agent key.
-    installs: HashMap<String, Fetch<()>>,
+    /// From Install or Uninstall, per debugger or agent key, with what was
+    /// done.
+    installs: HashMap<String, Fetch<SharedString>>,
     /// From Test: how long the Jig model took to answer.
     check: Option<Fetch<SharedString>>,
     /// Why the last change to the providers didn't work.

@@ -4,10 +4,12 @@
 //! debuggers are at the foot of the list.
 
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::{Disableable as _, h_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{Disableable as _, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -211,18 +213,20 @@ impl SettingsWindow {
     }
 
     /// A debugger's switch, where Jig found it or what's missing, and
-    /// Install when Jig can fetch it.
+    /// Install when Jig can fetch it; once it's there, a menu to install
+    /// it again or move what Jig installed to the Trash.
     fn debugger_row(&self, debugger: Arc<Debugger>, cx: &Context<Self>) -> Row {
         let (status, ready) = debuggers::status(&debugger);
         let fetch = self.installs.get(&debugger.key);
         let (description, ok) = match fetch {
-            Some(Fetch::Running) => ("Installing…".to_string(), true),
-            Some(Fetch::Done(())) => (format!("Installed. {status}"), true),
+            Some(Fetch::Running(doing)) => (doing.to_string(), true),
+            Some(Fetch::Done(done)) => (format!("{done} {status}"), ready),
             Some(Fetch::Failed(error)) => (error.to_string(), false),
             None => (status, ready),
         };
-        let installing = matches!(fetch, Some(Fetch::Running));
+        let busy = matches!(fetch, Some(Fetch::Running(_)));
         let installable = debugger.installable();
+        let removable = !debuggers::installed_files(&debugger).is_empty();
         let this = cx.entity().downgrade();
         let key = debugger.key.clone();
         let (get, set) = (key.clone(), key.clone());
@@ -234,25 +238,58 @@ impl SettingsWindow {
         Row::new(format!("debug-{key}"), debugger.name.clone())
             .description(description)
             .warning(!ok)
-            .keywords(["debug", "debugger", "breakpoint", "install"])
+            .keywords(["debug", "debugger", "breakpoint", "install", "uninstall"])
             .control(move |window, cx| {
                 let this = this.clone();
                 let debugger = debugger.clone();
+                let id = debugger.key.clone();
+                let install = {
+                    let (this, debugger) = (this.clone(), debugger.clone());
+                    Rc::new(move |cx: &mut App| {
+                        this.update(cx, |this, cx| this.install(debugger.clone(), cx))
+                            .ok();
+                    })
+                };
                 h_flex()
-                    .gap_3()
+                    .gap_2()
                     .items_center()
-                    .when(installable, |row| {
+                    .when(installable && !ready && !removable, |row| {
+                        let install = install.clone();
                         row.child(
-                            ui::button(
-                                format!("install-{}", debugger.key),
-                                if ready { "Reinstall" } else { "Install" },
-                            )
-                            .when(ready, |button| button.ghost())
-                            .disabled(installing)
-                            .on_click(move |_, _, cx| {
-                                let debugger = debugger.clone();
-                                this.update(cx, |this, cx| this.install(debugger, cx)).ok();
-                            }),
+                            ui::button(format!("install-{id}"), "Install")
+                                .disabled(busy)
+                                .on_click(move |_, _, cx| install(cx)),
+                        )
+                    })
+                    .when((installable && ready) || removable, |row| {
+                        let install = install.clone();
+                        row.child(
+                            Button::new(SharedString::from(format!("manage-{id}")))
+                                .icon(IconName::Ellipsis)
+                                .ghost()
+                                .small()
+                                .disabled(busy)
+                                .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                                    let install = install.clone();
+                                    let (this, debugger) = (this.clone(), debugger.clone());
+                                    menu.when(installable, |menu| {
+                                        menu.item(
+                                            PopupMenuItem::new("Reinstall")
+                                                .on_click(move |_, _, cx| install(cx)),
+                                        )
+                                    })
+                                    .when(removable, |menu| {
+                                        menu.item(PopupMenuItem::new("Uninstall").on_click(
+                                            move |_, _, cx| {
+                                                let debugger = debugger.clone();
+                                                this.update(cx, |this, cx| {
+                                                    this.uninstall(debugger, cx)
+                                                })
+                                                .ok();
+                                            },
+                                        ))
+                                    })
+                                }),
                         )
                     })
                     .child(switch(window, cx))
@@ -262,21 +299,49 @@ impl SettingsWindow {
     /// Run the debugger's install command in the background; turn it on
     /// once it's there.
     fn install(&mut self, debugger: Arc<Debugger>, cx: &mut Context<Self>) {
-        if matches!(self.installs.get(&debugger.key), Some(Fetch::Running)) {
+        self.debugger_job(
+            debugger,
+            "Installing…",
+            |debugger| debuggers::install(debugger).map(|()| "Installed."),
+            cx,
+        );
+    }
+
+    /// Move what Jig installed of the debugger to the Trash; turn it off
+    /// unless another copy is still found.
+    fn uninstall(&mut self, debugger: Arc<Debugger>, cx: &mut Context<Self>) {
+        self.debugger_job(
+            debugger,
+            "Moving to the Trash…",
+            |debugger| debuggers::uninstall(debugger).map(|()| "Moved to the Trash."),
+            cx,
+        );
+    }
+
+    fn debugger_job(
+        &mut self,
+        debugger: Arc<Debugger>,
+        doing: &'static str,
+        job: fn(&Debugger) -> anyhow::Result<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.installs.get(&debugger.key), Some(Fetch::Running(_))) {
             return;
         }
-        self.installs.insert(debugger.key.clone(), Fetch::Running);
+        self.installs
+            .insert(debugger.key.clone(), Fetch::Running(doing.into()));
         cx.spawn(async move |this, cx| {
-            let installing = debugger.clone();
+            let working = debugger.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { debuggers::install(&installing) })
+                .spawn(async move { job(&working) })
                 .await;
             this.update(cx, |this, cx| {
                 let fetch = match result {
-                    Ok(()) => {
-                        settings::update(cx, |s| s.debugging.set_enabled(&debugger.key, true));
-                        Fetch::Done(())
+                    Ok(done) => {
+                        let (_, ready) = debuggers::status(&debugger);
+                        settings::update(cx, |s| s.debugging.set_enabled(&debugger.key, ready));
+                        Fetch::Done(done.into())
                     }
                     Err(error) => Fetch::Failed(format!("{error:#}").into()),
                 };

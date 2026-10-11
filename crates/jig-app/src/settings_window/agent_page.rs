@@ -69,14 +69,14 @@ impl SettingsWindow {
     fn install_agent_row(&self, agent: Arc<Agent>, cx: &Context<Self>) -> Row {
         let this = cx.entity().downgrade();
         let fetch = self.installs.get(&install_key(&agent));
-        let installing = matches!(fetch, Some(Fetch::Running));
+        let installing = matches!(fetch, Some(Fetch::Running(_)));
         let (description, ok) = match fetch {
             None => (
                 format!("Into Jig's agents folder, with {}.", agent.name),
                 true,
             ),
-            Some(Fetch::Running) => ("Installing…".to_string(), true),
-            Some(Fetch::Done(())) => ("Installed.".to_string(), true),
+            Some(Fetch::Running(doing)) => (doing.to_string(), true),
+            Some(Fetch::Done(done)) => (done.to_string(), true),
             Some(Fetch::Failed(error)) => (error.to_string(), false),
         };
         let id = format!("install-agent-{}", agent.key);
@@ -99,10 +99,11 @@ impl SettingsWindow {
 
     fn install_agent(&mut self, agent: Arc<Agent>, cx: &mut Context<Self>) {
         let key = install_key(&agent);
-        if matches!(self.installs.get(&key), Some(Fetch::Running)) {
+        if matches!(self.installs.get(&key), Some(Fetch::Running(_))) {
             return;
         }
-        self.installs.insert(key.clone(), Fetch::Running);
+        self.installs
+            .insert(key.clone(), Fetch::Running("Installing…".into()));
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -110,7 +111,7 @@ impl SettingsWindow {
                 .await;
             this.update(cx, |this, cx| {
                 let fetch = match result {
-                    Ok(()) => Fetch::Done(()),
+                    Ok(()) => Fetch::Done("Installed.".into()),
                     Err(error) => Fetch::Failed(format!("{error:#}").into()),
                 };
                 this.installs.insert(key, fetch);
