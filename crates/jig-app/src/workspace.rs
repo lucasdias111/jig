@@ -313,8 +313,12 @@ impl Workspace {
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();
-        cx.observe_global::<crate::providers::Providers>(|this, cx| this.reload_provider(cx))
-            .detach();
+        cx.observe_global::<crate::providers::Providers>(|this, cx| {
+            this.reload_provider(cx);
+            // Model lists arriving fill in an open palette's chip.
+            this.refresh_palette_models(cx);
+        })
+        .detach();
         cx.observe_global::<crate::lsp::diagnostics::Diagnostics>(Self::problems_reported)
             .detach();
         // A running configuration would outlive Jig otherwise.
