@@ -16,7 +16,9 @@ fn the_agent_conversation_moves_by_its_header(cx: &mut TestAppContext) {
         .expect("the conversation is open");
     let before = vcx.update(|_, cx| workspace.read(cx).chat.as_ref().unwrap().anchor);
 
-    let (from, by) = (header.center(), gpui_kit::point(px(60.), px(90.)));
+    // By its title: the buttons at its end take their own presses.
+    let from = gpui_kit::point(header.left() + px(12.), header.center().y);
+    let by = gpui_kit::point(px(60.), px(90.));
     let none = gpui_kit::Modifiers::none();
     vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, none);
     for i in 1..=5 {
@@ -412,6 +414,8 @@ fn the_agent_picked_in_command_k_runs_the_next_conversation(cx: &mut TestAppCont
             let palette = this.palette.as_ref().unwrap().view.clone();
             let choice = jig_commands::ModelChoice {
                 agent: Some("claude-code".into()),
+                group: "Claude Code".into(),
+                name: "Opus".into(),
                 model: Some("opus".into()),
                 label: "Claude Code · Opus".into(),
             };
@@ -672,4 +676,83 @@ fn chat_bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option
             .as_ref()
             .map(|chat| chat.bubble.clone())
     })
+}
+
+/// Claude Code chosen in Settings, with the models it said it offers.
+fn with_claude_code(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::settings::update(cx, |s| s.agent.using = "claude-code".into());
+        crate::agents::remember_models(
+            "claude-code",
+            jig_ai::acp::AgentModels {
+                config_id: "model".into(),
+                current: "default".into(),
+                options: vec![
+                    ("default".into(), "Default (recommended)".into()),
+                    ("opus".into(), "Opus 5.5".into()),
+                ],
+            },
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn command_k_offers_claude_codes_models_in_agent_mode(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    with_claude_code(cx);
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-k", cx);
+    });
+    step(cx, window, |window, cx| window.press("tab", cx));
+    let labels = cx.update(|cx| {
+        let (_, agent) = workspace.read(cx).model_menus(cx);
+        agent
+            .choices
+            .iter()
+            .map(|choice| choice.label.clone())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        labels.iter().any(|label| label == "Claude Code · Opus 5.5"),
+        "{labels:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_conversation_s_header_switches_its_model(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    with_claude_code(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let chip = vcx
+        .debug_bounds("agent-chat-model")
+        .expect("the model shows in the header");
+    vcx.simulate_click(chip.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    let opus = vcx
+        .debug_bounds("agent-model-1")
+        .expect("its models are listed");
+    vcx.simulate_click(opus.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    vcx.update(|_, cx| {
+        let agent = workspace
+            .read(cx)
+            .chat
+            .as_ref()
+            .unwrap()
+            .agent
+            .as_ref()
+            .unwrap();
+        assert_eq!(agent.pick.as_ref().unwrap().model.as_deref(), Some("opus"));
+        assert_eq!(
+            agent.entries.last(),
+            Some(&ChatEntry::Note("Now on Opus 5.5.".into()))
+        );
+    });
 }

@@ -59,6 +59,8 @@ fn read(path: Option<&PathBuf>) -> Result<Config, String> {
 
 pub fn init(cx: &mut App) {
     cx.set_global(Providers::new(Config::user_path(), KeyStore::system()));
+    // So ⌘K and the agent's header can list them before Settings opens.
+    load_all_models(true, cx);
 }
 
 /// Read the file again, after it was edited by hand.
@@ -124,6 +126,15 @@ pub fn build_model(id: &str, cx: &App) -> Result<Arc<dyn Provider>, String> {
 /// Every model the connected providers offer, as `provider/model` and a
 /// label like "Anthropic · claude-sonnet-5-5".
 pub fn offered(cx: &App) -> Vec<(String, String)> {
+    offered_by_provider(cx)
+        .into_iter()
+        .map(|(id, provider, model)| (id, format!("{provider} · {model}")))
+        .collect()
+}
+
+/// Every model the connected providers offer, as `provider/model`, the
+/// provider as Settings names it, and the model.
+pub fn offered_by_provider(cx: &App) -> Vec<(String, String, String)> {
     let Ok(config) = config(cx) else {
         return Vec::new();
     };
@@ -135,7 +146,8 @@ pub fn offered(cx: &App) -> Vec<(String, String)> {
             for model in models {
                 offered.push((
                     format!("{}/{model}", provider.name),
-                    format!("{label} · {model}"),
+                    label.to_string(),
+                    model,
                 ));
             }
         }

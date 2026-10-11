@@ -64,6 +64,11 @@ pub struct PastConversation {
 pub struct ModelChoice {
     /// The agent's key, in Agent mode.
     pub agent: Option<String>,
+    /// What it's listed under: the provider in Jig mode, the agent in Agent
+    /// mode, e.g. "Claude Code".
+    pub group: String,
+    /// The model alone, e.g. "Opus 5.5".
+    pub name: String,
     /// `provider/model` for Jig mode and OpenCode, the agent's own name
     /// for other agents; `None` for the agent's default.
     pub model: Option<String>,
@@ -82,6 +87,25 @@ impl ModelMenu {
     fn current(&self) -> Option<&ModelChoice> {
         self.choices.get(self.current?)
     }
+
+    /// The providers or agents, in the order they're listed.
+    fn groups(&self) -> Vec<&str> {
+        let mut groups: Vec<&str> = Vec::new();
+        for choice in &self.choices {
+            if !groups.contains(&choice.group.as_str()) {
+                groups.push(&choice.group);
+            }
+        }
+        groups
+    }
+}
+
+/// Picking a model: first the provider or agent, then its models.
+struct Picking {
+    /// The list query to restore after.
+    query: String,
+    /// The provider or agent chosen, once one is.
+    group: Option<String>,
 }
 
 /// An OpenCode command or skill, run with "/name".
@@ -100,6 +124,8 @@ enum Row {
     Command(usize),
     /// "/jig", listed with the commands.
     Jigs,
+    /// A provider or agent to pick models from, by its place in the list.
+    Group(usize),
     /// A model to pick, while picking one.
     Model(usize),
 }
@@ -111,6 +137,7 @@ impl Row {
             Row::Preset(_) => "Jigs",
             Row::Conversation(_) => "Conversations",
             Row::Command(_) | Row::Jigs => "Commands",
+            Row::Group(_) => "Providers",
             Row::Model(_) => "Models",
         }
     }
@@ -149,8 +176,8 @@ pub struct CommandPalette {
     /// The chip's models, per mode.
     jig_models: ModelMenu,
     agent_models: ModelMenu,
-    /// Picking a model; the list query to restore after.
-    picking: Option<String>,
+    /// Picking a model.
+    picking: Option<Picking>,
     _subscription: Subscription,
 }
 
@@ -229,6 +256,16 @@ impl CommandPalette {
         self
     }
 
+    /// New lists for the chip, e.g. once a provider's models arrive.
+    pub fn set_models(&mut self, jig: ModelMenu, agent: ModelMenu, cx: &mut Context<Self>) {
+        self.jig_models = jig;
+        self.agent_models = agent;
+        if self.picking.is_some() {
+            self.refilter(cx);
+        }
+        cx.notify();
+    }
+
     /// The models of the mode on screen.
     fn models(&self) -> &ModelMenu {
         if self.agent {
@@ -238,33 +275,72 @@ impl CommandPalette {
         }
     }
 
-    /// ⌥M or the chip: list the models in place of the jigs.
+    /// ⌥M or the chip: list the providers (or agents) in place of the
+    /// jigs, then the one picked's models. With only one, its models.
     fn start_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.picking.is_some() || self.note.is_some() || self.models().choices.is_empty() {
             return;
         }
-        self.picking = Some(self.query(cx));
+        let groups = self.models().groups();
+        let group = (groups.len() == 1).then(|| groups[0].to_string());
+        self.picking = Some(Picking {
+            query: self.query(cx),
+            group,
+        });
+        self.show_picking_step(window, cx);
+    }
+
+    /// The step on screen, with the input emptied and the one in use
+    /// highlighted.
+    fn show_picking_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(picking) = &self.picking else {
+            return;
+        };
+        let placeholder = match (&picking.group, self.agent) {
+            (Some(group), _) => format!("Pick a {group} model…"),
+            (None, true) => "Pick an agent, or type a model…".to_string(),
+            (None, false) => "Pick a provider, or type a model…".to_string(),
+        };
         self.input.update(cx, |input, cx| {
             input.set_value("", window, cx);
-            input.set_placeholder("Pick a model…", window, cx);
+            input.set_placeholder(placeholder, window, cx);
         });
         self.refilter(cx);
-        // Start on the model in use.
-        if let Some(current) = self.models().current
-            && let Some(at) = self.rows.iter().position(|row| *row == Row::Model(current))
-        {
+        let in_use = self.models().current.and_then(|current| {
+            let choice = &self.models().choices[current];
+            let groups = self.models().groups();
+            Some(match &self.picking.as_ref()?.group {
+                Some(_) => Row::Model(current),
+                None => Row::Group(groups.iter().position(|group| *group == choice.group)?),
+            })
+        });
+        if let Some(at) = in_use.and_then(|row| self.rows.iter().position(|r| *r == row)) {
             self.selected = at;
         }
         cx.notify();
     }
 
+    /// Back from the models to the providers, if there are several. False
+    /// when there's no step to go back to.
+    fn picking_back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let several = self.models().groups().len() > 1;
+        match self.picking.as_mut() {
+            Some(picking) if picking.group.is_some() && several => {
+                picking.group = None;
+                self.show_picking_step(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn stop_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(query) = self.picking.take() else {
+        let Some(picking) = self.picking.take() else {
             return;
         };
         let placeholder = Self::list_placeholder(self.has_selection, self.agent);
         self.input.update(cx, |input, cx| {
-            input.set_value(query, window, cx);
+            input.set_value(picking.query, window, cx);
             input.set_placeholder(placeholder, window, cx);
         });
         self.refilter(cx);
@@ -279,21 +355,46 @@ impl CommandPalette {
         }
     }
 
-    /// Picking: the models whose label has every typed word.
+    /// Picking: the providers (or agents) whose name has the typed words,
+    /// then the models that do, so a model can be typed straight away; or,
+    /// once one is picked, its models.
     fn filter_models(&mut self, query: &str) {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let has = |text: &str| {
+            let text = text.to_lowercase();
+            words.iter().all(|word| text.contains(word))
+        };
         self.inline_note = None;
-        self.rows = self
-            .models()
-            .choices
-            .iter()
-            .enumerate()
-            .filter(|(_, choice)| {
-                let label = choice.label.to_lowercase();
-                words.iter().all(|word| label.contains(word))
-            })
-            .map(|(index, _)| Row::Model(index))
-            .collect();
+        let group = self
+            .picking
+            .as_ref()
+            .and_then(|picking| picking.group.clone());
+        let menu = self.models();
+        self.rows = match group {
+            Some(group) => menu
+                .choices
+                .iter()
+                .enumerate()
+                .filter(|(_, choice)| choice.group == group && has(&choice.name))
+                .map(|(index, _)| Row::Model(index))
+                .collect(),
+            None => {
+                let groups: Vec<Row> = menu
+                    .groups()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| has(group))
+                    .map(|(index, _)| Row::Group(index))
+                    .collect();
+                let models = menu
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, choice)| !words.is_empty() && has(&choice.label))
+                    .map(|(index, _)| Row::Model(index));
+                groups.into_iter().chain(models).collect()
+            }
+        };
         self.selected = 0;
     }
 
@@ -646,6 +747,13 @@ impl CommandPalette {
                     arguments,
                 })
             }
+            Some(Row::Group(index)) => {
+                let group = self.models().groups()[*index].to_string();
+                if let Some(picking) = self.picking.as_mut() {
+                    picking.group = Some(group);
+                }
+                self.show_picking_step(window, cx);
+            }
             Some(Row::Model(index)) => {
                 let index = *index;
                 let choice = self.models().choices[index].clone();
@@ -751,7 +859,9 @@ impl CommandPalette {
     fn on_backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.picking.is_some() && self.query(cx).is_empty() {
             cx.stop_propagation();
-            self.stop_picking(window, cx);
+            if !self.picking_back(window, cx) {
+                self.stop_picking(window, cx);
+            }
         } else if self.note.is_some() && self.query(cx).is_empty() {
             cx.stop_propagation();
             self.back_to_list(window, cx);
@@ -936,14 +1046,40 @@ impl CommandPalette {
                 (format!("/{}", command.name).into(), kind.into())
             }
             Row::Jigs => (JIG_PREFIX.into(), "run a jig on the agent".into()),
-            Row::Model(index) => (
-                self.models().choices[*index].label.clone().into(),
-                if self.models().current == Some(*index) {
-                    "in use".into()
-                } else {
-                    "".into()
-                },
-            ),
+            Row::Group(index) => {
+                let menu = self.models();
+                let group = menu.groups()[*index];
+                let in_use = menu.current().is_some_and(|choice| choice.group == group);
+                let count = menu
+                    .choices
+                    .iter()
+                    .filter(|choice| choice.group == group)
+                    .count();
+                let detail = match (in_use, count) {
+                    (true, _) => "in use".to_string(),
+                    (false, 1) => "1 model".to_string(),
+                    (false, count) => format!("{count} models"),
+                };
+                (group.to_string().into(), detail.into())
+            }
+            Row::Model(index) => {
+                let menu = self.models();
+                let choice = &menu.choices[*index];
+                // Alone under its provider; in full among search results.
+                let within = self
+                    .picking
+                    .as_ref()
+                    .is_some_and(|picking| picking.group.is_some());
+                let label = if within { &choice.name } else { &choice.label };
+                (
+                    label.clone().into(),
+                    if menu.current == Some(*index) {
+                        "in use".into()
+                    } else {
+                        "".into()
+                    },
+                )
+            }
         };
         // What a command does, after its name.
         let description = match row {
@@ -1090,7 +1226,10 @@ impl Render for CommandPalette {
                     // prompt, and the jigs, commands or conversations below.
                     let section = (index == first
                         || self.rows[index - 1].section() != row.section())
-                    .then(|| row.section());
+                    .then(|| match row {
+                        Row::Group(_) if self.agent => "Agents",
+                        _ => row.section(),
+                    });
                     let header = section.map(|title| {
                         div()
                             .px_2p5()
@@ -1120,8 +1259,14 @@ impl Render for CommandPalette {
             .render_chip(accent, cx)
             .map(IntoElement::into_any_element);
         let theme = cx.theme();
-        let footer = if self.picking.is_some() {
-            "↩ use it in this window · esc back".to_string()
+        let footer = if let Some(picking) = &self.picking {
+            match (&picking.group, self.rows.get(self.selected)) {
+                (None, Some(Row::Group(_))) => "↩ its models · esc back".to_string(),
+                (Some(_), _) if self.models().groups().len() > 1 => {
+                    "↩ use it in this window · ⌫ back · esc done".to_string()
+                }
+                _ => "↩ use it in this window · esc back".to_string(),
+            }
         } else if agent {
             match self.rows.get(self.selected) {
                 Some(Row::Conversation(_)) => "Picks up this conversation where it left off".into(),
@@ -1835,43 +1980,61 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_chip_picks_a_model_for_the_mode_on_screen(cx: &mut TestAppContext) {
+    fn the_chip_picks_a_provider_then_its_model(cx: &mut TestAppContext) {
         let (window, host) = open(cx, true);
-        let choice = |agent: Option<&str>, label: &str| super::ModelChoice {
+        let choice = |agent: Option<&str>, group: &str, name: &str| super::ModelChoice {
             agent: agent.map(str::to_string),
-            model: Some(label.to_lowercase()),
-            label: label.into(),
+            group: group.into(),
+            name: name.into(),
+            model: Some(name.to_lowercase()),
+            label: format!("{group} · {name}"),
         };
         cx.update(|cx| {
             let palette = host.read(cx).palette.clone();
             palette.update(cx, |palette, _| {
                 palette.jig_models = super::ModelMenu {
-                    choices: vec![choice(None, "Haiku"), choice(None, "Sonnet")],
+                    choices: vec![
+                        choice(None, "Anthropic", "Haiku"),
+                        choice(None, "Anthropic", "Sonnet"),
+                        choice(None, "Ollama", "Qwen"),
+                    ],
                     current: Some(0),
                 };
                 palette.agent_models = super::ModelMenu {
-                    choices: vec![choice(Some("claude-code"), "Claude Code · Opus")],
+                    choices: vec![choice(Some("claude-code"), "Claude Code", "Opus")],
                     current: Some(0),
                 };
             })
         });
         step(cx, window, |window, cx| window.input("explain", cx));
         step(cx, window, |window, cx| window.press("alt-m", cx));
+        assert_eq!(query(cx, &host), "", "the typed text is set aside");
+        assert_eq!(
+            rows(cx, &host),
+            [super::Row::Group(0), super::Row::Group(1)]
+        );
+        // Enter on Anthropic lists its models, ⌫ goes back.
+        step(cx, window, |window, cx| window.press("enter", cx));
         assert_eq!(
             rows(cx, &host),
             [super::Row::Model(0), super::Row::Model(1)]
         );
-        assert_eq!(query(cx, &host), "", "the typed text is set aside");
-        step(cx, window, |window, cx| window.input("son", cx));
-        assert_eq!(rows(cx, &host), [super::Row::Model(1)]);
+        step(cx, window, |window, cx| window.press("backspace", cx));
+        assert_eq!(
+            rows(cx, &host),
+            [super::Row::Group(0), super::Row::Group(1)]
+        );
+        // A model can be typed straight away too.
+        step(cx, window, |window, cx| window.input("qwen", cx));
+        assert_eq!(rows(cx, &host), [super::Row::Model(2)]);
         step(cx, window, |window, cx| window.press("enter", cx));
         assert_eq!(
             cx.update(|cx| host.read(cx).other.clone()),
-            ["model Sonnet"]
+            ["model Ollama · Qwen"]
         );
         assert_eq!(query(cx, &host), "explain", "and back after");
         assert!(events(cx, &host).is_empty(), "nothing ran");
-        // Agent mode lists the agents with their models.
+        // With one agent, its models come at once.
         step(cx, window, |window, cx| window.press("tab", cx));
         step(cx, window, |window, cx| window.press("alt-m", cx));
         assert_eq!(rows(cx, &host), [super::Row::Model(0)]);

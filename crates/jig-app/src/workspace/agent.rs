@@ -24,7 +24,7 @@ use jig_ai::agent::{
 };
 use jig_ai::harness::Session;
 use jig_commands::{
-    AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus,
+    AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus,
     CommandPalette, Conversation, LiveStep, ModelChoice, ModelMenu, PastConversation,
 };
 use jig_editor::EditorHandle;
@@ -104,9 +104,12 @@ pub(super) struct AgentRun {
     loading: bool,
     /// The last turn asked, to try again after signing in.
     last_input: Option<TurnInput>,
-    /// The agent and model picked in ⌘K when it started; `None` follows
-    /// the settings. The conversation keeps them.
+    /// The agent and model it runs on: ⌘K's pick when it started, else the
+    /// settings'. The conversation keeps its agent; its header changes the
+    /// model.
     pub(super) pick: Option<crate::agent::Pick>,
+    /// The header's list of models is open.
+    models_open: bool,
     /// The agent wants the user to sign in first.
     sign_in: Option<PendingSignIn>,
     /// Kinds of request (their titles, e.g. "Run a command") allowed for
@@ -129,7 +132,7 @@ pub(super) struct AgentRun {
     directory: PathBuf,
     /// The project's folder name, for its header.
     project: String,
-    entries: Vec<ChatEntry>,
+    pub(super) entries: Vec<ChatEntry>,
     /// The reply box, shown between turns.
     pub(super) input: Entity<InputState>,
     scroll: ScrollHandle,
@@ -362,16 +365,19 @@ impl Workspace {
     /// agent with its models (OpenCode's from the providers, the others' as
     /// they last said).
     pub(super) fn model_menus(&self, cx: &App) -> (ModelMenu, ModelMenu) {
-        let offered = crate::providers::offered(cx);
+        let offered = crate::providers::offered_by_provider(cx);
         let config = crate::providers::config(cx).ok();
 
+        // Jig mode: under each provider, its models.
         let mut jig = ModelMenu {
             choices: offered
                 .iter()
-                .map(|(id, label)| ModelChoice {
+                .map(|(id, provider, model)| ModelChoice {
                     agent: None,
+                    group: provider.clone(),
+                    name: model.clone(),
                     model: Some(id.clone()),
-                    label: label.clone(),
+                    label: format!("{provider} · {model}"),
                 })
                 .collect(),
             current: None,
@@ -381,9 +387,20 @@ impl Workspace {
             .clone()
             .or_else(|| config.as_ref().and_then(|config| config.quick_model()));
         if let Some(id) = in_use {
-            jig.current = Some(position_or_push(&mut jig.choices, None, Some(&id), &id));
+            let (provider, model) = id.split_once('/').unwrap_or(("", &id));
+            let provider = jig_ai::template_named(provider)
+                .map_or(provider.to_string(), |template| template.label.to_string());
+            jig.current = Some(position_or_push(
+                &mut jig.choices,
+                None,
+                Some(&id),
+                &provider,
+                model,
+            ));
         }
 
+        // Agent mode: under each agent, its models: OpenCode's from the
+        // providers, the others' as they last said.
         let picked = self.picked_agent(cx);
         let pick = self
             .agent_pick
@@ -396,7 +413,10 @@ impl Workspace {
                 continue;
             }
             let own: Vec<(String, String)> = match listed.kind {
-                crate::agents::Kind::OpenCode => offered.clone(),
+                crate::agents::Kind::OpenCode => offered
+                    .iter()
+                    .map(|(id, provider, model)| (id.clone(), format!("{provider} · {model}")))
+                    .collect(),
                 crate::agents::Kind::Acp => crate::agents::known_models(&listed.key)
                     .map(|models| models.options)
                     .unwrap_or_default(),
@@ -404,15 +424,19 @@ impl Workspace {
             if own.is_empty() {
                 agent.choices.push(ModelChoice {
                     agent: Some(listed.key.clone()),
+                    group: listed.name.clone(),
+                    name: "Default model".into(),
                     model: None,
                     label: listed.name.clone(),
                 });
             }
-            for (model, label) in own {
+            for (model, name) in own {
                 agent.choices.push(ModelChoice {
                     agent: Some(listed.key.clone()),
+                    group: listed.name.clone(),
+                    label: format!("{} · {name}", listed.name),
+                    name,
                     model: Some(model),
-                    label: format!("{} · {label}", listed.name),
                 });
             }
         }
@@ -420,12 +444,19 @@ impl Workspace {
             &mut agent.choices,
             Some(&pick.agent),
             pick.model.as_deref(),
-            &match &pick.model {
-                Some(model) => format!("{} · {model}", picked.name),
-                None => picked.name.clone(),
-            },
+            &picked.name,
+            pick.model.as_deref().unwrap_or("Default model"),
         ));
         (jig, agent)
+    }
+
+    /// The palette's lists again, as the providers' models arrive.
+    pub(super) fn refresh_palette_models(&self, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_ref().map(|palette| palette.view.clone()) else {
+            return;
+        };
+        let (jig, agent) = self.model_menus(cx);
+        palette.update(cx, |palette, cx| palette.set_models(jig, agent, cx));
     }
 
     /// ⌘K's chip picked `choice` for the window: Jig mode's model, or the
@@ -449,6 +480,97 @@ impl Workspace {
                 // Its conversations and commands, in place of the last agent's.
                 self.load_agent_catalog(Some(palette), window, cx);
             }
+        }
+        cx.notify();
+    }
+
+    /// What the open conversation can run on: its agent's models, each as
+    /// the model value to use, and as its header lists them.
+    fn conversation_models(&self, cx: &App) -> (Vec<Option<String>>, ChatModels) {
+        let Some(pick) = self
+            .chat
+            .as_ref()
+            .and_then(|chat| chat.agent.as_ref())
+            .and_then(|agent| agent.pick.clone())
+        else {
+            return (Vec::new(), ChatModels::default());
+        };
+        let open = self
+            .chat
+            .as_ref()
+            .and_then(|chat| chat.agent.as_ref())
+            .is_some_and(|agent| agent.models_open);
+        let agent = crate::agents::named(&pick.agent);
+        let listed: Vec<(String, String)> = match agent.kind {
+            crate::agents::Kind::OpenCode => crate::providers::offered(cx),
+            crate::agents::Kind::Acp => crate::agents::known_models(&agent.key)
+                .map(|models| models.options)
+                .unwrap_or_default(),
+        };
+        let mut values: Vec<Option<String>> = listed
+            .iter()
+            .map(|(value, _)| Some(value.clone()))
+            .collect();
+        let mut labels: Vec<String> = listed.into_iter().map(|(_, label)| label).collect();
+        // On its default, or on a model no longer listed: say so.
+        let in_use = pick
+            .model
+            .clone()
+            .or_else(|| crate::agents::known_models(&agent.key).map(|models| models.current));
+        let current = match values.iter().position(|value| *value == in_use) {
+            Some(at) => at,
+            None => {
+                values.push(in_use.clone());
+                labels.push(in_use.unwrap_or_else(|| "Default model".into()));
+                labels.len() - 1
+            }
+        };
+        (
+            values,
+            ChatModels {
+                options: labels,
+                current: Some(current),
+                open,
+            },
+        )
+    }
+
+    fn toggle_conversation_models(&mut self, cx: &mut Context<Self>) {
+        if let Some(agent) = self.chat.as_mut().and_then(|chat| chat.agent.as_mut()) {
+            agent.models_open = !agent.models_open;
+            cx.notify();
+        }
+    }
+
+    /// The header's model picked: the conversation goes on with it. An ACP
+    /// agent is switched now; OpenCode takes it with the next message.
+    fn pick_conversation_model(&mut self, index: usize, cx: &mut Context<Self>) {
+        let (values, models) = self.conversation_models(cx);
+        let Some(model) = values.get(index).cloned() else {
+            return;
+        };
+        let Some(agent) = self.chat.as_mut().and_then(|chat| chat.agent.as_mut()) else {
+            return;
+        };
+        agent.models_open = false;
+        let Some(pick) = agent.pick.as_mut() else {
+            return;
+        };
+        if pick.model == model {
+            return cx.notify();
+        }
+        pick.model = model.clone();
+        let label = models.options.get(index).cloned().unwrap_or_default();
+        agent
+            .entries
+            .push(ChatEntry::Note(format!("Now on {label}.")));
+        agent.scroll.scroll_to_bottom();
+        if let (Some(session), Some(model)) = (agent.session.clone(), model) {
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = session.use_model(&model);
+                })
+                .detach();
         }
         cx.notify();
     }
@@ -580,7 +702,12 @@ impl Workspace {
             queue: VecDeque::new(),
             loading: false,
             last_input: None,
-            pick: self.agent_pick.clone(),
+            pick: Some(
+                self.agent_pick
+                    .clone()
+                    .unwrap_or_else(|| crate::agent::Pick::from_settings(cx)),
+            ),
+            models_open: false,
             sign_in: None,
             always_allowed: Vec::new(),
             title: asked.clone(),
@@ -1393,6 +1520,11 @@ impl Workspace {
                 cx.listener(|this, event, _, cx| this.grab_agent_chat_corner(event, cx)),
             )
             .on_pin(cx.listener(|this, _, _, cx| this.toggle_agent_chat_pin(cx)))
+            .models(
+                self.conversation_models(cx).1,
+                cx.listener(|this, _, _, cx| this.toggle_conversation_models(cx)),
+                cx.listener(|this, index: &usize, _, cx| this.pick_conversation_model(*index, cx)),
+            )
             .on_show_edit(cx.listener(|this, _, window, cx| {
                 this.show_agent_edit(window, cx);
             }))
@@ -1935,12 +2067,13 @@ fn ago(now: SystemTime, then: SystemTime) -> String {
 }
 
 /// Where the choice for `agent` and `model` is in `choices`, adding it
-/// (as `label`) when it isn't listed, e.g. while models load.
+/// (under `group`, as `name`) when it isn't listed, e.g. while models load.
 fn position_or_push(
     choices: &mut Vec<ModelChoice>,
     agent: Option<&str>,
     model: Option<&str>,
-    label: &str,
+    group: &str,
+    name: &str,
 ) -> usize {
     let same_agent = |choice: &ModelChoice| choice.agent.as_deref() == agent;
     if let Some(at) = choices
@@ -1957,8 +2090,10 @@ fn position_or_push(
     }
     choices.push(ModelChoice {
         agent: agent.map(str::to_string),
+        group: group.to_string(),
+        name: name.to_string(),
         model: model.map(str::to_string),
-        label: label.to_string(),
+        label: format!("{group} · {name}"),
     });
     choices.len() - 1
 }

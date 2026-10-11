@@ -78,6 +78,16 @@ pub enum ChatStatus {
     Waiting,
 }
 
+/// The conversation's model, shown in its header and picked from there.
+#[derive(Clone, Debug, Default)]
+pub struct ChatModels {
+    /// Each model's label, e.g. "Opus 5.5".
+    pub options: Vec<String>,
+    pub current: Option<usize>,
+    /// The list is open.
+    pub open: bool,
+}
+
 /// What's dragged while the conversation is moved by its header.
 pub struct ChatDrag;
 
@@ -144,6 +154,9 @@ pub struct Conversation {
     on_option: Option<OptionHandler>,
     on_decide: Option<OptionHandler>,
     on_show_edit: Option<ClickHandler>,
+    models: Option<ChatModels>,
+    on_models: Option<ClickHandler>,
+    on_model: Option<OptionHandler>,
 }
 
 impl Conversation {
@@ -169,7 +182,24 @@ impl Conversation {
             on_option: None,
             on_decide: None,
             on_show_edit: None,
+            models: None,
+            on_models: None,
+            on_model: None,
         }
+    }
+
+    /// The models it can run on, picked from its header: `on_toggle` opens
+    /// and closes the list, `on_pick` gets the one picked.
+    pub fn models(
+        mut self,
+        models: ChatModels,
+        on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        on_pick: impl Fn(&usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.models = Some(models);
+        self.on_models = Some(Rc::new(on_toggle));
+        self.on_model = Some(Rc::new(on_pick));
+        self
     }
 
     /// Called when the edit under review is clicked, to show its file.
@@ -294,9 +324,70 @@ impl RenderOnce for Conversation {
                 // The spinner animates every frame, so this stays current.
                 |this, elapsed| this.child(format!("{elapsed}s")),
             )
+            .children(self.models.as_ref().and_then(|models| {
+                let label = models.options.get(models.current?)?.clone();
+                let on_toggle = self.on_models.clone();
+                let theme = cx.theme();
+                Some(
+                    h_flex()
+                        .id("agent-chat-model")
+                        .debug_selector(|| "agent-chat-model".into())
+                        .flex_none()
+                        .max_w(px(160.))
+                        .gap_0p5()
+                        .px_1()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.foreground.opacity(0.08)))
+                        .when(models.open, |this| {
+                            this.bg(accent.opacity(0.16)).text_color(accent)
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when_some(on_toggle, |this, on_toggle| {
+                            this.on_click(move |event, window, cx| on_toggle(event, window, cx))
+                        })
+                        .child(div().truncate().child(label))
+                        .child("▾"),
+                )
+            }))
             .child(crate::surface::lane_tag(true, cx))
             .child(history)
             .child(pin);
+        // The models, under the header while their list is open.
+        let model_list = self.models.filter(|models| models.open).map(|models| {
+            let on_pick = self.on_model.clone();
+            v_flex()
+                .gap_0p5()
+                .p_1()
+                .rounded(px(8.))
+                .bg(theme.foreground.opacity(0.04))
+                .children(
+                    models
+                        .options
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, option)| {
+                            let on_pick = on_pick.clone();
+                            let current = models.current == Some(index);
+                            h_flex()
+                                .id(("jig-agent-model", index))
+                                .debug_selector(move || format!("agent-model-{index}"))
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(5.))
+                                .justify_between()
+                                .cursor_pointer()
+                                .text_xs()
+                                .hover(|this| this.bg(accent.opacity(0.12)))
+                                .when(current, |this| this.text_color(accent))
+                                .child(option)
+                                .when(current, |this| this.child("in use"))
+                                .when_some(on_pick, |this, on_pick| {
+                                    this.on_click(move |_, window, cx| on_pick(&index, window, cx))
+                                })
+                        }),
+                )
+        });
 
         let transcript = v_flex()
             .id("jig-agent-transcript")
@@ -536,6 +627,7 @@ impl RenderOnce for Conversation {
             .text_size(px(13.))
             .border_color(accent.opacity(0.45))
             .child(header)
+            .children(model_list)
             .child(transcript)
             .child(div().h(px(1.)).bg(theme.foreground.opacity(0.08)))
             .child(status);
