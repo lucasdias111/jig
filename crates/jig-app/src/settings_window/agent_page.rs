@@ -54,7 +54,7 @@ impl SettingsWindow {
                 section.row(self.opencode_model_row(&config, cx))
             }
             (agents::Kind::OpenCode, Err(_)) => section,
-            (agents::Kind::Acp, _) => section.row(agent_model_row(&chosen)),
+            (agents::Kind::Acp, _) => section.row(self.agent_model_row(&chosen)),
         };
         if chosen.installable() && (!ready || self.installs.contains_key(&install_key(&chosen))) {
             section = section.row(self.install_agent_row(chosen, cx));
@@ -79,24 +79,36 @@ impl SettingsWindow {
         let this = cx.entity().downgrade();
         let fetch = self.installs.get(&install_key(&agent));
         let installing = matches!(fetch, Some(Fetch::Running(_)));
+        let found = agents::status(&agent).1;
         let (description, ok) = match fetch {
-            None => (
-                format!("Into Jig's agents folder, with {}.", agent.name),
-                true,
-            ),
+            None if agent.installs_into_jig() => ("Into Jig's agents folder.".to_string(), true),
+            None => (format!("With {}'s own installer.", agent.name), true),
             Some(Fetch::Running(doing)) => (doing.to_string(), true),
-            Some(Fetch::Done(done)) => (done.to_string(), true),
+            Some(Fetch::Done(done)) if found => (done.to_string(), true),
+            // Installed somewhere Jig doesn't look.
+            Some(Fetch::Done(_)) => (
+                format!(
+                    "Installed, but Jig can't find {}. Give its full path in agents.toml.",
+                    agent.name
+                ),
+                false,
+            ),
             Some(Fetch::Failed(error)) => (error.to_string(), false),
         };
         let id = format!("install-agent-{}", agent.key);
-        Row::new(id.clone(), format!("Install {}", agent.name))
+        let (title, button) = if found {
+            (format!("Reinstall {}", agent.name), "Reinstall")
+        } else {
+            (format!("Install {}", agent.name), "Install")
+        };
+        Row::new(id.clone(), title)
             .description(description)
             .warning(!ok)
             .keywords(["install", "agent"])
             .control(move |_, _| {
                 let this = this.clone();
                 let agent = agent.clone();
-                ui::button(id.clone(), "Install")
+                ui::button(id.clone(), button)
                     .disabled(installing)
                     .on_click(move |_, _, cx| {
                         let agent = agent.clone();
@@ -216,18 +228,76 @@ fn access_label(access: Access) -> &'static str {
     }
 }
 
-/// An ACP agent's model, from the ones it offers. Before it has ever run,
-/// Jig doesn't know them yet.
-fn agent_model_row(agent: &Agent) -> Row {
-    let Some(models) = agents::known_models(&agent.key) else {
-        return Row::note(
-            "agent-model",
-            format!(
-                "{} runs on its default model. Its models show here once it has run.",
-                agent.name
-            ),
+impl SettingsWindow {
+    /// Ask the chosen agent which models it offers, once, when Jig doesn't
+    /// know yet and it's installed.
+    pub(super) fn look_up_agent_models(&mut self, cx: &mut Context<Self>) {
+        let agent = agents::chosen(cx);
+        if agent.kind != agents::Kind::Acp
+            || self.model_lookups.contains_key(&agent.key)
+            || agents::known_models(&agent.key).is_some()
+            || !agents::status(&agent).1
+        {
+            return;
+        }
+        let pick = crate::agent::Pick {
+            agent: agent.key.clone(),
+            model: None,
+        };
+        let choice = crate::agent::choice_for(Some(&pick), cx);
+        let key = agent.key.clone();
+        self.model_lookups.insert(
+            key.clone(),
+            Fetch::Running(format!("Asking {} which models it offers…", agent.name).into()),
         );
-    };
+        cx.spawn(async move |this, cx| {
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        crate::agent::look_up_models(&choice.map_err(anyhow::Error::msg)?)
+                    })
+                    .await;
+            this.update(cx, |this, cx| {
+                let fetch = match result {
+                    Ok(Some(models)) => {
+                        agents::remember_models(&key, models);
+                        Fetch::Done("".into())
+                    }
+                    Ok(None) => Fetch::Failed("It doesn't let editors pick its model.".into()),
+                    Err(error) => {
+                        let error = format!("{error:#}");
+                        let line = error.lines().next().unwrap_or_default();
+                        Fetch::Failed(line.chars().take(160).collect::<String>().into())
+                    }
+                };
+                this.model_lookups.insert(key, fetch);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// An ACP agent's model, from the ones it offers, which Jig asks it
+    /// for the first time it's shown.
+    fn agent_model_row(&self, agent: &Agent) -> Row {
+        let Some(models) = agents::known_models(&agent.key) else {
+            let (text, failed) = match self.model_lookups.get(&agent.key) {
+                Some(Fetch::Running(doing)) => (doing.to_string(), false),
+                Some(Fetch::Failed(error)) => (
+                    format!("Couldn't ask {} for its models: {error}", agent.name),
+                    true,
+                ),
+                _ => (format!("{} runs on its default model.", agent.name), false),
+            };
+            return Row::note("agent-model", text).warning(failed);
+        };
+        agent_model_dropdown(agent, models)
+    }
+}
+
+/// The models `agent` offers, its default the one it's on.
+fn agent_model_dropdown(agent: &Agent, models: jig_ai::acp::AgentModels) -> Row {
     let options: Vec<(SharedString, SharedString)> = models
         .options
         .iter()

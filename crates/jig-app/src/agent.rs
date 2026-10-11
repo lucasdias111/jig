@@ -155,6 +155,20 @@ pub fn connect(choice: &Choice) -> anyhow::Result<Backend> {
     }
 }
 
+/// Ask an ACP agent which models it offers, by starting it and opening an
+/// empty conversation, which agents don't keep until something is said in
+/// it. Blocks, so call it off the main thread.
+pub fn look_up_models(choice: &Choice) -> anyhow::Result<Option<jig_ai::acp::AgentModels>> {
+    let Choice::Acp { .. } = choice else {
+        return Ok(None);
+    };
+    let backend = connect(choice)?;
+    if let Backend::Acp(connection) = &backend {
+        jig_ai::acp::Session::create(connection.clone(), &std::env::temp_dir(), None)?;
+    }
+    Ok(backend.models())
+}
+
 /// The OpenCode server started with `config`, starting one if needed.
 fn server(config: Option<&Value>) -> anyhow::Result<Arc<AgentServer>> {
     let mut server = SERVER.lock().unwrap_or_else(|error| error.into_inner());

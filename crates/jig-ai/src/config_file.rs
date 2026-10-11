@@ -12,6 +12,9 @@ use crate::config::{Config, ProviderKind, split_model};
 /// A major provider Settings offers to connect.
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderTemplate {
+    /// Words in the names of its small, fast models, best first: what Jig
+    /// mode starts on when this is the first provider connected.
+    pub fast: &'static [&'static str],
     pub label: &'static str,
     /// The provider's name in `config.toml`, and in `provider/model`.
     pub name: &'static str,
@@ -30,6 +33,7 @@ const fn template(
     api_key_env: Option<&'static str>,
 ) -> ProviderTemplate {
     ProviderTemplate {
+        fast: &[],
         label,
         name,
         kind,
@@ -39,59 +43,97 @@ const fn template(
     }
 }
 
+impl ProviderTemplate {
+    /// The model Jig mode starts on, from the ones it offers: the first
+    /// with the best of its `fast` words, else the first.
+    pub fn suggested_model(&self, models: &[String]) -> Option<String> {
+        self.fast
+            .iter()
+            .find_map(|word| {
+                models
+                    .iter()
+                    .find(|model| model.to_lowercase().contains(word))
+            })
+            .or_else(|| models.first())
+            .cloned()
+    }
+}
+
 /// The providers Settings lists. Almost every provider speaks one of the
 /// two formats, so these differ only in where they point.
 pub const TEMPLATES: &[ProviderTemplate] = &[
-    template(
-        "Anthropic",
-        "anthropic",
-        ProviderKind::Anthropic,
-        "https://api.anthropic.com/v1",
-        Some("ANTHROPIC_API_KEY"),
-    ),
-    template(
-        "OpenAI",
-        "openai",
-        ProviderKind::Openai,
-        "https://api.openai.com/v1",
-        Some("OPENAI_API_KEY"),
-    ),
-    template(
-        "Google Gemini",
-        "gemini",
-        ProviderKind::Openai,
-        "https://generativelanguage.googleapis.com/v1beta/openai",
-        Some("GEMINI_API_KEY"),
-    ),
-    template(
-        "OpenRouter",
-        "openrouter",
-        ProviderKind::Openai,
-        "https://openrouter.ai/api/v1",
-        Some("OPENROUTER_API_KEY"),
-    ),
-    template(
-        "Groq",
-        "groq",
-        ProviderKind::Openai,
-        "https://api.groq.com/openai/v1",
-        Some("GROQ_API_KEY"),
-    ),
-    template(
-        "Mistral",
-        "mistral",
-        ProviderKind::Openai,
-        "https://api.mistral.ai/v1",
-        Some("MISTRAL_API_KEY"),
-    ),
-    template(
-        "DeepSeek",
-        "deepseek",
-        ProviderKind::Openai,
-        "https://api.deepseek.com/v1",
-        Some("DEEPSEEK_API_KEY"),
-    ),
     ProviderTemplate {
+        fast: &["haiku"],
+        ..template(
+            "Anthropic",
+            "anthropic",
+            ProviderKind::Anthropic,
+            "https://api.anthropic.com/v1",
+            Some("ANTHROPIC_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["mini", "nano"],
+        ..template(
+            "OpenAI",
+            "openai",
+            ProviderKind::Openai,
+            "https://api.openai.com/v1",
+            Some("OPENAI_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["flash"],
+        ..template(
+            "Google Gemini",
+            "gemini",
+            ProviderKind::Openai,
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            Some("GEMINI_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["haiku", "flash", "mini"],
+        ..template(
+            "OpenRouter",
+            "openrouter",
+            ProviderKind::Openai,
+            "https://openrouter.ai/api/v1",
+            Some("OPENROUTER_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["instant", "8b"],
+        ..template(
+            "Groq",
+            "groq",
+            ProviderKind::Openai,
+            "https://api.groq.com/openai/v1",
+            Some("GROQ_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["small"],
+        ..template(
+            "Mistral",
+            "mistral",
+            ProviderKind::Openai,
+            "https://api.mistral.ai/v1",
+            Some("MISTRAL_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["chat"],
+        ..template(
+            "DeepSeek",
+            "deepseek",
+            ProviderKind::Openai,
+            "https://api.deepseek.com/v1",
+            Some("DEEPSEEK_API_KEY"),
+        )
+    },
+    ProviderTemplate {
+        fast: &["flash"],
         session_header: Some("x-opencode-session"),
         ..template(
             "OpenCode Go",
@@ -163,11 +205,19 @@ impl ConfigFile {
         Ok(config)
     }
 
+    /// The `[[provider]]` tables, started when there are none yet, as in
+    /// a file before the first provider is connected.
     fn providers(&mut self) -> Result<&mut ArrayOfTables> {
+        if !self.doc.contains_key("provider") {
+            self.doc.insert(
+                "provider",
+                toml_edit::Item::ArrayOfTables(ArrayOfTables::new()),
+            );
+        }
         self.doc
             .get_mut("provider")
             .and_then(|item| item.as_array_of_tables_mut())
-            .context("config.toml has no [[provider]] tables")
+            .context("config.toml's `provider` should be [[provider]] tables")
     }
 
     fn provider(&mut self, name: &str) -> Result<&mut Table> {
@@ -279,6 +329,29 @@ mod tests {
     }
 
     #[test]
+    fn a_first_provider_suggests_a_fast_model() {
+        let models = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        let anthropic = template_named("anthropic").unwrap();
+        assert_eq!(
+            anthropic
+                .suggested_model(&models(&["claude-opus-5-5", "claude-haiku-5-5"]))
+                .as_deref(),
+            Some("claude-haiku-5-5")
+        );
+        let ollama = template_named("ollama").unwrap();
+        assert_eq!(
+            ollama.suggested_model(&models(&["qwen3:8b"])).as_deref(),
+            Some("qwen3:8b")
+        );
+        assert_eq!(ollama.suggested_model(&[]), None);
+    }
+
+    #[test]
     fn edits_keep_the_users_comments() {
         let (_dir, path, mut file) = open_temp();
         connect(&mut file, "anthropic");
@@ -332,8 +405,10 @@ mod tests {
     fn removing_a_provider_clears_the_lanes_using_it() {
         let (_dir, _path, mut file) = open_temp();
         connect(&mut file, "anthropic");
+        connect(&mut file, "groq");
+        file.set_quick("groq/llama").unwrap();
         file.set_agent(Some("anthropic/claude-sonnet-5-5")).unwrap();
-        file.remove("opencode-go").unwrap();
+        file.remove("groq").unwrap();
         let config = file.save().unwrap();
         assert!(config.quick.is_none());
         assert!(config.quick().is_err());

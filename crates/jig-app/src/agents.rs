@@ -69,6 +69,14 @@ impl Agent {
         self.install.is_some()
     }
 
+    /// Its install puts it in Jig's agents folder, rather than wherever its
+    /// own installer does.
+    pub fn installs_into_jig(&self) -> bool {
+        self.install
+            .as_deref()
+            .is_some_and(|script| script.contains("${agents}"))
+    }
+
     /// The program, where Jig would start it from, or what's missing.
     fn program(&self) -> Result<PathBuf, String> {
         let word = self.command.first().ok_or("It has no command.")?;

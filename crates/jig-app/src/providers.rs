@@ -258,6 +258,28 @@ pub fn load_all_models(missing_only: bool, cx: &mut App) {
     }
 }
 
+/// Jig ships with no provider, so the first one connected starts Jig mode
+/// (and the agent, which follows it) on one of its fast models, once it
+/// has listed them. Never over a model already picked.
+fn start_on_a_model(name: &str, cx: &mut App) {
+    let Ok(config) = config(cx) else {
+        return;
+    };
+    if config.quick_model().is_some() {
+        return;
+    }
+    let Some(ModelList::Loaded(models)) = models(name, cx) else {
+        return;
+    };
+    let model = match jig_ai::template_named(name) {
+        Some(template) => template.suggested_model(&models),
+        None => models.first().cloned(),
+    };
+    if let Some(model) = model {
+        let _ = set_quick(&format!("{name}/{model}"), cx);
+    }
+}
+
 /// Fetch `name`'s model list after `pause`, replacing any fetch underway.
 fn load_models(name: &str, pause: Duration, cx: &mut App) {
     if !cx.has_global::<Providers>() {
@@ -290,6 +312,7 @@ fn load_models(name: &str, pause: Duration, cx: &mut App) {
                 providers.models.insert(name.clone(), list);
                 providers.loads.remove(&name);
             });
+            cx.update(|cx| start_on_a_model(&name, cx));
         }
     });
     cx.update_global::<Providers, _>(|providers, _| {
@@ -358,6 +381,40 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_first_provider_starts_jig_mode_on_a_fast_model(cx: &mut TestAppContext) {
+        let _dir = init_temp(cx);
+        cx.update(|cx| {
+            assert!(
+                config(cx).unwrap().providers.is_empty(),
+                "none to begin with"
+            );
+            connect(template_named("anthropic").unwrap(), None, cx).unwrap();
+            let listed = |names: &[&str]| {
+                ModelList::Loaded(names.iter().map(|name| name.to_string()).collect())
+            };
+            cx.update_global::<Providers, _>(|providers, _| {
+                providers.loads.clear();
+                providers.models.insert(
+                    "anthropic".into(),
+                    listed(&["claude-opus-5-5", "claude-haiku-5-5"]),
+                );
+            });
+            start_on_a_model("anthropic", cx);
+            assert_eq!(
+                config(cx).unwrap().quick_model().as_deref(),
+                Some("anthropic/claude-haiku-5-5")
+            );
+            // A model already picked stays.
+            set_quick("anthropic/claude-opus-5-5", cx).unwrap();
+            start_on_a_model("anthropic", cx);
+            assert_eq!(
+                config(cx).unwrap().quick_model().as_deref(),
+                Some("anthropic/claude-opus-5-5")
+            );
+        });
+    }
+
+    #[gpui_kit::test]
     fn the_agent_gets_its_provider_handed_to_opencode(cx: &mut TestAppContext) {
         let _dir = init_temp(cx);
         cx.update(|cx| {
@@ -367,6 +424,7 @@ mod tests {
             assert_eq!(target.model, "jig-ollama/qwen3:8b");
             assert!(target.config.unwrap()["provider"]["jig-ollama"].is_object());
 
+            connect(template_named("opencode-go").unwrap(), None, cx).unwrap();
             set_agent(Some("opencode-go/glm-5.3"), cx).unwrap();
             if std::env::var("OPENCODE_API_KEY").is_err() {
                 assert!(

@@ -301,6 +301,9 @@ pub(crate) fn search_path() -> &'static OsString {
                 "go/bin",
                 ".npm-global/bin",
                 ".bun/bin",
+                // OpenCode's installer, which adds it to the PATH only in
+                // `.zshrc` and the like.
+                ".opencode/bin",
             ] {
                 dirs.push(home.join(dir));
             }

@@ -250,6 +250,8 @@ pub struct SettingsWindow {
     /// From Install or Uninstall, per debugger or agent key, with what was
     /// done.
     installs: HashMap<String, Fetch<SharedString>>,
+    /// Agents asked which models they offer, by key, and how that went.
+    model_lookups: HashMap<String, Fetch<SharedString>>,
     /// From Test: how long the Jig model took to answer.
     check: Option<Fetch<SharedString>>,
     /// Why the last change to the providers didn't work.
@@ -337,6 +339,7 @@ impl SettingsWindow {
             commands_error: None,
             key_inputs,
             installs: HashMap::new(),
+            model_lookups: HashMap::new(),
             check: None,
             providers_error: None,
             color_pickers,
@@ -539,6 +542,9 @@ impl SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_color_pickers(window, cx);
+        if self.nav.page == Page::AgentMode {
+            self.look_up_agent_models(cx);
+        }
         let query = self.query(cx);
         let content = if query.is_empty() {
             let sections = self.sections(self.nav, cx);
@@ -789,7 +795,7 @@ mod tests {
             providers::set_agent(Some("anthropic/claude-sonnet-5-5"), cx).unwrap();
         });
         draw(handle, cx);
-        cx.update(|cx| providers::disconnect("opencode-go", cx).unwrap());
+        cx.update(|cx| providers::disconnect("ollama", cx).unwrap());
         draw(handle, cx);
     }
 

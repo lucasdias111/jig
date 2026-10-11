@@ -85,7 +85,7 @@ impl SettingsWindow {
         let quick = if quick_options.is_empty() {
             Row::note(
                 "no-models",
-                "Connect a provider under Providers, then pick its model here.",
+                "Connect a provider under Providers. Jig starts on one of its fast models, which you can change here.",
             )
         } else {
             let this = this.clone();

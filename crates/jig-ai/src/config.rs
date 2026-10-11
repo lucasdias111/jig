@@ -11,16 +11,17 @@ use serde::Deserialize;
 use crate::keys::{KeySource, KeyStore};
 use crate::{AnthropicProvider, OpenAiCompatProvider, Provider};
 
-const DEFAULT_CONFIG: &str = r#"
-quick = "opencode-go/qwen3.8-flash"
+/// No provider to begin with: Jig favours none. Connecting the first one
+/// in Settings picks a model for Jig mode.
+/// `quick` is there, empty, so the header stays above what Settings
+/// writes later.
+const DEFAULT_CONFIG: &str = "\
+# No provider yet: connect one in Settings > Providers.
+quick = \"\"
+";
 
-[[provider]]
-name = "opencode-go"
-kind = "anthropic"
-base_url = "https://opencode.ai/zen/go/v1"
-api_key_env = "OPENCODE_API_KEY"
-session_header = "x-opencode-session"
-"#;
+/// What to say while nothing is connected.
+const CONNECT_FIRST: &str = "Connect a provider in Settings > Providers first.";
 
 const CONFIG_HEADER: &str = "\
 # Jig's AI providers, and the model each lane uses as provider/model:
@@ -186,7 +187,8 @@ impl Config {
     /// The quick lane's `provider/model`: `quick`, or in older files the
     /// `default` provider and its `model`.
     pub fn quick_model(&self) -> Option<String> {
-        self.quick.clone().or_else(|| {
+        // An empty one is the built-in file's: none picked yet.
+        self.quick.clone().filter(|id| !id.is_empty()).or_else(|| {
             let provider = self.provider(self.default.as_deref()?)?;
             (!provider.model.is_empty()).then(|| format!("{}/{}", provider.name, provider.model))
         })
@@ -194,6 +196,9 @@ impl Config {
 
     /// The provider quick commands call, with its model filled in.
     pub fn quick(&self) -> Result<ProviderConfig> {
+        if self.providers.is_empty() {
+            bail!("{CONNECT_FIRST}");
+        }
         let id = self
             .quick_model()
             .context("Pick a model for Jig mode in Settings > Jig mode.")?;
@@ -207,6 +212,9 @@ impl Config {
             && let Some(id) = &self.agent_model
         {
             return Ok(AgentModel::OpenCode(id.clone()));
+        }
+        if self.providers.is_empty() {
+            bail!("{CONNECT_FIRST}");
         }
         let id = self
             .agent
@@ -367,9 +375,29 @@ kind = \"openai\"
 base_url = \"https://openrouter.ai/api/v1\"
 ";
 
+    /// OpenCode Go, as Settings connects it.
+    const OPENCODE_GO: &str = "\
+quick = \"opencode-go/qwen3.8-flash\"
+
+[[provider]]
+name = \"opencode-go\"
+kind = \"anthropic\"
+base_url = \"https://opencode.ai/zen/go/v1\"
+api_key_env = \"OPENCODE_API_KEY\"
+session_header = \"x-opencode-session\"
+";
+
     #[test]
-    fn built_in_uses_opencode_go() {
-        let quick = Config::built_in().quick().unwrap();
+    fn built_in_favours_no_provider() {
+        let config = Config::built_in();
+        assert!(config.providers.is_empty());
+        assert_eq!(config.quick().unwrap_err().to_string(), CONNECT_FIRST);
+        assert_eq!(config.agent().unwrap_err().to_string(), CONNECT_FIRST);
+    }
+
+    #[test]
+    fn a_provider_fills_in_its_defaults() {
+        let quick = Config::parse(OPENCODE_GO).unwrap().quick().unwrap();
         assert_eq!(quick.name, "opencode-go");
         assert_eq!(quick.model, "qwen3.8-flash");
         assert_eq!(quick.kind, ProviderKind::Anthropic);
@@ -451,7 +479,8 @@ base_url = \"https://openrouter.ai/api/v1\"
 
     #[test]
     fn missing_key_is_a_clear_error() {
-        let error = Config::built_in()
+        let error = Config::parse(OPENCODE_GO)
+            .unwrap()
             .quick()
             .unwrap()
             .build_with(None)
