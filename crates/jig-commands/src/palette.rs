@@ -21,7 +21,10 @@ use gpui_kit::*;
 use crate::presets::{self, CommentMode, Invocation, Preset};
 
 const MAX_ROWS: usize = 8;
-const CONTEXT: &str = "JigPalette";
+/// The palette's key context, for its own shortcuts.
+pub const CONTEXT: &str = "JigPalette";
+
+actions!(jig_palette, [PickModel]);
 
 /// What starts the jigs in Agent mode: "/jig simplify".
 const JIG_PREFIX: &str = "/jig";
@@ -40,6 +43,9 @@ pub enum PaletteEvent {
     /// Switched to Agent mode: the earlier conversations and the commands
     /// are wanted, see [`CommandPalette::set_agent_catalog`].
     AgentMode,
+    /// A model (and in Agent mode, an agent) picked for the window. The
+    /// palette stays open.
+    PickModel(ModelChoice),
     Dismissed,
 }
 
@@ -50,6 +56,32 @@ pub struct PastConversation {
     pub title: String,
     /// When it last changed, e.g. "2 h ago".
     pub when: String,
+}
+
+/// A model the chip offers: Jig mode's (`agent` is `None`), or an agent
+/// with one of its models.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelChoice {
+    /// The agent's key, in Agent mode.
+    pub agent: Option<String>,
+    /// `provider/model` for Jig mode and OpenCode, the agent's own name
+    /// for other agents; `None` for the agent's default.
+    pub model: Option<String>,
+    /// As listed, e.g. "Claude Code · Opus 5.5".
+    pub label: String,
+}
+
+/// What the chip offers in one mode, and which is in use.
+#[derive(Clone, Debug, Default)]
+pub struct ModelMenu {
+    pub choices: Vec<ModelChoice>,
+    pub current: Option<usize>,
+}
+
+impl ModelMenu {
+    fn current(&self) -> Option<&ModelChoice> {
+        self.choices.get(self.current?)
+    }
 }
 
 /// An OpenCode command or skill, run with "/name".
@@ -68,6 +100,8 @@ enum Row {
     Command(usize),
     /// "/jig", listed with the commands.
     Jigs,
+    /// A model to pick, while picking one.
+    Model(usize),
 }
 
 impl Row {
@@ -77,6 +111,7 @@ impl Row {
             Row::Preset(_) => "Jigs",
             Row::Conversation(_) => "Conversations",
             Row::Command(_) | Row::Jigs => "Commands",
+            Row::Model(_) => "Models",
         }
     }
 }
@@ -111,6 +146,11 @@ pub struct CommandPalette {
     /// The agent conversation is docked beside the code: Agent mode lives
     /// there meanwhile, so the switch stays on Jig.
     agent_docked: bool,
+    /// The chip's models, per mode.
+    jig_models: ModelMenu,
+    agent_models: ModelMenu,
+    /// Picking a model; the list query to restore after.
+    picking: Option<String>,
     _subscription: Subscription,
 }
 
@@ -164,6 +204,9 @@ impl CommandPalette {
             conversations: Vec::new(),
             commands: Vec::new(),
             agent_docked: false,
+            jig_models: ModelMenu::default(),
+            agent_models: ModelMenu::default(),
+            picking: None,
             _subscription: subscription,
         };
         this.refilter(cx);
@@ -177,6 +220,124 @@ impl CommandPalette {
             (true, true) => "Ask the agent about the selection, or / for commands…",
             (true, false) => "Ask the agent, or / for commands…",
         }
+    }
+
+    /// What the model chip offers in each mode.
+    pub fn with_models(mut self, jig: ModelMenu, agent: ModelMenu) -> Self {
+        self.jig_models = jig;
+        self.agent_models = agent;
+        self
+    }
+
+    /// The models of the mode on screen.
+    fn models(&self) -> &ModelMenu {
+        if self.agent {
+            &self.agent_models
+        } else {
+            &self.jig_models
+        }
+    }
+
+    /// ⌥M or the chip: list the models in place of the jigs.
+    fn start_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picking.is_some() || self.note.is_some() || self.models().choices.is_empty() {
+            return;
+        }
+        self.picking = Some(self.query(cx));
+        self.input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder("Pick a model…", window, cx);
+        });
+        self.refilter(cx);
+        // Start on the model in use.
+        if let Some(current) = self.models().current
+            && let Some(at) = self.rows.iter().position(|row| *row == Row::Model(current))
+        {
+            self.selected = at;
+        }
+        cx.notify();
+    }
+
+    fn stop_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(query) = self.picking.take() else {
+            return;
+        };
+        let placeholder = Self::list_placeholder(self.has_selection, self.agent);
+        self.input.update(cx, |input, cx| {
+            input.set_value(query, window, cx);
+            input.set_placeholder(placeholder, window, cx);
+        });
+        self.refilter(cx);
+    }
+
+    fn on_pick_model(&mut self, _: &PickModel, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        if self.picking.is_some() {
+            self.stop_picking(window, cx);
+        } else {
+            self.start_picking(window, cx);
+        }
+    }
+
+    /// Picking: the models whose label has every typed word.
+    fn filter_models(&mut self, query: &str) {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        self.inline_note = None;
+        self.rows = self
+            .models()
+            .choices
+            .iter()
+            .enumerate()
+            .filter(|(_, choice)| {
+                let label = choice.label.to_lowercase();
+                words.iter().all(|word| label.contains(word))
+            })
+            .map(|(index, _)| Row::Model(index))
+            .collect();
+        self.selected = 0;
+    }
+
+    /// The chip at the footer's end: the model in use, which ⌥M or a click
+    /// changes for the window.
+    fn render_chip(&self, accent: Hsla, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let menu = self.models();
+        if menu.choices.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let label = menu
+            .current()
+            .map_or("Pick a model".to_string(), |choice| choice.label.clone());
+        Some(
+            h_flex()
+                .id("jig-model-chip")
+                .debug_selector(|| "palette-model-chip".into())
+                .flex_none()
+                .max_w(px(220.))
+                .gap_1()
+                .px_1p5()
+                .rounded(px(5.))
+                .text_size(px(11.))
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.foreground.opacity(0.06)).text_color(accent))
+                .when(self.picking.is_some(), |this| {
+                    this.bg(accent.opacity(0.14)).text_color(accent)
+                })
+                .child(div().truncate().child(label))
+                .child(div().flex_none().child("⌥M"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        if this.picking.is_some() {
+                            this.stop_picking(window, cx);
+                        } else {
+                            this.start_picking(window, cx);
+                        }
+                    }),
+                ),
+        )
     }
 
     /// Kept to Jig mode, the agent being docked.
@@ -280,6 +441,12 @@ impl CommandPalette {
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
+        if self.picking.is_some() {
+            self.filter_models(&query);
+            self.filtered_query = query;
+            cx.notify();
+            return;
+        }
         match self.jig_query(&query) {
             Some(jig) => {
                 let jig = jig.to_string();
@@ -479,6 +646,17 @@ impl CommandPalette {
                     arguments,
                 })
             }
+            Some(Row::Model(index)) => {
+                let index = *index;
+                let choice = self.models().choices[index].clone();
+                if self.agent {
+                    self.agent_models.current = Some(index);
+                } else {
+                    self.jig_models.current = Some(index);
+                }
+                self.stop_picking(window, cx);
+                cx.emit(PaletteEvent::PickModel(choice));
+            }
             // Choosing "/jig" lists the jigs.
             Some(Row::Jigs) => {
                 let text = format!("{JIG_PREFIX} ");
@@ -564,14 +742,17 @@ impl CommandPalette {
     /// Tab switches between Jig and Agent mode, unless the agent is docked.
     fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        if !self.agent_docked {
+        if !self.agent_docked && self.picking.is_none() {
             self.set_agent(!self.agent, window, cx);
         }
     }
 
     /// Backspace in an empty note goes back to the list.
     fn on_backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.note.is_some() && self.query(cx).is_empty() {
+        if self.picking.is_some() && self.query(cx).is_empty() {
+            cx.stop_propagation();
+            self.stop_picking(window, cx);
+        } else if self.note.is_some() && self.query(cx).is_empty() {
             cx.stop_propagation();
             self.back_to_list(window, cx);
         }
@@ -669,7 +850,9 @@ impl CommandPalette {
 
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        if self.note.is_some() {
+        if self.picking.is_some() {
+            self.stop_picking(window, cx);
+        } else if self.note.is_some() {
             self.back_to_list(window, cx);
         } else {
             cx.emit(PaletteEvent::Dismissed);
@@ -753,6 +936,14 @@ impl CommandPalette {
                 (format!("/{}", command.name).into(), kind.into())
             }
             Row::Jigs => (JIG_PREFIX.into(), "run a jig on the agent".into()),
+            Row::Model(index) => (
+                self.models().choices[*index].label.clone().into(),
+                if self.models().current == Some(*index) {
+                    "in use".into()
+                } else {
+                    "".into()
+                },
+            ),
         };
         // What a command does, after its name.
         let description = match row {
@@ -925,8 +1116,13 @@ impl Render for CommandPalette {
         let agent = self.agent_lane();
         let accent = crate::surface::lane_accent(agent, cx);
         let input = self.render_input(agent, accent, cx).into_any_element();
+        let chip = self
+            .render_chip(accent, cx)
+            .map(IntoElement::into_any_element);
         let theme = cx.theme();
-        let footer = if agent {
+        let footer = if self.picking.is_some() {
+            "↩ use it in this window · esc back".to_string()
+        } else if agent {
             match self.rows.get(self.selected) {
                 Some(Row::Conversation(_)) => "Picks up this conversation where it left off".into(),
                 Some(Row::Command(_)) => {
@@ -956,6 +1152,7 @@ impl Render for CommandPalette {
             .capture_action(cx.listener(Self::on_up))
             .capture_action(cx.listener(Self::on_down))
             .capture_action(cx.listener(Self::on_tab))
+            .capture_action(cx.listener(Self::on_pick_model))
             .capture_action(cx.listener(Self::on_right))
             .capture_action(cx.listener(Self::on_end))
             .capture_action(cx.listener(Self::on_backspace))
@@ -985,17 +1182,19 @@ impl Render for CommandPalette {
                 .children(rows)
             })
             .child(
-                div()
+                h_flex()
                     .px_2p5()
                     .pt_1()
                     .pb_0p5()
+                    .gap_2()
                     .text_size(px(11.))
                     .text_color(if agent {
                         accent
                     } else {
                         theme.muted_foreground
                     })
-                    .child(footer),
+                    .child(div().flex_1().min_w_0().truncate().child(footer))
+                    .children(chip),
             );
         crate::motion::pop_in(palette, "jig-palette")
     }
@@ -1091,6 +1290,12 @@ mod tests {
     ) -> (gpui_kit::AnyWindowHandle, Entity<Host>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
+            // Jig binds it from its shortcuts table.
+            cx.bind_keys([gpui_kit::KeyBinding::new(
+                "alt-m",
+                super::PickModel,
+                Some(super::CONTEXT),
+            )]);
         });
         let handles = cx.update(|cx| {
             let options = WindowOptions {
@@ -1119,6 +1324,9 @@ mod tests {
                                     .other
                                     .push(format!("command {name} {arguments}").trim().into()),
                                 PaletteEvent::AgentMode => host.other.push("agent mode".into()),
+                                PaletteEvent::PickModel(choice) => {
+                                    host.other.push(format!("model {}", choice.label))
+                                }
                             }
                         });
                     Host {
@@ -1624,6 +1832,51 @@ mod tests {
         let invocation = events(cx, &host)[0].clone().unwrap();
         assert!(invocation.agent);
         assert_eq!(invocation.instruction, "rename things");
+    }
+
+    #[gpui_kit::test]
+    fn the_chip_picks_a_model_for_the_mode_on_screen(cx: &mut TestAppContext) {
+        let (window, host) = open(cx, true);
+        let choice = |agent: Option<&str>, label: &str| super::ModelChoice {
+            agent: agent.map(str::to_string),
+            model: Some(label.to_lowercase()),
+            label: label.into(),
+        };
+        cx.update(|cx| {
+            let palette = host.read(cx).palette.clone();
+            palette.update(cx, |palette, _| {
+                palette.jig_models = super::ModelMenu {
+                    choices: vec![choice(None, "Haiku"), choice(None, "Sonnet")],
+                    current: Some(0),
+                };
+                palette.agent_models = super::ModelMenu {
+                    choices: vec![choice(Some("claude-code"), "Claude Code · Opus")],
+                    current: Some(0),
+                };
+            })
+        });
+        step(cx, window, |window, cx| window.input("explain", cx));
+        step(cx, window, |window, cx| window.press("alt-m", cx));
+        assert_eq!(
+            rows(cx, &host),
+            [super::Row::Model(0), super::Row::Model(1)]
+        );
+        assert_eq!(query(cx, &host), "", "the typed text is set aside");
+        step(cx, window, |window, cx| window.input("son", cx));
+        assert_eq!(rows(cx, &host), [super::Row::Model(1)]);
+        step(cx, window, |window, cx| window.press("enter", cx));
+        assert_eq!(
+            cx.update(|cx| host.read(cx).other.clone()),
+            ["model Sonnet"]
+        );
+        assert_eq!(query(cx, &host), "explain", "and back after");
+        assert!(events(cx, &host).is_empty(), "nothing ran");
+        // Agent mode lists the agents with their models.
+        step(cx, window, |window, cx| window.press("tab", cx));
+        step(cx, window, |window, cx| window.press("alt-m", cx));
+        assert_eq!(rows(cx, &host), [super::Row::Model(0)]);
+        step(cx, window, |window, cx| window.press("escape", cx));
+        assert!(cx.update(|cx| host.read(cx).palette.read(cx).picking.is_none()));
     }
 
     #[gpui_kit::test]

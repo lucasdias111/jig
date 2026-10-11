@@ -1,7 +1,7 @@
 //! The agents Agent mode can run, as data: `assets/default-agents.toml` has
 //! the built-ins and documents every field, and the user's
 //! `~/.config/jig/agents.toml` adds more or replaces one by `key`.
-//! Settings > Agent picks one (`[agent] use`).
+//! Settings > Agent mode picks one (`[agent] use`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
 use gpui_kit::App;
-use jig_ai::acp::AgentCommandLine;
+use jig_ai::acp::{AgentCommandLine, AgentModels};
 use serde::Deserialize;
 
 const BUILT_IN: &str = include_str!("../../../assets/default-agents.toml");
@@ -22,7 +22,7 @@ pub const DEFAULT: &str = "opencode";
 pub const USER_TEMPLATE: &str = r#"# Your agents for Agent mode. Any agent that speaks the Agent Client
 # Protocol on stdio works; one with the same key as a built-in replaces it.
 # See assets/default-agents.toml in Jig's source for the built-ins and
-# every field. Pick one in Settings, under Agent.
+# every field. Pick one in Settings, under Agent mode.
 #
 # [[agent]]
 # key = "goose"
@@ -41,7 +41,7 @@ struct AgentFile {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// Jig's own OpenCode client, with the model from Settings > Models.
+    /// Jig's own OpenCode client, on a model from Jig's providers.
     OpenCode,
     /// The Agent Client Protocol on stdio.
     #[default]
@@ -188,11 +188,65 @@ pub fn user_path() -> Option<PathBuf> {
 
 /// The agent Settings picked, or OpenCode.
 pub fn chosen(cx: &App) -> Arc<Agent> {
+    named(&crate::settings::get(cx).agent.using)
+}
+
+/// The agent with `key`, or OpenCode when there's none.
+pub fn named(key: &str) -> Arc<Agent> {
     let registry = registry();
     registry
-        .get(&crate::settings::get(cx).agent.using)
+        .get(key)
         .or_else(|| registry.get(DEFAULT))
         .expect("OpenCode is built in")
+}
+
+/// The models each ACP agent said it offers, the last time Jig talked to
+/// it, by agent key. Kept in Jig's agents folder, so Settings and ⌘K can
+/// offer them before the agent next runs.
+static KNOWN_MODELS: Mutex<Option<std::collections::BTreeMap<String, AgentModels>>> =
+    Mutex::new(None);
+
+fn models_file() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    agents_dir().map(|dir| dir.join("models.json"))
+}
+
+fn with_known_models<T>(
+    f: impl FnOnce(&mut std::collections::BTreeMap<String, AgentModels>) -> T,
+) -> T {
+    let mut known = KNOWN_MODELS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let known = known.get_or_insert_with(|| {
+        models_file()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    });
+    f(known)
+}
+
+/// The models `agent` last said it offers.
+pub fn known_models(agent: &str) -> Option<AgentModels> {
+    with_known_models(|known| known.get(agent).cloned())
+}
+
+/// Remember what `agent` says it offers now.
+pub fn remember_models(agent: &str, models: AgentModels) {
+    with_known_models(|known| {
+        if known.get(agent) == Some(&models) {
+            return;
+        }
+        known.insert(agent.to_string(), models);
+        if let Some(path) = models_file()
+            && let Ok(text) = serde_json::to_string_pretty(known)
+        {
+            let _ = path.parent().map(std::fs::create_dir_all);
+            let _ = std::fs::write(path, text);
+        }
+    });
 }
 
 /// What Settings says about `agent`, and whether it's ready.

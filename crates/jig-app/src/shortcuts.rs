@@ -347,6 +347,14 @@ pub const ALL: &[Shortcut] = &[
         OpenCommand
     ),
     shortcut!(
+        "pick_model",
+        "Pick model (in the jig input)",
+        Jigs,
+        ["alt-m"],
+        &[Some(jig_commands::palette::CONTEXT)],
+        jig_commands::palette::PickModel
+    ),
+    shortcut!(
         "agent_conversations",
         "Agent conversations",
         Jigs,

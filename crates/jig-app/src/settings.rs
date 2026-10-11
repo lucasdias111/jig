@@ -201,6 +201,9 @@ impl DebugSettings {
 pub struct AgentSettings {
     #[serde(rename = "use")]
     pub using: String,
+    /// Each ACP agent's model, by agent key, as it names them ("opus").
+    /// OpenCode's is `agent` in `config.toml`.
+    pub models: BTreeMap<String, String>,
     #[serde(flatten)]
     pub permissions: jig_ai::agent::Permissions,
 }
@@ -209,6 +212,7 @@ impl Default for AgentSettings {
     fn default() -> Self {
         Self {
             using: crate::agents::DEFAULT.into(),
+            models: BTreeMap::new(),
             permissions: Default::default(),
         }
     }
@@ -373,6 +377,10 @@ mod tests {
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
         settings.agent.using = "codex".into();
+        settings
+            .agent
+            .models
+            .insert("claude-code".into(), "opus".into());
         settings.agent.permissions.shell = jig_ai::agent::Access::Allow;
         settings.agent.permissions.questions = false;
         settings

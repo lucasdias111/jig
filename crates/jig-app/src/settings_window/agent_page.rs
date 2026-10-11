@@ -47,16 +47,14 @@ impl SettingsWindow {
                     |key, cx| settings::update(cx, |s| s.agent.using = key.to_string()),
                 )),
         );
-        // Only OpenCode runs on a model Jig picks; the others bring their own.
+        // OpenCode runs on a model from Jig's providers; the others offer
+        // their own, as they said the last time Jig talked to them.
         section = match (chosen.kind, crate::providers::config(cx)) {
             (agents::Kind::OpenCode, Ok(config)) => {
                 section.row(self.opencode_model_row(&config, cx))
             }
             (agents::Kind::OpenCode, Err(_)) => section,
-            (agents::Kind::Acp, _) => section.row(Row::note(
-                "agent-own-model",
-                format!("{} uses its own model and sign-in.", chosen.name),
-            )),
+            (agents::Kind::Acp, _) => section.row(agent_model_row(&chosen)),
         };
         if chosen.installable() && (!ready || self.installs.contains_key(&install_key(&chosen))) {
             section = section.row(self.install_agent_row(chosen, cx));
@@ -216,6 +214,51 @@ fn access_label(access: Access) -> &'static str {
         Access::Allow => "Allow",
         Access::Deny => "Don't allow",
     }
+}
+
+/// An ACP agent's model, from the ones it offers. Before it has ever run,
+/// Jig doesn't know them yet.
+fn agent_model_row(agent: &Agent) -> Row {
+    let Some(models) = agents::known_models(&agent.key) else {
+        return Row::note(
+            "agent-model",
+            format!(
+                "{} runs on its default model. Its models show here once it has run.",
+                agent.name
+            ),
+        );
+    };
+    let options: Vec<(SharedString, SharedString)> = models
+        .options
+        .iter()
+        .map(|(value, name)| (value.clone().into(), name.clone().into()))
+        .collect();
+    let (get, set) = (agent.key.clone(), agent.key.clone());
+    let default = models.current.clone();
+    Row::new("agent-model", "Model")
+        .description(format!(
+            "{}'s own models, with its own sign-in.",
+            agent.name
+        ))
+        .keywords(["model", "agent"])
+        .control(ui::dropdown(
+            "agent-model",
+            options,
+            move |cx| {
+                settings::get(cx)
+                    .agent
+                    .models
+                    .get(&get)
+                    .cloned()
+                    .unwrap_or_else(|| default.clone())
+                    .into()
+            },
+            move |value, cx| {
+                settings::update(cx, |s| {
+                    s.agent.models.insert(set.clone(), value.to_string());
+                })
+            },
+        ))
 }
 
 /// Where an agent's install shows in `installs`, apart from debuggers'.

@@ -149,6 +149,15 @@ pub struct Workspace {
     home_focus: FocusHandle,
     presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
+    /// Jig mode's model picked in ⌘K for this window, as `provider/model`;
+    /// `None` follows the settings.
+    jig_pick: Option<String>,
+    /// The agent and model picked in ⌘K for this window's new
+    /// conversations; `None` follows the settings.
+    agent_pick: Option<crate::agent::Pick>,
+    /// Jig mode's and the agent's default models when last seen, to tell
+    /// when Settings changes them.
+    model_defaults: Option<Option<(Option<String>, Option<String>)>>,
     /// How many times the palette has opened, for the Jig button's glow.
     palette_openings: usize,
     /// What the palette's Agent mode lists, from the last time it asked.
@@ -255,6 +264,9 @@ impl Workspace {
             presets: Rc::new(presets),
             palette: None,
             palette_openings: 0,
+            jig_pick: None,
+            agent_pick: None,
+            model_defaults: None,
             agent_catalog: None,
             agent_dock: None,
             resizing_agent_dock: false,

@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
             },
         )?),
     };
-    let session = backend.create(&directory, &prompt, &Permissions::default())?;
+    let session = backend.create(&directory, &prompt, &Permissions::default(), None)?;
     let request = AgentRequest {
         directory,
         prompt,

@@ -173,17 +173,25 @@ impl Workspace {
         let context = self.context_names();
         // A docked conversation is where Agent mode lives meanwhile.
         let docked = self.floating_agent_chat_pinned();
+        let (jig_models, agent_models) = self.model_menus(cx);
         let view = cx.new(|cx| {
             CommandPalette::new(presets, has_selection, window, cx)
                 .with_context(context)
                 .with_agent_docked(docked)
+                .with_models(jig_models, agent_models)
         });
         let events = cx.subscribe_in(
             &view,
             window,
             |this, palette, event: &PaletteEvent, window, cx| {
-                if let PaletteEvent::AgentMode = event {
-                    return this.load_agent_catalog(Some(palette.clone()), window, cx);
+                match event {
+                    PaletteEvent::AgentMode => {
+                        return this.load_agent_catalog(Some(palette.clone()), window, cx);
+                    }
+                    PaletteEvent::PickModel(choice) => {
+                        return this.pick_model(choice.clone(), palette.clone(), window, cx);
+                    }
+                    _ => {}
                 }
                 this.close_palette(window, cx);
                 match event {
@@ -197,7 +205,9 @@ impl Workspace {
                     PaletteEvent::RunAgentCommand { name, arguments } => {
                         this.run_agent_command(name.clone(), arguments.clone(), window, cx)
                     }
-                    PaletteEvent::AgentMode | PaletteEvent::Dismissed => {}
+                    PaletteEvent::AgentMode
+                    | PaletteEvent::PickModel(_)
+                    | PaletteEvent::Dismissed => {}
                 }
             },
         );
@@ -279,7 +289,12 @@ impl Workspace {
             self.run_agent(id, invocation.name, request, window, cx);
             return;
         }
-        let provider = match &self.provider {
+        // The model picked in ⌘K for the window, else the settings'.
+        let provider = match &self.jig_pick {
+            Some(id) => crate::providers::build_model(id, cx),
+            None => self.provider.clone(),
+        };
+        let provider = match &provider {
             Ok(provider) => provider.clone(),
             Err(error) => {
                 let error = error.clone();

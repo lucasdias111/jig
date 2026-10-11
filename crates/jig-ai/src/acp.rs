@@ -119,6 +119,8 @@ pub struct Connection {
     capabilities: Mutex<Value>,
     /// The commands it last said it has.
     commands: Mutex<Vec<AgentCommand>>,
+    /// The models it last said it offers.
+    models: Mutex<Option<AgentModels>>,
     /// Set once the process has gone.
     gone: Mutex<Option<String>>,
 }
@@ -155,6 +157,7 @@ impl Connection {
             sessions: Mutex::default(),
             capabilities: Mutex::new(Value::Null),
             commands: Mutex::default(),
+            models: Mutex::default(),
             gone: Mutex::default(),
         });
         let reader = Arc::downgrade(&connection);
@@ -303,6 +306,17 @@ impl Connection {
         lock(&self.commands).clone()
     }
 
+    /// The models the agent last said it offers, if it lets clients pick.
+    pub fn models(&self) -> Option<AgentModels> {
+        lock(&self.models).clone()
+    }
+
+    fn learn_models(&self, response: &Value) {
+        if let Some(models) = AgentModels::from_options(&response["configOptions"]) {
+            *lock(&self.models) = Some(models);
+        }
+    }
+
     fn send(&self, message: &Value) -> Result<()> {
         if let Some(why) = lock(&self.gone).clone() {
             bail!("{why}");
@@ -382,6 +396,11 @@ impl Connection {
             }
             (Some("session/update"), None) => {
                 let update = &message["params"]["update"];
+                if update["sessionUpdate"] == "config_option_update"
+                    && let Some(models) = AgentModels::from_options(&update["configOptions"])
+                {
+                    *lock(&self.models) = Some(models);
+                }
                 if update["sessionUpdate"] == "available_commands_update" {
                     *lock(&self.commands) = commands(&update["availableCommands"]);
                 }
@@ -438,6 +457,50 @@ impl Drop for Connection {
     }
 }
 
+/// The models an agent offers, as the setting it lets clients change.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentModels {
+    /// The setting's id, for `session/set_config_option`.
+    pub config_id: String,
+    /// The value it's on.
+    pub current: String,
+    /// Each model's value and name, e.g. ("sonnet", "Sonnet 5.5").
+    pub options: Vec<(String, String)>,
+}
+
+impl AgentModels {
+    /// The model setting among an agent's `configOptions`, if it has one.
+    fn from_options(options: &Value) -> Option<Self> {
+        let setting = options
+            .as_array()?
+            .iter()
+            .find(|option| option["category"] == "model" && option["type"] == "select")?;
+        let mut choices = Vec::new();
+        for option in setting["options"].as_array().into_iter().flatten() {
+            // Options may come in groups.
+            let group = option["options"].as_array();
+            for choice in group
+                .into_iter()
+                .flatten()
+                .chain(group.is_none().then_some(option))
+            {
+                if let Some(value) = choice["value"].as_str() {
+                    let name = choice["name"].as_str().unwrap_or(value);
+                    choices.push((value.to_string(), name.to_string()));
+                }
+            }
+        }
+        Some(Self {
+            config_id: setting["id"].as_str()?.to_string(),
+            current: setting["currentValue"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            options: choices,
+        })
+    }
+}
+
 /// What a request the user is shown waits on.
 enum Waiting {
     /// `edit` is the file, when it's an edit.
@@ -467,15 +530,43 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn create(connection: Arc<Connection>, directory: &Path) -> Result<Self> {
+    /// A new conversation, on `model` (one of [`Connection::models`]'
+    /// values) when it's given and the agent offers it.
+    pub fn create(
+        connection: Arc<Connection>,
+        directory: &Path,
+        model: Option<&str>,
+    ) -> Result<Self> {
         let directory = canonical(directory);
         let created =
             connection.request("session/new", json!({"cwd": directory, "mcpServers": []}))?;
+        connection.learn_models(&created);
         let id = created["sessionId"]
             .as_str()
             .context("The agent didn't return a session id")?
             .to_string();
-        Ok(Self::with(connection, id, directory))
+        let session = Self::with(connection, id, directory);
+        if let Some(model) = model {
+            session.use_model(model)?;
+        }
+        Ok(session)
+    }
+
+    /// Switch the conversation to `model`, if the agent offers it and it
+    /// isn't already on it.
+    pub fn use_model(&self, model: &str) -> Result<()> {
+        let Some(models) = self.connection.models() else {
+            return Ok(());
+        };
+        if models.current == model || !models.options.iter().any(|(value, _)| value == model) {
+            return Ok(());
+        }
+        let answer = self.connection.request(
+            "session/set_config_option",
+            json!({"sessionId": self.id, "configId": models.config_id, "value": model}),
+        )?;
+        self.connection.learn_models(&answer);
+        Ok(())
     }
 
     /// An earlier conversation; [`Session::history`] picks it up.
@@ -523,7 +614,8 @@ impl Session {
                 while let Ok(Incoming::Update(update)) = updates.try_recv() {
                     transcript.add(&update);
                 }
-                result.map_err(|error| self.connection.failure(error))?;
+                let loaded = result.map_err(|error| self.connection.failure(error))?;
+                self.connection.learn_models(&loaded);
                 return Ok(transcript.finish());
             }
             match updates.recv_timeout(Duration::from_millis(50)) {
@@ -1224,7 +1316,7 @@ read -r line
     fn says_when_the_agent_wants_a_sign_in_and_how() {
         let command = agent_wanting_a_sign_in();
         let connection = Connection::start("Fake", &command).unwrap();
-        let error = match Session::create(connection, Path::new("/")) {
+        let error = match Session::create(connection, Path::new("/"), None) {
             Err(error) => error,
             Ok(_) => panic!("it wants a sign-in first"),
         };
@@ -1243,6 +1335,29 @@ read -r line
             "after its own arguments"
         );
         assert_eq!(browser.terminal, None, "the agent does it itself");
+    }
+
+    #[test]
+    fn finds_the_model_setting_among_the_options() {
+        let options = json!([
+            {"id": "mode", "category": "mode", "type": "select", "currentValue": "default",
+             "options": [{"value": "default", "name": "Manual"}]},
+            {"id": "model", "category": "model", "type": "select", "currentValue": "default",
+             "options": [{"value": "default", "name": "Default (recommended)"},
+                         {"value": "opus", "name": "Opus 5.5"}]},
+        ]);
+        let models = AgentModels::from_options(&options).unwrap();
+        assert_eq!(models.config_id, "model");
+        assert_eq!(models.current, "default");
+        assert_eq!(models.options[1], ("opus".into(), "Opus 5.5".into()));
+
+        let grouped = json!([{"id": "m", "category": "model", "type": "select", "currentValue": "a",
+            "options": [{"group": "x", "name": "X", "options": [{"value": "a", "name": "A"}]}]}]);
+        assert_eq!(
+            AgentModels::from_options(&grouped).unwrap().options,
+            [("a".into(), "A".into())]
+        );
+        assert_eq!(AgentModels::from_options(&json!([])), None);
     }
 
     #[test]

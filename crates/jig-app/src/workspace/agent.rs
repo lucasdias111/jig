@@ -25,7 +25,7 @@ use jig_ai::agent::{
 use jig_ai::harness::Session;
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus,
-    CommandPalette, Conversation, LiveStep, PastConversation,
+    CommandPalette, Conversation, LiveStep, ModelChoice, ModelMenu, PastConversation,
 };
 use jig_editor::EditorHandle;
 
@@ -42,6 +42,8 @@ enum Message {
     Started(Session),
     /// An earlier conversation, picked up again.
     Resumed(Session, Vec<Turn>),
+    /// The models an agent (by key) says it offers.
+    Models(String, jig_ai::acp::AgentModels),
     Event(AgentEvent),
     /// The agent wants the user to sign in first.
     SignIn(SignInNeeded),
@@ -83,7 +85,7 @@ enum Request {
 /// The earlier conversations and OpenCode's commands for one project, kept
 /// so the palette can list them at once the next time.
 pub(super) struct AgentCatalog {
-    /// The agent's key, as Settings > Agent picked it.
+    /// The agent's key, as Settings or ⌘K picked it.
     agent: String,
     directory: PathBuf,
     conversations: Vec<jig_ai::agent::Conversation>,
@@ -102,6 +104,9 @@ pub(super) struct AgentRun {
     loading: bool,
     /// The last turn asked, to try again after signing in.
     last_input: Option<TurnInput>,
+    /// The agent and model picked in ⌘K when it started; `None` follows
+    /// the settings. The conversation keeps them.
+    pub(super) pick: Option<crate::agent::Pick>,
     /// The agent wants the user to sign in first.
     sign_in: Option<PendingSignIn>,
     /// Kinds of request (their titles, e.g. "Run a command") allowed for
@@ -114,7 +119,7 @@ pub(super) struct AgentRun {
     /// (OpenCode may format a file after writing it).
     touched: Vec<PathBuf>,
     step: LiveStep,
-    label: String,
+    pub(super) label: String,
     started: std::time::Instant,
     context: Vec<String>,
     /// The current turn is over (or stopped), so dropping the run leaves
@@ -253,28 +258,41 @@ impl Workspace {
         agent.entries.clear();
         agent.loading = true;
         let directory = agent.directory.clone();
+        let choice = crate::agent::choice_for(agent.pick.as_ref(), cx);
         if let Some(run) = self.chat.as_mut() {
             run.agent = Some(agent);
         }
 
-        let choice = crate::agent::choice(cx);
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
+            let send = |message| {
+                let _ = sender.unbounded_send(message);
+            };
             let result = (|| {
                 let choice = choice.map_err(anyhow::Error::msg)?;
                 let backend = crate::agent::connect(&choice)?;
                 let session = backend.open(&directory, &session_id)?;
                 let turns = session.history()?;
+                if let Some(model) = choice.acp_model() {
+                    session.use_model(model)?;
+                }
+                if let Some(models) = backend.models() {
+                    send(Message::Models(choice.key().to_string(), models));
+                }
                 anyhow::Ok(Message::Resumed(session, turns))
             })();
-            let _ = sender.unbounded_send(result.unwrap_or_else(failure));
+            send(result.unwrap_or_else(failure));
         });
         let task = cx.spawn_in(window, async move |this, cx| {
-            if let Some(message) = messages.next().await {
-                this.update_in(cx, |this, window, cx| {
-                    this.on_agent_message(id, message, window, cx)
-                })
-                .ok();
+            while let Some(message) = messages.next().await {
+                let alive = this
+                    .update_in(cx, |this, window, cx| {
+                        this.on_agent_message(id, message, window, cx)
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    break;
+                }
             }
         });
         if let Some(run) = self.chat.as_mut() {
@@ -340,6 +358,109 @@ impl Workspace {
         palette.update(cx, |palette, cx| palette.switch_to_agent(window, cx));
     }
 
+    /// What ⌘K's model chip offers: Jig mode's models, and each installed
+    /// agent with its models (OpenCode's from the providers, the others' as
+    /// they last said).
+    pub(super) fn model_menus(&self, cx: &App) -> (ModelMenu, ModelMenu) {
+        let offered = crate::providers::offered(cx);
+        let config = crate::providers::config(cx).ok();
+
+        let mut jig = ModelMenu {
+            choices: offered
+                .iter()
+                .map(|(id, label)| ModelChoice {
+                    agent: None,
+                    model: Some(id.clone()),
+                    label: label.clone(),
+                })
+                .collect(),
+            current: None,
+        };
+        let in_use = self
+            .jig_pick
+            .clone()
+            .or_else(|| config.as_ref().and_then(|config| config.quick_model()));
+        if let Some(id) = in_use {
+            jig.current = Some(position_or_push(&mut jig.choices, None, Some(&id), &id));
+        }
+
+        let picked = self.picked_agent(cx);
+        let pick = self
+            .agent_pick
+            .clone()
+            .unwrap_or_else(|| crate::agent::Pick::from_settings(cx));
+        let mut agent = ModelMenu::default();
+        for listed in crate::agents::registry().agents.iter() {
+            // Agents not installed would only fail; the chosen one shows anyway.
+            if listed.key != picked.key && !crate::agents::status(listed).1 {
+                continue;
+            }
+            let own: Vec<(String, String)> = match listed.kind {
+                crate::agents::Kind::OpenCode => offered.clone(),
+                crate::agents::Kind::Acp => crate::agents::known_models(&listed.key)
+                    .map(|models| models.options)
+                    .unwrap_or_default(),
+            };
+            if own.is_empty() {
+                agent.choices.push(ModelChoice {
+                    agent: Some(listed.key.clone()),
+                    model: None,
+                    label: listed.name.clone(),
+                });
+            }
+            for (model, label) in own {
+                agent.choices.push(ModelChoice {
+                    agent: Some(listed.key.clone()),
+                    model: Some(model),
+                    label: format!("{} · {label}", listed.name),
+                });
+            }
+        }
+        agent.current = Some(position_or_push(
+            &mut agent.choices,
+            Some(&pick.agent),
+            pick.model.as_deref(),
+            &match &pick.model {
+                Some(model) => format!("{} · {model}", picked.name),
+                None => picked.name.clone(),
+            },
+        ));
+        (jig, agent)
+    }
+
+    /// ⌘K's chip picked `choice` for the window: Jig mode's model, or the
+    /// agent new conversations run.
+    pub(super) fn pick_model(
+        &mut self,
+        choice: ModelChoice,
+        palette: Entity<CommandPalette>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match choice.agent {
+            None => self.jig_pick = choice.model,
+            Some(agent) => {
+                let pick = crate::agent::Pick {
+                    agent,
+                    model: choice.model,
+                };
+                // The settings' own choice needs no pick.
+                self.agent_pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
+                // Its conversations and commands, in place of the last agent's.
+                self.load_agent_catalog(Some(palette), window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The agent new conversations run: picked in ⌘K, else in Settings.
+    pub(super) fn picked_agent(&self, cx: &App) -> std::sync::Arc<crate::agents::Agent> {
+        match &self.agent_pick {
+            Some(pick) => crate::agents::named(&pick.agent),
+            None => crate::agents::chosen(cx),
+        }
+    }
+
     /// Open `agents.toml`, starting it with a commented example.
     pub(super) fn edit_agents(
         &mut self,
@@ -379,7 +500,7 @@ impl Workspace {
         let Some(directory) = self.agent_project(cx) else {
             return;
         };
-        let agent = crate::agents::chosen(cx).key.clone();
+        let agent = self.picked_agent(cx).key.clone();
         if let Some(catalog) = self
             .agent_catalog
             .as_ref()
@@ -388,7 +509,7 @@ impl Workspace {
         {
             show_catalog(catalog, palette, cx);
         }
-        let choice = crate::agent::choice(cx);
+        let choice = crate::agent::choice_for(self.agent_pick.as_ref(), cx);
         let task = cx.background_executor().spawn({
             let directory = directory.clone();
             async move {
@@ -459,12 +580,13 @@ impl Workspace {
             queue: VecDeque::new(),
             loading: false,
             last_input: None,
+            pick: self.agent_pick.clone(),
             sign_in: None,
             always_allowed: Vec::new(),
             title: asked.clone(),
             touched: Vec::new(),
             step: LiveStep::default(),
-            label: name.unwrap_or_else(|| crate::agents::chosen(cx).name.clone()),
+            label: name.unwrap_or_else(|| self.picked_agent(cx).name.clone()),
             started: std::time::Instant::now(),
             context,
             finished: true,
@@ -566,7 +688,8 @@ impl Workspace {
             self.load_agent_catalog(None, window, cx);
         }
         // Read on this thread: the keys and settings live in the app.
-        let choice = crate::agent::choice(cx);
+        let pick = self.agent_run(id).and_then(|agent| agent.pick.clone());
+        let choice = crate::agent::choice_for(pick.as_ref(), cx);
         let Some(agent) = self.agent_run(id) else {
             return;
         };
@@ -602,7 +725,11 @@ impl Workspace {
                     Some(session) => session,
                     None => {
                         let backend = crate::agent::connect(&choice)?;
-                        let session = backend.create(&directory, &title, &permissions)?;
+                        let session =
+                            backend.create(&directory, &title, &permissions, choice.acp_model())?;
+                        if let Some(models) = backend.models() {
+                            send(Message::Models(choice.key().to_string(), models));
+                        }
                         send(Message::Started(session.clone()));
                         session
                     }
@@ -724,7 +851,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let choice = crate::agent::choice(cx);
+        let pick = self.agent_run(id).and_then(|agent| agent.pick.clone());
+        let choice = crate::agent::choice_for(pick.as_ref(), cx);
         let task = cx.background_executor().spawn(async move {
             let backend = crate::agent::connect(&choice.map_err(anyhow::Error::msg)?)?;
             if let jig_ai::harness::Backend::Acp(connection) = backend {
@@ -1306,6 +1434,7 @@ impl Workspace {
         };
         match message {
             Message::Started(session) => agent.session = Some(session),
+            Message::Models(key, models) => crate::agents::remember_models(&key, models),
             Message::Resumed(session, turns) => {
                 agent.session = Some(session);
                 agent.loading = false;
@@ -1370,7 +1499,7 @@ impl Workspace {
         commands: Vec<jig_ai::agent::AgentCommand>,
         cx: &App,
     ) {
-        let agent = crate::agents::chosen(cx).key.clone();
+        let agent = self.picked_agent(cx).key.clone();
         let commands = commands
             .into_iter()
             .map(|command| AgentCommandInfo {
@@ -1803,6 +1932,35 @@ fn ago(now: SystemTime, then: SystemTime) -> String {
         _ if days < 30 => format!("{days} days ago"),
         _ => format!("{} months ago", days / 30),
     }
+}
+
+/// Where the choice for `agent` and `model` is in `choices`, adding it
+/// (as `label`) when it isn't listed, e.g. while models load.
+fn position_or_push(
+    choices: &mut Vec<ModelChoice>,
+    agent: Option<&str>,
+    model: Option<&str>,
+    label: &str,
+) -> usize {
+    let same_agent = |choice: &ModelChoice| choice.agent.as_deref() == agent;
+    if let Some(at) = choices
+        .iter()
+        .position(|choice| same_agent(choice) && choice.model.as_deref() == model)
+    {
+        return at;
+    }
+    // An agent on its default: the first of its own.
+    if model.is_none()
+        && let Some(at) = choices.iter().position(same_agent)
+    {
+        return at;
+    }
+    choices.push(ModelChoice {
+        agent: agent.map(str::to_string),
+        model: model.map(str::to_string),
+        label: label.to_string(),
+    });
+    choices.len() - 1
 }
 
 #[cfg(test)]

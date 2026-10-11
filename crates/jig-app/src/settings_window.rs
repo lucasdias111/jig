@@ -55,21 +55,21 @@ pub enum Page {
     Editor,
     Languages,
     Keyboard,
-    Models,
-    Jigs,
-    Agent,
+    Providers,
+    JigMode,
+    AgentMode,
 }
 
 impl Page {
-    /// In sidebar order; the pages from `Models` on sit under "AI".
+    /// In sidebar order; the pages from `Providers` on sit under "AI".
     pub const ALL: [Page; 7] = [
         Page::Appearance,
         Page::Editor,
         Page::Languages,
         Page::Keyboard,
-        Page::Models,
-        Page::Jigs,
-        Page::Agent,
+        Page::Providers,
+        Page::JigMode,
+        Page::AgentMode,
     ];
 
     fn title(self) -> &'static str {
@@ -78,9 +78,9 @@ impl Page {
             Page::Editor => "Editor",
             Page::Languages => "Languages",
             Page::Keyboard => "Keyboard",
-            Page::Models => "Models",
-            Page::Jigs => "Jigs",
-            Page::Agent => "Agent",
+            Page::Providers => "Providers",
+            Page::JigMode => "Jig mode",
+            Page::AgentMode => "Agent mode",
         }
     }
 
@@ -90,14 +90,14 @@ impl Page {
             Page::Editor => TEXT_CURSOR,
             Page::Languages => CODE,
             Page::Keyboard => KEYBOARD,
-            Page::Models => SPARKLES,
-            Page::Jigs => COMMAND,
-            Page::Agent => jig_commands::surface::AGENT_ICON,
+            Page::Providers => SPARKLES,
+            Page::JigMode => COMMAND,
+            Page::AgentMode => jig_commands::surface::AGENT_ICON,
         }
     }
 
     fn is_ai(self) -> bool {
-        matches!(self, Page::Models | Page::Jigs | Page::Agent)
+        matches!(self, Page::Providers | Page::JigMode | Page::AgentMode)
     }
 }
 
@@ -381,9 +381,9 @@ impl SettingsWindow {
             (Page::Languages, Some(Detail::Language(ix))) => self.language_sections(ix, cx),
             (Page::Languages, _) => self.languages_sections(cx),
             (Page::Keyboard, _) => self.shortcuts_sections(cx),
-            (Page::Models, _) => self.models_sections(cx),
-            (Page::Jigs, _) => self.jigs_sections(),
-            (Page::Agent, _) => self.agent_sections(cx),
+            (Page::Providers, _) => self.providers_sections(cx),
+            (Page::JigMode, _) => self.jig_mode_sections(cx),
+            (Page::AgentMode, _) => self.agent_sections(cx),
         }
     }
 
@@ -751,7 +751,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn the_agent_page_draws_with_every_choice(cx: &mut TestAppContext) {
-        let handle = open_on(Nav::page(Page::Agent), cx);
+        let handle = open_on(Nav::page(Page::AgentMode), cx);
         draw(handle, cx);
         for access in jig_ai::agent::Access::ALL {
             cx.update(|cx| {
@@ -771,7 +771,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_models_page_draws_in_every_state(cx: &mut TestAppContext) {
         let _dir = providers::init_temp(cx);
-        let handle = open_on(Nav::page(Page::Models), cx);
+        let handle = open_on(Nav::page(Page::Providers), cx);
         draw(handle, cx);
 
         update(handle, cx, |this, _, _| {

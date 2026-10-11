@@ -21,7 +21,9 @@ use crate::workspace::EditModelConfig;
 const OPENCODE_OWN: &str = "opencode:";
 
 impl SettingsWindow {
-    pub(super) fn models_sections(&self, cx: &Context<Self>) -> Vec<Section> {
+    /// Providers: the accounts and local servers the models come from.
+    /// Picking a model is each mode's own page.
+    pub(super) fn providers_sections(&self, cx: &Context<Self>) -> Vec<Section> {
         let config = match providers::config(cx) {
             Ok(config) => config,
             Err(error) => {
@@ -42,7 +44,6 @@ impl SettingsWindow {
         if let Some(error) = self.providers_error.clone() {
             sections.push(Section::new().row(Row::note("providers-error", error).warning(true)));
         }
-        sections.push(self.models_section(&config, cx));
         sections.push(self.providers_section(&config, cx));
         let hand_added: Vec<Row> = config
             .providers
@@ -58,8 +59,22 @@ impl SettingsWindow {
         sections
     }
 
+    /// Jig mode: its model, then the jigs.
+    pub(super) fn jig_mode_sections(&self, cx: &Context<Self>) -> Vec<Section> {
+        let model = match providers::config(cx) {
+            Ok(config) => self.models_section(&config, cx),
+            Err(error) => Section::new().row(
+                Row::note(
+                    "providers-error",
+                    format!("Couldn't read your providers. {error}"),
+                )
+                .warning(true),
+            ),
+        };
+        std::iter::once(model).chain(self.jigs_sections()).collect()
+    }
+
     /// The model Jig mode uses, from what the connected providers offer.
-    /// The agent's is on the Agent page, since only OpenCode takes one.
     fn models_section(&self, config: &Config, cx: &Context<Self>) -> Section {
         let this = cx.entity().downgrade();
         let mut quick_options = offered_models(config, cx);
@@ -70,11 +85,11 @@ impl SettingsWindow {
         let quick = if quick_options.is_empty() {
             Row::note(
                 "no-models",
-                "Connect a provider below, then pick its models here.",
+                "Connect a provider under Providers, then pick its model here.",
             )
         } else {
             let this = this.clone();
-            Row::new("quick-model", "Jig mode")
+            Row::new("quick-model", "Model")
                 .description("One fast call at the cursor. Small models answer in a few seconds.")
                 .keywords(["model", "quick", "jig"])
                 .control(ui::dropdown(
@@ -124,7 +139,7 @@ impl SettingsWindow {
         }
 
         Row::new("agent-model", "Model")
-            .description("What OpenCode runs on, from the providers under Models.")
+            .description("What OpenCode runs on, from your providers.")
             .keywords(["model", "agent", "opencode"])
             .control(ui::dropdown(
                 "agent-model",
@@ -224,7 +239,7 @@ impl SettingsWindow {
                 None => local_row(template, provider, cx),
             }
         });
-        Section::titled("Providers")
+        Section::new()
             .footer("Keys are kept in the system keychain, never in config.toml.")
             .rows(rows)
     }

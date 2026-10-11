@@ -20,6 +20,36 @@ static SERVER: Mutex<Option<(Option<Value>, Arc<AgentServer>)>> = Mutex::new(Non
 type Running = HashMap<String, (AgentCommandLine, Arc<Connection>)>;
 static AGENTS: Mutex<Option<Running>> = Mutex::new(None);
 
+/// An agent and model picked in ⌘K, in place of the settings', for the
+/// window. `model` is `provider/model` for OpenCode, the agent's own name
+/// for an ACP agent, or `None` for the agent's default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pick {
+    pub agent: String,
+    pub model: Option<String>,
+}
+
+impl Pick {
+    /// What the settings say: the agent picked there, on its model.
+    pub fn from_settings(cx: &App) -> Self {
+        let agent = crate::agents::chosen(cx);
+        let model = match agent.kind {
+            Kind::OpenCode => crate::providers::config(cx)
+                .ok()
+                .and_then(|config| config.agent.clone().or_else(|| config.quick_model())),
+            Kind::Acp => crate::settings::get(cx)
+                .agent
+                .models
+                .get(&agent.key)
+                .cloned(),
+        };
+        Self {
+            agent: agent.key.clone(),
+            model,
+        }
+    }
+}
+
 /// Which agent to run and how, read on the main thread, where the settings
 /// and keys are.
 #[derive(Clone, Debug)]
@@ -29,30 +59,53 @@ pub enum Choice {
         key: String,
         name: String,
         command: AgentCommandLine,
+        /// Its model, by its own name; `None` for its default.
+        model: Option<String>,
     },
 }
 
 impl Choice {
-    /// The model to ask for, as OpenCode names it; ACP agents use their own.
+    /// The model to ask for, as OpenCode names it; ACP agents pick theirs
+    /// as the conversation starts.
     pub fn model(&self) -> String {
         match self {
             Choice::OpenCode(target) => target.model.clone(),
             Choice::Acp { .. } => String::new(),
         }
     }
+
+    /// An ACP agent's model, by its own name.
+    pub fn acp_model(&self) -> Option<&str> {
+        match self {
+            Choice::OpenCode(_) => None,
+            Choice::Acp { model, .. } => model.as_deref(),
+        }
+    }
+
+    /// The agent's key, for what's remembered about it.
+    pub fn key(&self) -> &str {
+        match self {
+            Choice::OpenCode(_) => crate::agents::DEFAULT,
+            Choice::Acp { key, .. } => key,
+        }
+    }
 }
 
-/// The agent Settings picked, ready to start, or why it can't.
-pub fn choice(cx: &App) -> Result<Choice, String> {
-    let agent = crate::agents::chosen(cx);
+/// The agent `pick` names, else the one Settings picked, ready to start.
+pub fn choice_for(pick: Option<&Pick>, cx: &App) -> Result<Choice, String> {
+    let pick = pick.cloned().unwrap_or_else(|| Pick::from_settings(cx));
+    let agent = crate::agents::named(&pick.agent);
     match agent.kind {
-        Kind::OpenCode => crate::providers::agent_target(cx).map(Choice::OpenCode),
+        Kind::OpenCode => {
+            crate::providers::agent_target_for(pick.model.as_deref(), cx).map(Choice::OpenCode)
+        }
         Kind::Acp => Ok(Choice::Acp {
             key: agent.key.clone(),
             name: agent.name.clone(),
             command: agent
                 .command_line()
-                .map_err(|missing| format!("{missing} Install it in Settings > Agent."))?,
+                .map_err(|missing| format!("{missing} Install it in Settings > Agent mode."))?,
+            model: pick.model,
         }),
     }
 }
@@ -84,7 +137,9 @@ pub fn stop() {
 pub fn connect(choice: &Choice) -> anyhow::Result<Backend> {
     match choice {
         Choice::OpenCode(target) => server(target.config.as_ref()).map(Backend::OpenCode),
-        Choice::Acp { key, name, command } => {
+        Choice::Acp {
+            key, name, command, ..
+        } => {
             let mut agents = AGENTS.lock().unwrap_or_else(|error| error.into_inner());
             let agents = agents.get_or_insert_with(HashMap::new);
             if let Some((started_with, connection)) = agents.get(key)

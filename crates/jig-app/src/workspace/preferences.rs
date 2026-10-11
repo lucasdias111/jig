@@ -55,6 +55,10 @@ impl Workspace {
         if new.commands != old.commands {
             self.reload_presets(window, cx);
         }
+        // New defaults in Settings take over from ⌘K's pick.
+        if new.agent.using != old.agent.using || new.agent.models != old.agent.models {
+            self.agent_pick = None;
+        }
         if new.debugging != old.debugging || new.languages != old.languages {
             self.refresh_breakpoint_gutters(cx);
         }
@@ -63,6 +67,18 @@ impl Workspace {
 
     pub(super) fn reload_provider(&mut self, cx: &App) {
         self.provider = crate::providers::build(cx);
+        // New default models in Settings take over from ⌘K's picks; the
+        // providers also change as their model lists load, which doesn't.
+        let defaults = crate::providers::config(cx)
+            .ok()
+            .map(|config| (config.quick_model(), config.agent.clone()));
+        if self.model_defaults.as_ref() != Some(&defaults) {
+            if self.model_defaults.is_some() {
+                self.jig_pick = None;
+                self.agent_pick = None;
+            }
+            self.model_defaults = Some(defaults);
+        }
     }
 
     fn config_path(&self) -> Result<PathBuf, String> {

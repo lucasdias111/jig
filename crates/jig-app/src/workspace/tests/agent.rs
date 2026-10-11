@@ -400,6 +400,49 @@ fn command_k_leaves_the_conversation_open(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_agent_picked_in_command_k_runs_the_next_conversation(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-k", cx);
+    });
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            let palette = this.palette.as_ref().unwrap().view.clone();
+            let choice = jig_commands::ModelChoice {
+                agent: Some("claude-code".into()),
+                model: Some("opus".into()),
+                label: "Claude Code · Opus".into(),
+            };
+            this.pick_model(choice, palette, window, cx);
+        })
+    });
+    assert!(
+        cx.update(|cx| workspace.read(cx).palette.is_some()),
+        "picking keeps the palette open"
+    );
+    step(cx, window, |window, cx| window.press("escape", cx));
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        let agent = this.chat.as_ref().unwrap().agent.as_ref().unwrap();
+        assert_eq!(
+            agent.pick,
+            Some(crate::agent::Pick {
+                agent: "claude-code".into(),
+                model: Some("opus".into()),
+            }),
+            "the conversation keeps what was picked"
+        );
+        assert_eq!(agent.label, "Claude Code");
+    });
+}
+
+#[gpui_kit::test]
 fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     let ws = workspace.clone();

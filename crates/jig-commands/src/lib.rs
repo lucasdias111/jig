@@ -12,5 +12,7 @@ pub mod surface;
 pub use bubble::{Bubble, LiveStep};
 pub use chat::{ChatDrag, ChatEntry, ChatFrame, ChatResize, ChatStatus, Conversation};
 pub use new_command::{NewCommandEvent, NewCommandForm};
-pub use palette::{AgentCommandInfo, CommandPalette, PaletteEvent, PastConversation};
+pub use palette::{
+    AgentCommandInfo, CommandPalette, ModelChoice, ModelMenu, PaletteEvent, PastConversation,
+};
 pub use presets::{CommentMode, Invocation, Preset, Scope};

@@ -111,15 +111,56 @@ pub fn build(cx: &App) -> Result<Arc<dyn Provider>, String> {
         .map_err(|error| format!("{error:#}"))
 }
 
-/// The agent's model and what OpenCode needs to reach it.
-pub fn agent_target(cx: &App) -> Result<AgentTarget, String> {
-    let agent = config(cx)?.agent().map_err(|error| format!("{error:#}"))?;
+/// `provider/model`, ready to call, e.g. a model picked in ⌘K for a run.
+pub fn build_model(id: &str, cx: &App) -> Result<Arc<dyn Provider>, String> {
+    let provider = config(cx)?
+        .resolve(id)
+        .map_err(|error| format!("{error:#}"))?;
+    provider
+        .build_with(api_key(&provider, cx).map(|(key, _)| key))
+        .map_err(|error| format!("{error:#}"))
+}
+
+/// Every model the connected providers offer, as `provider/model` and a
+/// label like "Anthropic · claude-sonnet-5-5".
+pub fn offered(cx: &App) -> Vec<(String, String)> {
+    let Ok(config) = config(cx) else {
+        return Vec::new();
+    };
+    let mut offered = Vec::new();
+    for provider in &config.providers {
+        if let Some(ModelList::Loaded(models)) = models(&provider.name, cx) {
+            let label = jig_ai::template_named(&provider.name)
+                .map_or(provider.name.as_str(), |template| template.label);
+            for model in models {
+                offered.push((
+                    format!("{}/{model}", provider.name),
+                    format!("{label} · {model}"),
+                ));
+            }
+        }
+    }
+    offered
+}
+
+/// OpenCode on `model` (`provider/model`), or on the agent model from the
+/// settings.
+pub fn agent_target_for(model: Option<&str>, cx: &App) -> Result<AgentTarget, String> {
+    let config = config(cx)?;
+    let agent = match model {
+        Some(id) => {
+            let provider = config.resolve(id).map_err(|error| format!("{error:#}"))?;
+            let model = provider.model.clone();
+            AgentModel::Jig { provider, model }
+        }
+        None => config.agent().map_err(|error| format!("{error:#}"))?,
+    };
     let key = match &agent {
         AgentModel::Jig { provider, .. } => {
             let key = api_key(provider, cx).map(|(key, _)| key);
             if key.is_none() && provider.needs_key() {
                 return Err(format!(
-                    "\"{}\" has no API key. Add one in Settings > Models.",
+                    "\"{}\" has no API key. Add one in Settings > Providers.",
                     provider.name
                 ));
             }
@@ -322,13 +363,17 @@ mod tests {
         cx.update(|cx| {
             connect(template_named("ollama").unwrap(), None, cx).unwrap();
             set_quick("ollama/qwen3:8b", cx).unwrap();
-            let target = agent_target(cx).unwrap();
+            let target = agent_target_for(None, cx).unwrap();
             assert_eq!(target.model, "jig-ollama/qwen3:8b");
             assert!(target.config.unwrap()["provider"]["jig-ollama"].is_object());
 
             set_agent(Some("opencode-go/glm-5.3"), cx).unwrap();
             if std::env::var("OPENCODE_API_KEY").is_err() {
-                assert!(agent_target(cx).unwrap_err().contains("has no API key"));
+                assert!(
+                    agent_target_for(None, cx)
+                        .unwrap_err()
+                        .contains("has no API key")
+                );
             }
         });
     }

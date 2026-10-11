@@ -38,13 +38,24 @@ impl Backend {
         }
     }
 
+    /// The models an ACP agent offers, once it has said; OpenCode's come
+    /// from Jig's providers.
+    pub fn models(&self) -> Option<acp::AgentModels> {
+        match self {
+            Backend::OpenCode(_) => None,
+            Backend::Acp(connection) => connection.models(),
+        }
+    }
+
     /// A new conversation in `directory`, titled with what was asked where
-    /// the agent takes a title.
+    /// the agent takes a title. `model` picks an ACP agent's model; OpenCode
+    /// takes its model with each request.
     pub fn create(
         &self,
         directory: &Path,
         title: &str,
         permissions: &Permissions,
+        model: Option<&str>,
     ) -> Result<Session> {
         Ok(match self {
             Backend::OpenCode(server) => Session::OpenCode(AgentSession::create(
@@ -54,7 +65,7 @@ impl Backend {
                 permissions,
             )?),
             Backend::Acp(connection) => {
-                Session::Acp(acp::Session::create(connection.clone(), directory)?)
+                Session::Acp(acp::Session::create(connection.clone(), directory, model)?)
             }
         })
     }
@@ -85,6 +96,14 @@ impl Session {
         match self {
             Session::OpenCode(session) => session.id(),
             Session::Acp(session) => session.id(),
+        }
+    }
+
+    /// Switch an ACP conversation to `model`, e.g. one picked up again.
+    pub fn use_model(&self, model: &str) -> Result<()> {
+        match self {
+            Session::OpenCode(_) => Ok(()),
+            Session::Acp(session) => session.use_model(model),
         }
     }
 
