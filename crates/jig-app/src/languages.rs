@@ -3,6 +3,8 @@
 //! Grammars are compiled in (see the `gpui-kit` features in the workspace
 //! `Cargo.toml`); Settings turns them on or off and changes their extensions.
 
+pub mod gdscript;
+
 use std::path::Path;
 
 use crate::settings::LanguageSettings;
@@ -54,6 +56,11 @@ pub const BUNDLED: &[Language] = &[
         extensions: &["go"],
     },
     Language {
+        name: "gdscript",
+        label: "GDScript",
+        extensions: &["gd"],
+    },
+    Language {
         name: "toml",
         label: "TOML",
         extensions: &["toml"],
@@ -75,7 +82,7 @@ pub const BUNDLED: &[Language] = &[
 pub fn line_comment(language: &str) -> Option<&'static str> {
     match language {
         "rust" | "typescript" | "tsx" | "javascript" | "java" | "go" => Some("//"),
-        "python" | "toml" => Some("#"),
+        "python" | "gdscript" | "toml" => Some("#"),
         _ => None,
     }
 }
@@ -140,6 +147,7 @@ mod tests {
         assert_eq!(lang("index.mjs"), "javascript");
         assert_eq!(lang("Main.java"), "java");
         assert_eq!(lang("NOTES.MD"), "markdown");
+        assert_eq!(lang("player.gd"), "gdscript");
         assert_eq!(lang("Makefile"), "text");
         assert_eq!(lang("a.unknown"), "text");
     }
@@ -165,6 +173,7 @@ mod tests {
 
     #[test]
     fn every_bundled_grammar_is_compiled_in() {
+        gdscript::register();
         let registry = gpui_kit::component::highlighter::LanguageRegistry::singleton();
         for language in BUNDLED {
             assert!(

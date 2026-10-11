@@ -31,6 +31,10 @@ similar = "2"
 notify = "7"
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
+# GDScript's grammar, which GPUI Kit has no feature for; registered in
+# `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
+tree-sitter-gdscript = "6"
+tree-sitter = "0.26"
 
 [features]
 # Pictures of the Settings window: `JIG_SNAPSHOTS=<folder> cargo run -p jig-app

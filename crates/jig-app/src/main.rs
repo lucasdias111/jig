@@ -64,6 +64,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        languages::gdscript::register();
         let settings_error = settings::init(cx);
         providers::init(cx);
         recent::init(cx);

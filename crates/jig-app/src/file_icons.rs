@@ -17,6 +17,7 @@ const GO: &[u8] = include_bytes!("../../../assets/icons/go.svg");
 const TOML: &[u8] = include_bytes!("../../../assets/icons/toml.svg");
 const JSON: &[u8] = include_bytes!("../../../assets/icons/json.svg");
 const MARKDOWN: &[u8] = include_bytes!("../../../assets/icons/markdown.svg");
+const GDSCRIPT: &[u8] = include_bytes!("../../../assets/icons/gdscript.svg");
 
 /// A language's logo and its color, in Ember's light and dark variants.
 struct Logo {
@@ -33,6 +34,7 @@ fn logo(language: &str) -> Option<Logo> {
         "java" => (JAVA, "#C8443C", "#F07870"),
         "python" => (PYTHON, "#3D7BB8", "#6FA8DC"),
         "go" => (GO, "#148A7E", "#5CC7B8"),
+        "gdscript" => (GDSCRIPT, "#3B76A8", "#6FA8DC"),
         "toml" => (TOML, "#8A4FC2", "#C792EA"),
         "json" => (JSON, "#A86B00", "#F2C46D"),
         "markdown" => (MARKDOWN, "#7F776F", "#A39A90"),

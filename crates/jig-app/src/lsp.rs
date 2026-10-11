@@ -92,6 +92,15 @@ pub const SERVERS: &[Server] = &[
         ],
         outermost: true,
     },
+    // Godot's editor serves GDScript over TCP while it's open; `nc` bridges
+    // that to stdio. Start Godot before opening a script.
+    Server {
+        name: "godot",
+        commands: &[&["nc", "127.0.0.1", "6005"]],
+        languages: &["gdscript"],
+        root_markers: &["project.godot"],
+        outermost: false,
+    },
 ];
 
 /// The server for `language`, if there is one.
@@ -111,6 +120,7 @@ pub fn language_id(language: &str, path: &Path) -> &'static str {
         "python" => "python",
         "go" => "go",
         "java" => "java",
+        "gdscript" => "gdscript",
         _ => "plaintext",
     }
 }
