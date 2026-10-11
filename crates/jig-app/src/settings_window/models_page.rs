@@ -58,31 +58,13 @@ impl SettingsWindow {
         sections
     }
 
-    /// The model each mode uses, from what the connected providers offer.
+    /// The model Jig mode uses, from what the connected providers offer.
+    /// The agent's is on the Agent page, since only OpenCode takes one.
     fn models_section(&self, config: &Config, cx: &Context<Self>) -> Section {
         let this = cx.entity().downgrade();
-        let offered = offered_models(config, cx);
-        let mut quick_options = offered.clone();
+        let mut quick_options = offered_models(config, cx);
         if let Some(id) = config.quick_model() {
             keep_current(&mut quick_options, &id, config);
-        }
-
-        let mut agent_options = vec![(SharedString::from(""), "Same as Jig mode".into())];
-        let agent = match (&config.agent, &config.agent_model) {
-            (Some(id), _) => id.clone(),
-            (None, Some(native)) => {
-                let id = format!("{OPENCODE_OWN}{native}");
-                agent_options.push((
-                    id.clone().into(),
-                    format!("{native} (from OpenCode)").into(),
-                ));
-                id
-            }
-            (None, None) => String::new(),
-        };
-        agent_options.extend(offered);
-        if config.agent.is_some() {
-            keep_current(&mut agent_options, &agent, config);
         }
 
         let quick = if quick_options.is_empty() {
@@ -115,8 +97,34 @@ impl SettingsWindow {
                     },
                 ))
         };
-        let agent_row = Row::new("agent-model", "Agent mode")
-            .description("Used when the agent is OpenCode; other agents bring their own.")
+        Section::new().row(quick).row(self.check_row(config, cx))
+    }
+
+    /// The model OpenCode runs on in Agent mode, from what the connected
+    /// providers offer; by default the same as Jig mode's.
+    pub(super) fn opencode_model_row(&self, config: &Config, cx: &Context<Self>) -> Row {
+        let this = cx.entity().downgrade();
+        let offered = offered_models(config, cx);
+        let mut agent_options = vec![(SharedString::from(""), "Same as Jig mode".into())];
+        let agent = match (&config.agent, &config.agent_model) {
+            (Some(id), _) => id.clone(),
+            (None, Some(native)) => {
+                let id = format!("{OPENCODE_OWN}{native}");
+                agent_options.push((
+                    id.clone().into(),
+                    format!("{native} (from OpenCode)").into(),
+                ));
+                id
+            }
+            (None, None) => String::new(),
+        };
+        agent_options.extend(offered);
+        if config.agent.is_some() {
+            keep_current(&mut agent_options, &agent, config);
+        }
+
+        Row::new("agent-model", "Model")
+            .description("What OpenCode runs on, from the providers under Models.")
             .keywords(["model", "agent", "opencode"])
             .control(ui::dropdown(
                 "agent-model",
@@ -130,11 +138,7 @@ impl SettingsWindow {
                     let result = providers::set_agent(id, cx);
                     this.update(cx, |this, cx| this.report(result, cx)).ok();
                 },
-            ));
-        Section::new()
-            .row(quick)
-            .row(agent_row)
-            .row(self.check_row(config, cx))
+            ))
     }
 
     /// Test the Jig model, and refresh every provider's models.

@@ -47,6 +47,17 @@ impl SettingsWindow {
                     |key, cx| settings::update(cx, |s| s.agent.using = key.to_string()),
                 )),
         );
+        // Only OpenCode runs on a model Jig picks; the others bring their own.
+        section = match (chosen.kind, crate::providers::config(cx)) {
+            (agents::Kind::OpenCode, Ok(config)) => {
+                section.row(self.opencode_model_row(&config, cx))
+            }
+            (agents::Kind::OpenCode, Err(_)) => section,
+            (agents::Kind::Acp, _) => section.row(Row::note(
+                "agent-own-model",
+                format!("{} uses its own model and sign-in.", chosen.name),
+            )),
+        };
         if chosen.installable() && (!ready || self.installs.contains_key(&install_key(&chosen))) {
             section = section.row(self.install_agent_row(chosen, cx));
         }
