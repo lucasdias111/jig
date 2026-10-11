@@ -403,6 +403,7 @@ command = ["cargo", "fmt"]
         );
     }
 
+    #[cfg(unix)]
     fn fake(script: &str) -> Formatter {
         Formatter {
             key: "fake".into(),
