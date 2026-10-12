@@ -11,8 +11,8 @@
 use std::rc::Rc;
 
 use gpui_kit::component::input::{
-    Backspace, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveEnd,
-    MoveRight, MoveUp,
+    Backspace, Enter, Escape, IndentInline, InputEvent, MoveDown, MoveEnd, MoveRight, MoveUp,
+    Textarea, TextareaState,
 };
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -21,6 +21,8 @@ use gpui_kit::*;
 use crate::presets::{self, CommentMode, Invocation, Preset};
 
 const MAX_ROWS: usize = 8;
+/// How tall an agent message grows, in lines, before it scrolls.
+const MAX_MESSAGE_LINES: usize = 8;
 /// The palette's key context, for its own shortcuts.
 pub const CONTEXT: &str = "JigPalette";
 
@@ -154,7 +156,9 @@ struct NoteStep {
 
 pub struct CommandPalette {
     presets: Rc<Vec<Preset>>,
-    input: Entity<InputState>,
+    /// One line in Jig mode; in Agent mode it wraps and grows, and
+    /// Shift-Enter starts a new line.
+    input: Entity<TextareaState>,
     rows: Vec<Row>,
     /// The query `rows` were built from.
     filtered_query: String,
@@ -199,7 +203,10 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(Self::list_placeholder(has_selection, false))
+            TextareaState::new(window, cx)
+                .placeholder(Self::list_placeholder(has_selection, false))
+                .auto_grow(1, 1)
+                .soft_wrap(false)
         });
         let subscription = cx.subscribe_in(
             &input,
@@ -302,7 +309,7 @@ impl CommandPalette {
             (None, false) => "Pick a provider, or type a model…".to_string(),
         };
         self.input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
+            set_text(input, "", window, cx);
             input.set_placeholder(placeholder, window, cx);
         });
         self.refilter(cx);
@@ -340,7 +347,7 @@ impl CommandPalette {
         };
         let placeholder = Self::list_placeholder(self.has_selection, self.agent);
         self.input.update(cx, |input, cx| {
-            input.set_value(picking.query, window, cx);
+            set_text(input, picking.query, window, cx);
             input.set_placeholder(placeholder, window, cx);
         });
         self.refilter(cx);
@@ -535,7 +542,7 @@ impl CommandPalette {
             let prefix = &before[..before.len() - jig.len()];
             let completed = format!("{prefix}{}: ", self.presets[*preset].name);
             self.input
-                .update(cx, |input, cx| input.set_value(completed, window, cx));
+                .update(cx, |input, cx| set_text(input, completed, window, cx));
         }
         self.refilter(cx);
     }
@@ -769,7 +776,7 @@ impl CommandPalette {
             Some(Row::Jigs) => {
                 let text = format!("{JIG_PREFIX} ");
                 self.input
-                    .update(cx, |input, cx| input.set_value(text, window, cx));
+                    .update(cx, |input, cx| set_text(input, text, window, cx));
                 self.refilter(cx);
             }
             None => {}
@@ -790,7 +797,7 @@ impl CommandPalette {
             missing: false,
         });
         self.input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
+            set_text(input, "", window, cx);
             input.set_placeholder(placeholder, window, cx);
         });
         cx.notify();
@@ -800,7 +807,7 @@ impl CommandPalette {
         let Some(note) = self.note.take() else { return };
         let placeholder = Self::list_placeholder(self.has_selection, self.agent);
         self.input.update(cx, |input, cx| {
-            input.set_value(note.query, window, cx);
+            set_text(input, note.query, window, cx);
             input.set_placeholder(placeholder, window, cx);
         });
         self.refilter(cx);
@@ -833,6 +840,10 @@ impl CommandPalette {
     }
 
     fn on_enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        // Shift-Enter in a message for the agent starts a new line.
+        if action.shift && self.agent && self.note.is_none() && self.picking.is_none() {
+            return;
+        }
         cx.stop_propagation();
         if self.note.is_some() {
             self.run_note(cx);
@@ -878,6 +889,10 @@ impl CommandPalette {
             });
             self.refilter(cx);
         }
+        self.input.update(cx, |input, cx| {
+            input.set_auto_grow(1, if agent { MAX_MESSAGE_LINES } else { 1 }, cx);
+            input.set_soft_wrap(agent, window, cx);
+        });
         if switched && agent {
             cx.emit(PaletteEvent::AgentMode);
         }
@@ -990,24 +1005,39 @@ impl CommandPalette {
     fn render_input(&self, agent: bool, accent: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         let completion = self.completion(cx);
         let muted = cx.theme().muted_foreground;
-        div()
-            .relative()
+        h_flex()
+            .items_start()
+            .gap_1()
             .px_1()
             .text_size(px(15.))
             .child(
-                Input::new(&self.input)
-                    .appearance(false)
-                    .cleanable(false)
-                    .prefix(
-                        crate::surface::lane_icon(agent)
-                            .size(px(15.))
-                            .text_color(accent),
-                    )
-                    .when(completion.is_some(), |this| {
-                        this.suffix(crate::surface::hint("→ complete", cx))
-                    }),
+                div().h(px(32.)).flex().items_center().child(
+                    crate::surface::lane_icon(agent)
+                        .size(px(15.))
+                        .text_color(accent),
+                ),
             )
-            .children(completion.map(|rest| suggestion(self.input.clone(), rest, muted)))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Textarea::new(&self.input).appearance(false))
+                    .children(
+                        completion
+                            .as_ref()
+                            .map(|rest| suggestion(self.input.clone(), rest.clone(), muted)),
+                    ),
+            )
+            .when(completion.is_some(), |this| {
+                this.child(
+                    div()
+                        .h(px(32.))
+                        .flex()
+                        .items_center()
+                        .child(crate::surface::hint("→ complete", cx)),
+                )
+            })
     }
 
     fn render_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1345,10 +1375,24 @@ impl Render for CommandPalette {
     }
 }
 
+/// Replace the text with the cursor after it, where typing goes on. A
+/// textarea's own `set_value` puts it at the start.
+fn set_text(
+    input: &mut TextareaState,
+    text: impl Into<String>,
+    window: &mut Window,
+    cx: &mut Context<TextareaState>,
+) {
+    let text = text.into();
+    let end = text.len();
+    input.set_value(text, window, cx);
+    input.set_selected_range(end..end, cx);
+}
+
 /// The rest of a jig's name in grey after the typed text. Painted after the
 /// input, so it goes where the input has just laid its text out, in the same
 /// font at the size the input actually drew.
-fn suggestion(input: Entity<InputState>, rest: String, color: Hsla) -> impl IntoElement {
+fn suggestion(input: Entity<TextareaState>, rest: String, color: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |_, _, window, cx| {
@@ -1828,6 +1872,19 @@ mod tests {
             cx.update(|cx| host.read(cx).other.clone()),
             ["agent mode", "command review main"]
         );
+    }
+
+    #[gpui_kit::test]
+    fn shift_enter_starts_a_new_line_in_a_message_for_the_agent(cx: &mut TestAppContext) {
+        let (window, host) = open_agent(cx);
+        step(cx, window, |window, cx| window.input("rename it", cx));
+        step(cx, window, |window, cx| window.press("shift-enter", cx));
+        step(cx, window, |window, cx| window.input("and its tests", cx));
+        assert_eq!(query(cx, &host), "rename it\nand its tests");
+        assert!(events(cx, &host).is_empty());
+        step(cx, window, |window, cx| window.press("enter", cx));
+        let invocation = events(cx, &host)[0].clone().unwrap();
+        assert_eq!(invocation.instruction, "rename it\nand its tests");
     }
 
     #[gpui_kit::test]
