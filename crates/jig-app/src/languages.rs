@@ -1,11 +1,13 @@
 //! The languages Jig can highlight, and which file each one applies to:
 //! `assets/default-languages.toml`, which also lists the language servers.
 //!
-//! Grammars are compiled in (see the `gpui-kit` features in the workspace
-//! `Cargo.toml`); Settings adds languages to the list, turns them on or off
-//! and changes their extensions.
+//! Grammars are compiled in (the `gpui-kit` features in the workspace
+//! `Cargo.toml`, and the crates in [`grammars`]); Settings adds languages to
+//! the list from its Library, turns them on or off and changes their
+//! extensions.
 
 pub mod gdscript;
+pub mod grammars;
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -406,6 +408,7 @@ mod tests {
     #[test]
     fn every_bundled_grammar_is_compiled_in() {
         gdscript::register();
+        grammars::register();
         let registry = gpui_kit::component::highlighter::LanguageRegistry::singleton();
         for language in bundled() {
             assert!(

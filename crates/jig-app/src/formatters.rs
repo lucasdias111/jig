@@ -579,6 +579,7 @@ command = ["cargo", "fmt"]
             ("ktfmt", "a.kt", "val  x=1"),
             ("sql-formatter", "a.sql", "select a from b"),
             ("gdformat", "a.gd", "var  x=1"),
+            ("elm-format", "A.elm", "module A exposing (..)\nx=1"),
         ];
         let registry = load(None);
         let mut failed = Vec::new();

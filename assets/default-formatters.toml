@@ -34,7 +34,8 @@ help = "Install it with rustup component add rustfmt."
 key = "prettier"
 name = "Prettier"
 languages = [
-    "typescript", "tsx", "javascript", "json", "markdown", "css", "html", "yaml", "graphql",
+    "typescript", "tsx", "javascript", "json", "markdown", "css", "scss", "less", "html", "vue",
+    "yaml", "graphql",
 ]
 command = ["prettier", "--stdin-filepath", "${file}"]
 install = 'npm install --prefix "${dir}" prettier'
@@ -244,3 +245,55 @@ mkdir -p "${dir}/bin"
 ln -sf ../venv/bin/gdformat "${dir}/bin/gdformat"
 '''
 help = "Needs Python 3. Install it here, or with pip install 'gdtoolkit==4.*'."
+
+[[formatter]]
+key = "dart-format"
+name = "dart format"
+languages = ["dart"]
+command = ["dart", "format"]
+help = "It comes with the Dart SDK, from dart.dev/get-dart."
+
+[[formatter]]
+key = "elm-format"
+name = "elm-format"
+languages = ["elm"]
+command = ["elm-format", "--stdin"]
+install = 'npm install --prefix "${dir}" elm-format'
+help = "Needs Node. Install it here, or with npm install -g elm-format."
+
+[[formatter]]
+key = "fish_indent"
+name = "fish_indent"
+languages = ["fish"]
+command = ["fish_indent"]
+help = "It comes with fish, from fishshell.com."
+
+[[formatter]]
+key = "gleam-format"
+name = "gleam format"
+languages = ["gleam"]
+command = ["gleam", "format", "--stdin"]
+help = "It comes with Gleam, from gleam.run/getting-started."
+
+[[formatter]]
+key = "nixfmt"
+name = "nixfmt"
+languages = ["nix"]
+command = ["nixfmt"]
+help = "Install it with nix profile install nixpkgs#nixfmt."
+
+[[formatter]]
+key = "ormolu"
+name = "Ormolu"
+languages = ["haskell"]
+command = ["ormolu", "--stdin-input-file", "${file}"]
+help = "Install it with GHCup's cabal: cabal install ormolu."
+
+[[formatter]]
+key = "xmllint"
+name = "xmllint"
+languages = ["xml"]
+command = ["xmllint", "--format", "-"]
+help.macos = "It comes with macOS."
+help.default = "Install libxml2's tools, for example sudo apt install libxml2-utils."
+

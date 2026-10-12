@@ -1,7 +1,7 @@
 # The languages Jig knows, and the language servers that serve them.
 #
 # Each language's grammar is compiled into Jig (a `tree-sitter-*` feature in
-# the workspace Cargo.toml, or a module like `languages::gdscript`), so a new
+# the workspace Cargo.toml, or a crate in `languages::grammars`), so a new
 # one needs a new build. Formatters (default-formatters.toml) and debuggers
 # (default-debuggers.toml) name the languages they serve themselves.
 #
@@ -249,6 +249,179 @@ name = "ejs"
 label = "EJS"
 extensions = ["ejs"]
 
+[[language]]
+name = "ada"
+label = "Ada"
+extensions = ["adb", "ads", "ada"]
+line_comment = "--"
+
+[[language]]
+name = "d"
+label = "D"
+extensions = ["d", "di"]
+line_comment = "//"
+
+[[language]]
+name = "dart"
+label = "Dart"
+extensions = ["dart"]
+line_comment = "//"
+
+[[language]]
+name = "dockerfile"
+label = "Dockerfile"
+extensions = ["dockerfile"]
+filenames = ["Dockerfile", "Containerfile"]
+line_comment = "#"
+
+[[language]]
+name = "elisp"
+label = "Emacs Lisp"
+extensions = ["el"]
+filenames = [".emacs"]
+line_comment = ";"
+
+[[language]]
+name = "elm"
+label = "Elm"
+extensions = ["elm"]
+line_comment = "--"
+
+[[language]]
+name = "erlang"
+label = "Erlang"
+extensions = ["erl", "hrl"]
+filenames = ["rebar.config"]
+line_comment = "%"
+
+[[language]]
+name = "fish"
+label = "Fish"
+extensions = ["fish"]
+line_comment = "#"
+
+[[language]]
+name = "gleam"
+label = "Gleam"
+extensions = ["gleam"]
+line_comment = "//"
+
+[[language]]
+name = "glsl"
+label = "GLSL"
+extensions = ["glsl", "vert", "frag", "geom", "comp", "tesc", "tese"]
+line_comment = "//"
+
+[[language]]
+name = "haskell"
+label = "Haskell"
+extensions = ["hs"]
+line_comment = "--"
+
+[[language]]
+name = "ini"
+label = "INI"
+extensions = ["ini"]
+filenames = [".editorconfig", ".gitconfig"]
+line_comment = ";"
+
+[[language]]
+name = "julia"
+label = "Julia"
+extensions = ["jl"]
+line_comment = "#"
+
+[[language]]
+name = "less"
+label = "Less"
+extensions = ["less"]
+line_comment = "//"
+
+[[language]]
+name = "objc"
+label = "Objective-C"
+extensions = ["m", "mm"]
+line_comment = "//"
+lsp_id = "objective-c"
+
+[[language]]
+name = "matlab"
+label = "MATLAB"
+extensions = ["m"]
+line_comment = "%"
+
+[[language]]
+name = "nix"
+label = "Nix"
+extensions = ["nix"]
+line_comment = "#"
+
+[[language]]
+name = "odin"
+label = "Odin"
+extensions = ["odin"]
+line_comment = "//"
+
+[[language]]
+name = "pascal"
+label = "Pascal"
+extensions = ["pas", "pp", "dpr", "lpr"]
+line_comment = "//"
+
+[[language]]
+name = "powershell"
+label = "PowerShell"
+extensions = ["ps1", "psm1", "psd1"]
+line_comment = "#"
+
+[[language]]
+name = "prisma"
+label = "Prisma"
+extensions = ["prisma"]
+line_comment = "//"
+
+[[language]]
+name = "r"
+label = "R"
+extensions = ["r"]
+line_comment = "#"
+
+[[language]]
+name = "racket"
+label = "Racket"
+extensions = ["rkt"]
+line_comment = ";"
+
+[[language]]
+name = "scss"
+label = "SCSS"
+extensions = ["scss"]
+line_comment = "//"
+
+[[language]]
+name = "starlark"
+label = "Starlark"
+extensions = ["star", "bzl", "bazel"]
+filenames = ["BUILD", "WORKSPACE", "Tiltfile"]
+line_comment = "#"
+
+[[language]]
+name = "vim"
+label = "Vim script"
+extensions = ["vim"]
+filenames = [".vimrc", "_vimrc"]
+line_comment = '"'
+
+[[language]]
+name = "vue"
+label = "Vue"
+extensions = ["vue"]
+
+[[language]]
+name = "xml"
+label = "XML"
+extensions = ["xml", "xsd", "xsl", "xslt", "svg", "plist", "xaml", "csproj"]
+
 [[server]]
 name = "rust-analyzer"
 languages = ["rust"]
@@ -374,7 +547,7 @@ help = "Needs Node. Install it here, or with npm install -g bash-language-server
 
 [[server]]
 name = "clangd"
-languages = ["c", "cpp"]
+languages = ["c", "cpp", "objc"]
 commands = [["clangd"]]
 root_markers = ["compile_commands.json", "compile_flags.txt", ".clangd"]
 install = '''
@@ -403,7 +576,7 @@ help = "Needs the .NET SDK. Install it here, or with dotnet tool install --globa
 
 [[server]]
 name = "vscode-css-language-server"
-languages = ["css"]
+languages = ["css", "scss", "less"]
 commands = [["vscode-css-language-server", "--stdio"]]
 install = 'npm install --prefix "${dir}" vscode-langservers-extracted'
 help = "Needs Node. Install it here, or with npm install -g vscode-langservers-extracted."
@@ -556,3 +729,75 @@ curl --fail --silent --show-error --location \
   | tar -xz -C "${dir}/bin"
 '''
 help = "Install it here, or with cargo install protols."
+
+[[server]]
+name = "docker-langserver"
+languages = ["dockerfile"]
+commands = [["docker-langserver", "--stdio"]]
+install = 'npm install --prefix "${dir}" dockerfile-language-server-nodejs'
+help = "Needs Node. Install it here, or with npm install -g dockerfile-language-server-nodejs."
+
+[[server]]
+name = "dart"
+languages = ["dart"]
+commands = [["dart", "language-server", "--protocol=lsp"]]
+root_markers = ["pubspec.yaml"]
+help = "It comes with the Dart SDK (and Flutter), from dart.dev/get-dart."
+
+[[server]]
+name = "elm-language-server"
+languages = ["elm"]
+commands = [["elm-language-server"]]
+root_markers = ["elm.json"]
+install = 'npm install --prefix "${dir}" @elm-tooling/elm-language-server elm elm-format'
+help = "Needs Node. Install it here, or with npm install -g @elm-tooling/elm-language-server."
+
+[[server]]
+name = "fish-lsp"
+languages = ["fish"]
+commands = [["fish-lsp", "start"]]
+install = 'npm install --prefix "${dir}" fish-lsp'
+help = "Needs Node and fish. Install it here, or with npm install -g fish-lsp."
+
+[[server]]
+name = "gleam"
+languages = ["gleam"]
+commands = [["gleam", "lsp"]]
+root_markers = ["gleam.toml"]
+help = "It comes with Gleam, from gleam.run/getting-started."
+
+[[server]]
+name = "haskell-language-server"
+languages = ["haskell"]
+commands = [["haskell-language-server-wrapper", "--lsp"]]
+root_markers = ["stack.yaml", "cabal.project", "*.cabal", "package.yaml"]
+outermost = true
+help = "Install it with GHCup: ghcup install hls."
+
+[[server]]
+name = "nil"
+languages = ["nix"]
+commands = [["nil"], ["nixd"]]
+root_markers = ["flake.nix", "default.nix", "shell.nix"]
+help = "Install nil with nix profile install github:oxalica/nil, or nixd."
+
+[[server]]
+name = "prisma-language-server"
+languages = ["prisma"]
+commands = [["prisma-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" @prisma/language-server'
+help = "Needs Node. Install it here, or with npm install -g @prisma/language-server."
+
+[[server]]
+name = "vim-language-server"
+languages = ["vim"]
+commands = [["vim-language-server", "--stdio"]]
+install = 'npm install --prefix "${dir}" vim-language-server'
+help = "Needs Node. Install it here, or with npm install -g vim-language-server."
+
+[[server]]
+name = "ols"
+languages = ["odin"]
+commands = [["ols"]]
+root_markers = ["ols.json"]
+help = "Build it from github.com/DanielGavin/ols and put it on the PATH."
