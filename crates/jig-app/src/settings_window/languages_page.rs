@@ -311,6 +311,7 @@ impl SettingsWindow {
                 language
                     .extensions
                     .iter()
+                    .chain(&language.filenames)
                     .map(|ext| SharedString::from(*ext)),
             );
             Row::new(format!("library-{name}"), language.label)

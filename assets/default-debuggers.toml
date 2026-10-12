@@ -50,8 +50,10 @@
 
 [[debugger]]
 key = "rust"
-name = "Rust, C and C++"
-languages = ["rust"]
+name = "LLDB"
+# Anything LLDB debugs as a native program; the key stays "rust", which
+# settings.toml already names.
+languages = ["rust", "c", "cpp", "swift", "zig"]
 adapter = ["${lldb_dap}"]
 adapter_id = "lldb-dap"
 commands = ["cargo run"]

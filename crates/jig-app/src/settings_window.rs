@@ -793,7 +793,7 @@ mod tests {
         // extension.
         update(handle, cx, |this, _, cx| {
             let library = this.sections(Nav::detail(Page::Languages, Detail::Library), cx);
-            for query in ["ruby", "rb"] {
+            for query in ["ruby", "gemspec"] {
                 let found: Vec<String> = library
                     .iter()
                     .filter_map(|section| section.matching(query))

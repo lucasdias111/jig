@@ -555,4 +555,61 @@ command = ["cargo", "fmt"]
         assert_eq!(tidy("", true, true), "", "an empty file stays empty");
         assert_eq!(tidy(text, false, false), text);
     }
+
+    /// Installs every built-in formatter Jig can install, or those named
+    /// in `JIG_LIVE_TOOLS` (`shfmt,stylua`), into a scratch folder and
+    /// formats a sample with each: `cargo test -p jig-app
+    /// formatter_installers_live -- --ignored --nocapture`. Downloads a lot.
+    #[test]
+    #[ignore]
+    fn formatter_installers_live() {
+        let only = std::env::var("JIG_LIVE_TOOLS").ok();
+        let scratch = tempfile::tempdir().unwrap();
+        // SAFETY: run on its own; nothing else reads it meanwhile.
+        unsafe { std::env::set_var("JIG_FORMATTERS_DIR", scratch.path()) };
+        let samples: &[(&str, &str, &str)] = &[
+            ("prettier", "a.ts", "let  x=1"),
+            ("ruff", "a.py", "x=1"),
+            ("black", "a.py", "x=1"),
+            ("google-java-format", "A.java", "class A{int x;}"),
+            ("taplo", "a.toml", "a=1"),
+            ("clang-format", "a.c", "int  x=1;"),
+            ("shfmt", "a.sh", "if true;then echo;fi"),
+            ("stylua", "a.lua", "local  x=1"),
+            ("ktfmt", "a.kt", "val  x=1"),
+            ("sql-formatter", "a.sql", "select a from b"),
+            ("gdformat", "a.gd", "var  x=1"),
+        ];
+        let registry = load(None);
+        let mut failed = Vec::new();
+        for formatter in registry.formatters.iter().filter(|f| f.installable()) {
+            if only
+                .as_deref()
+                .is_some_and(|only| !only.split(',').any(|key| key == formatter.key))
+            {
+                continue;
+            }
+            let Some((_, name, text)) = samples.iter().find(|(key, ..)| *key == formatter.key)
+            else {
+                continue;
+            };
+            let file = scratch.path().join(name);
+            let result = formatter
+                .install()
+                .map_err(|error| format!("{error:#}"))
+                .and_then(|()| formatter.format(text, &file, scratch.path(), LIMIT));
+            match result {
+                Ok(out) if out != *text => eprintln!("ok   {}: {out:?}", formatter.key),
+                Ok(_) => {
+                    eprintln!("FAIL {}: changed nothing", formatter.key);
+                    failed.push(formatter.key.clone());
+                }
+                Err(error) => {
+                    eprintln!("FAIL {}: {error}", formatter.key);
+                    failed.push(formatter.key.clone());
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:?}");
+    }
 }

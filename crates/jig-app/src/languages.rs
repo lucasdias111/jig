@@ -25,6 +25,9 @@ pub struct Language {
     pub label: &'static str,
     /// File extensions it applies to unless Settings says otherwise.
     pub extensions: Vec<&'static str>,
+    /// Whole file names it applies to, for files like `Makefile` that
+    /// have no extension to go by.
+    pub filenames: Vec<&'static str>,
     /// Whether it's in the list from the start; the rest are added from
     /// Settings.
     pub starter: bool,
@@ -47,6 +50,8 @@ struct LanguageEntry {
     name: String,
     label: String,
     extensions: Vec<String>,
+    #[serde(default)]
+    filenames: Vec<String>,
     #[serde(default)]
     starter: bool,
     line_comment: Option<String>,
@@ -106,6 +111,7 @@ fn load(user: Option<&str>) -> Table {
                 name,
                 label: leak(entry.label),
                 extensions: entry.extensions.into_iter().map(leak).collect(),
+                filenames: entry.filenames.into_iter().map(leak).collect(),
                 starter: entry.starter,
                 line_comment: entry.line_comment.map(leak),
                 lsp_id: entry.lsp_id.map_or(name, leak),
@@ -206,13 +212,23 @@ fn matching<'a>(
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
     bundled().iter().filter(move |language| {
-        let Some(ext) = ext.as_deref() else {
-            return false;
-        };
         if !settings.is_added(language.name) {
             return false;
         }
+        if file_name
+            .as_deref()
+            .is_some_and(|name| language.filenames.contains(&name))
+        {
+            return true;
+        }
+        let Some(ext) = ext.as_deref() else {
+            return false;
+        };
         match settings.extensions.get(language.name) {
             Some(text) => parse_extensions(text).iter().any(|own| own == ext),
             None => language.extensions.contains(&ext),
@@ -277,6 +293,16 @@ mod tests {
     }
 
     #[test]
+    fn whole_file_names_pick_a_language() {
+        let mut settings = LanguageSettings::default();
+        settings.set_added("make", true);
+        let lang = |path: &str| language_for(Path::new(path), &settings);
+        assert_eq!(lang("src/Makefile"), "make");
+        assert_eq!(lang("rules.mk"), "make");
+        assert_eq!(lang("Makefile.old"), "text", "only the whole name");
+    }
+
+    #[test]
     fn the_user_s_servers_replace_and_come_first() {
         let table = load(Some(
             r#"
@@ -327,7 +353,7 @@ mod tests {
         for language in bundled() {
             assert!(names.insert(language.name), "{} twice", language.name);
             assert!(
-                !language.extensions.is_empty(),
+                !language.extensions.is_empty() || !language.filenames.is_empty(),
                 "{} takes no files",
                 language.name
             );

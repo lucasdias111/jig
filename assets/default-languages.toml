@@ -10,6 +10,8 @@
 # label          What Settings calls it.
 # extensions     The files it takes; where two languages take one, the
 #                first in this file wins.
+# filenames      Whole file names it takes, for files with no extension to
+#                go by, such as Makefile.
 # starter        true: in everyone's list from the start. Others are added
 #                from Settings > Languages.
 # line_comment   What starts a line comment, for Toggle Line Comment.
@@ -229,6 +231,24 @@ name = "diff"
 label = "Diff"
 extensions = ["diff", "patch"]
 
+[[language]]
+name = "make"
+label = "Make"
+extensions = ["mk", "mak"]
+filenames = ["Makefile", "makefile", "GNUmakefile"]
+line_comment = "#"
+lsp_id = "makefile"
+
+[[language]]
+name = "erb"
+label = "ERB"
+extensions = ["erb"]
+
+[[language]]
+name = "ejs"
+label = "EJS"
+extensions = ["ejs"]
+
 [[server]]
 name = "rust-analyzer"
 languages = ["rust"]
@@ -304,8 +324,20 @@ help = "Open the project in Godot's editor; it serves GDScript while it's open."
 name = "taplo"
 languages = ["toml"]
 commands = [["taplo", "lsp", "stdio"]]
-install = 'cargo install --root "${dir}" --locked --features lsp taplo-cli'
-help = "Needs Rust. Install it here, or with cargo install --features lsp taplo-cli."
+install = '''
+set -e
+case "${os}" in
+  macos) os=darwin ;;
+  linux) os=linux ;;
+  *) echo "There's no Taplo for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location \
+  "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-$os-${arch}.gz" \
+  | gunzip > "${dir}/bin/taplo"
+chmod +x "${dir}/bin/taplo"
+'''
+help = "Install it here, or with cargo install --features lsp taplo-cli."
 
 [[server]]
 name = "vscode-json-language-server"
@@ -318,8 +350,20 @@ help = "Needs Node. Install it here, or with npm install -g vscode-langservers-e
 name = "marksman"
 languages = ["markdown"]
 commands = [["marksman", "server"]]
-help.macos = "Install it with brew install marksman."
-help.default = "Download it from github.com/artempyanykh/marksman/releases and put it on the PATH."
+install = '''
+set -e
+case "${os}-${arch}" in
+  macos-*) asset=marksman-macos ;;
+  linux-x86_64) asset=marksman-linux-x64 ;;
+  linux-aarch64) asset=marksman-linux-arm64 ;;
+  *) echo "There's no marksman for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location --output "${dir}/bin/marksman" \
+  "https://github.com/artempyanykh/marksman/releases/download/2026-02-08/$asset"
+chmod +x "${dir}/bin/marksman"
+'''
+help = "Install it here, or with brew install marksman."
 
 [[server]]
 name = "bash-language-server"
@@ -333,8 +377,21 @@ name = "clangd"
 languages = ["c", "cpp"]
 commands = [["clangd"]]
 root_markers = ["compile_commands.json", "compile_flags.txt", ".clangd"]
-help.macos = "It comes with Xcode's command line tools: xcode-select --install"
-help.default = "Install clangd with your package manager, for example sudo apt install clangd."
+install = '''
+set -e
+case "${os}" in
+  macos) asset=clangd-mac-23.1.0.zip ;;
+  linux) asset=clangd-linux-23.1.0.zip ;;
+  *) echo "There's no clangd for this computer." >&2; exit 1 ;;
+esac
+curl --fail --silent --show-error --location --output "${dir}/clangd.zip" \
+  "https://github.com/clangd/clangd/releases/download/23.1.0/$asset"
+unzip -q -o "${dir}/clangd.zip" -d "${dir}"
+rm "${dir}/clangd.zip"
+mkdir -p "${dir}/bin"
+ln -sf ../clangd_23.1.0/bin/clangd "${dir}/bin/clangd"
+'''
+help = "Install it here; on macOS it also comes with Xcode's command line tools."
 
 [[server]]
 name = "csharp-ls"
@@ -372,8 +429,20 @@ name = "lua-language-server"
 languages = ["lua"]
 commands = [["lua-language-server"]]
 root_markers = [".luarc.json", ".luarc.jsonc"]
-help.macos = "Install it with brew install lua-language-server."
-help.default = "Install lua-language-server with your package manager, or from github.com/LuaLS/lua-language-server/releases."
+install = '''
+set -e
+case "${os}-${arch}" in
+  macos-aarch64) asset=darwin-arm64 ;;
+  macos-x86_64) asset=darwin-x64 ;;
+  linux-aarch64) asset=linux-arm64 ;;
+  linux-x86_64) asset=linux-x64 ;;
+  *) echo "There's no lua-language-server for this computer." >&2; exit 1 ;;
+esac
+curl --fail --silent --show-error --location \
+  "https://github.com/LuaLS/lua-language-server/releases/download/3.19.1/lua-language-server-3.19.1-$asset.tar.gz" \
+  | tar -xz -C "${dir}"
+'''
+help = "Install it here, or with brew install lua-language-server."
 
 [[server]]
 name = "intelephense"
@@ -403,7 +472,10 @@ name = "metals"
 languages = ["scala"]
 commands = [["metals"]]
 root_markers = ["build.sbt", "build.sc", "build.mill"]
-help = "Install it with Coursier: cs install metals."
+install = '''
+cs install --install-dir "${dir}/bin" metals
+'''
+help = "Needs Coursier (cs) and a JDK. Install it here, or with cs install metals."
 
 [[server]]
 name = "expert"
@@ -411,15 +483,31 @@ languages = ["elixir"]
 commands = [["expert", "--stdio"], ["elixir-ls"]]
 root_markers = ["mix.exs"]
 outermost = true
-help = "Install Expert from github.com/elixir-lang/expert/releases, or elixir-ls, and put it on the PATH."
+install = '''
+set -e
+curl --fail --silent --show-error --location --output "${dir}/elixir-ls.zip" \
+  https://github.com/elixir-lsp/elixir-ls/releases/download/v0.31.1/elixir-ls-v0.31.1.zip
+mkdir -p "${dir}/elixir-ls" "${dir}/bin"
+unzip -q -o "${dir}/elixir-ls.zip" -d "${dir}/elixir-ls"
+rm "${dir}/elixir-ls.zip"
+chmod +x "${dir}/elixir-ls/language_server.sh"
+ln -sf ../elixir-ls/language_server.sh "${dir}/bin/elixir-ls"
+'''
+help = "Needs Elixir. Installs elixir-ls here; Expert, from github.com/elixir-lang/expert/releases, is used instead when it's on the PATH."
 
 [[server]]
 name = "zls"
 languages = ["zig"]
 commands = [["zls"]]
 root_markers = ["build.zig"]
-help.macos = "Install it with brew install zls."
-help.default = "Download it from github.com/zigtools/zls/releases and put it on the PATH."
+install = '''
+set -e
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location \
+  "https://github.com/zigtools/zls/releases/download/0.16.0/zls-${arch}-${os}.tar.xz" \
+  | tar -xJ -C "${dir}/bin" zls
+'''
+help = "Needs Zig 0.16. Install it here, or with brew install zls."
 
 [[server]]
 name = "svelte-language-server"
@@ -435,3 +523,36 @@ languages = ["yaml"]
 commands = [["yaml-language-server", "--stdio"]]
 install = 'npm install --prefix "${dir}" yaml-language-server'
 help = "Needs Node. Install it here, or with npm install -g yaml-language-server."
+
+[[server]]
+name = "sqls"
+languages = ["sql"]
+commands = [["sqls"]]
+install = 'GOBIN="${dir}/bin" go install github.com/sqls-server/sqls@v0.2.48'
+help = "Needs Go. Install it here, or with go install github.com/sqls-server/sqls@latest."
+
+[[server]]
+name = "graphql-language-service"
+languages = ["graphql"]
+commands = [["graphql-lsp", "server", "--method", "stream"]]
+root_markers = [".graphqlrc", ".graphqlrc.yml", ".graphqlrc.json", "graphql.config.js", "graphql.config.ts"]
+install = 'npm install --prefix "${dir}" graphql-language-service-cli graphql'
+help = "Needs Node. Install it here, or with npm install -g graphql-language-service-cli."
+
+[[server]]
+name = "protols"
+languages = ["proto"]
+commands = [["protols"]]
+install = '''
+set -e
+case "${os}" in
+  macos) triple="${arch}-apple-darwin" ;;
+  linux) triple="${arch}-unknown-linux-gnu" ;;
+  *) echo "There's no protols for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location \
+  "https://github.com/coder3101/protols/releases/download/0.14.1/protols-$triple.tar.gz" \
+  | tar -xz -C "${dir}/bin"
+'''
+help = "Install it here, or with cargo install protols."

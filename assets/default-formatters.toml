@@ -27,6 +27,8 @@ name = "rustfmt"
 languages = ["rust"]
 # rustfmt reads stdin as edition 2015 unless a rustfmt.toml says otherwise.
 command = ["rustfmt", "--emit", "stdout", "--edition", "2021"]
+install = "rustup component add rustfmt"
+help = "Install it with rustup component add rustfmt."
 
 [[formatter]]
 key = "prettier"
@@ -35,33 +37,210 @@ languages = [
     "typescript", "tsx", "javascript", "json", "markdown", "css", "html", "yaml", "graphql",
 ]
 command = ["prettier", "--stdin-filepath", "${file}"]
+install = 'npm install --prefix "${dir}" prettier'
+help = "Needs Node. Install it here, in the project, or with npm install -g prettier."
 
 [[formatter]]
 key = "gofmt"
 name = "gofmt"
 languages = ["go"]
 command = ["gofmt"]
+help = "It comes with Go, from go.dev/dl."
 
 [[formatter]]
 key = "ruff"
 name = "Ruff"
 languages = ["python"]
 command = ["ruff", "format", "--stdin-filename", "${file}", "-"]
+install = '''
+set -e
+case "${os}" in
+  macos) triple="${arch}-apple-darwin" ;;
+  linux) triple="${arch}-unknown-linux-gnu" ;;
+  *) echo "There's no Ruff for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location \
+  "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-$triple.tar.gz" \
+  | tar -xz -C "${dir}/bin" --strip-components 1 "ruff-$triple/ruff"
+'''
+help = "Install it here, or with pip install ruff."
 
 [[formatter]]
 key = "black"
 name = "Black"
 languages = ["python"]
 command = ["black", "--quiet", "--stdin-filename", "${file}", "-"]
+install = '''
+set -e
+python3 -m venv "${dir}/venv"
+"${dir}/venv/bin/pip" install --quiet --disable-pip-version-check black
+mkdir -p "${dir}/bin"
+ln -sf ../venv/bin/black "${dir}/bin/black"
+'''
+help = "Needs Python 3. Install it here, or with pip install black."
 
 [[formatter]]
 key = "google-java-format"
 name = "google-java-format"
 languages = ["java"]
 command = ["google-java-format", "-"]
+install = '''
+set -e
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location --output "${dir}/google-java-format.jar" \
+  https://github.com/google/google-java-format/releases/download/v1.37.0/google-java-format-1.37.0-all-deps.jar
+printf '#!/bin/sh\nexec java -jar "%s" "$@"\n' "${dir}/google-java-format.jar" > "${dir}/bin/google-java-format"
+chmod +x "${dir}/bin/google-java-format"
+'''
+help = "Needs a JDK 21 or later. Install it here, or with brew install google-java-format."
 
 [[formatter]]
 key = "taplo"
 name = "Taplo"
 languages = ["toml"]
 command = ["taplo", "format", "-"]
+install = '''
+set -e
+case "${os}" in
+  macos) os=darwin ;;
+  linux) os=linux ;;
+  *) echo "There's no Taplo for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location \
+  "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-$os-${arch}.gz" \
+  | gunzip > "${dir}/bin/taplo"
+chmod +x "${dir}/bin/taplo"
+'''
+help = "Install it here, or with cargo install taplo-cli."
+
+[[formatter]]
+key = "clang-format"
+name = "clang-format"
+languages = ["c", "cpp", "csharp", "proto"]
+command = ["clang-format", "--assume-filename", "${file}"]
+install = '''
+set -e
+python3 -m venv "${dir}/venv"
+"${dir}/venv/bin/pip" install --quiet --disable-pip-version-check clang-format
+mkdir -p "${dir}/bin"
+ln -sf ../venv/bin/clang-format "${dir}/bin/clang-format"
+'''
+help = "Needs Python 3. Install it here, or with your package manager's clang-format."
+
+[[formatter]]
+key = "shfmt"
+name = "shfmt"
+languages = ["bash"]
+command = ["shfmt", "--filename", "${file}"]
+install = '''
+set -e
+case "${os}-${arch}" in
+  macos-aarch64) asset=darwin_arm64 ;;
+  macos-x86_64) asset=darwin_amd64 ;;
+  linux-aarch64) asset=linux_arm64 ;;
+  linux-x86_64) asset=linux_amd64 ;;
+  *) echo "There's no shfmt for this computer." >&2; exit 1 ;;
+esac
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location --output "${dir}/bin/shfmt" \
+  "https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_$asset"
+chmod +x "${dir}/bin/shfmt"
+'''
+help = "Install it here, or with brew install shfmt."
+
+[[formatter]]
+key = "stylua"
+name = "StyLua"
+languages = ["lua"]
+command = ["stylua", "--stdin-filepath", "${file}", "-"]
+install = '''
+set -e
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location --output "${dir}/stylua.zip" \
+  "https://github.com/JohnnyMorganz/StyLua/releases/download/v2.6.0/stylua-${os}-${arch}.zip"
+unzip -q -o "${dir}/stylua.zip" -d "${dir}/bin"
+rm "${dir}/stylua.zip"
+chmod +x "${dir}/bin/stylua"
+'''
+help = "Install it here, or with cargo install stylua."
+
+[[formatter]]
+key = "swift-format"
+name = "swift-format"
+languages = ["swift"]
+command = ["swift", "format", "-"]
+help.macos = "It comes with Xcode 16 and later."
+help.default = "It comes with the Swift 6 toolchain from swift.org."
+
+[[formatter]]
+key = "zig-fmt"
+name = "zig fmt"
+languages = ["zig"]
+command = ["zig", "fmt", "--stdin"]
+help = "It comes with Zig, from ziglang.org/download."
+
+[[formatter]]
+key = "ktfmt"
+name = "ktfmt"
+languages = ["kotlin"]
+command = ["ktfmt", "--kotlinlang-style", "-"]
+install = '''
+set -e
+mkdir -p "${dir}/bin"
+curl --fail --silent --show-error --location --output "${dir}/ktfmt.jar" \
+  https://repo1.maven.org/maven2/com/facebook/ktfmt/0.54/ktfmt-0.54-jar-with-dependencies.jar
+printf '#!/bin/sh\nexec java -jar "%s" "$@"\n' "${dir}/ktfmt.jar" > "${dir}/bin/ktfmt"
+chmod +x "${dir}/bin/ktfmt"
+'''
+help = "Needs a JDK. Install it here, or with brew install ktfmt."
+
+[[formatter]]
+key = "mix-format"
+name = "mix format"
+languages = ["elixir"]
+command = ["mix", "format", "--stdin-filename", "${file}", "-"]
+help = "It comes with Elixir, from elixir-lang.org/install.html."
+
+[[formatter]]
+key = "rubocop"
+name = "RuboCop"
+languages = ["ruby"]
+# Corrected code on stdout, the report on stderr; offenses left aren't a
+# failure.
+command = [
+    "rubocop", "--autocorrect", "--stdin", "${file}", "--stderr", "--format", "quiet",
+    "--fail-level", "fatal",
+]
+help = "Install it with gem install rubocop."
+
+[[formatter]]
+key = "sql-formatter"
+name = "sql-formatter"
+languages = ["sql"]
+command = ["sql-formatter"]
+install = 'npm install --prefix "${dir}" sql-formatter'
+help = "Needs Node. Install it here, or with npm install -g sql-formatter."
+
+[[formatter]]
+key = "scalafmt"
+name = "scalafmt"
+languages = ["scala"]
+command = ["scalafmt", "--stdin", "--assume-filename", "${file}"]
+install = 'cs install --install-dir "${dir}/bin" scalafmt'
+help = "Needs Coursier (cs). Install it here, or with cs install scalafmt."
+
+[[formatter]]
+key = "gdformat"
+name = "gdformat"
+languages = ["gdscript"]
+command = ["gdformat", "-"]
+install = '''
+set -e
+python3 -m venv "${dir}/venv"
+"${dir}/venv/bin/pip" install --quiet --disable-pip-version-check 'gdtoolkit==4.*'
+mkdir -p "${dir}/bin"
+ln -sf ../venv/bin/gdformat "${dir}/bin/gdformat"
+'''
+help = "Needs Python 3. Install it here, or with pip install 'gdtoolkit==4.*'."

@@ -44,6 +44,9 @@ gpui-kit = { version = "=0.7.0", features = [
     "tree-sitter-swift",
     "tree-sitter-yaml",
     "tree-sitter-zig",
+    "tree-sitter-make",
+    "tree-sitter-erb",
+    "tree-sitter-ejs",
 ] }
 jig-editor = { path = "crates/jig-editor" }
 jig-commands = { path = "crates/jig-commands" }

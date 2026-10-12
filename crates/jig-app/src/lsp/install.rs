@@ -155,4 +155,48 @@ mod tests {
         std::fs::remove_dir_all(server_dir(server).unwrap()).unwrap();
         assert!(!installed_by_jig(server));
     }
+
+    /// Runs every built-in server's installer, or those named in
+    /// `JIG_LIVE_TOOLS` (`marksman,zls`), into a scratch folder and finds
+    /// each one's program there: `cargo test -p jig-app
+    /// server_installers_live -- --ignored --nocapture`. Downloads a lot.
+    #[test]
+    #[ignore]
+    fn server_installers_live() {
+        let only = std::env::var("JIG_LIVE_TOOLS").ok();
+        let scratch = tempfile::tempdir().unwrap();
+        let mut failed = Vec::new();
+        for server in crate::languages::servers()
+            .iter()
+            .filter(|s| s.installable())
+        {
+            if only
+                .as_deref()
+                .is_some_and(|only| !only.split(',').any(|name| name == server.name))
+            {
+                continue;
+            }
+            let own = scratch.path().join(&server.name);
+            let found = install_into(server, &own).and_then(|()| {
+                server
+                    .commands
+                    .iter()
+                    .filter_map(|argv| argv.first())
+                    .find_map(|name| {
+                        crate::tools::bin_dirs(&own)
+                            .iter()
+                            .find_map(|dir| crate::tools::executable_in(dir, name))
+                    })
+                    .context("installed, but no program where Jig looks")
+            });
+            match found {
+                Ok(program) => eprintln!("ok   {}: {}", server.name, program.display()),
+                Err(error) => {
+                    eprintln!("FAIL {}: {error:#}", server.name);
+                    failed.push(server.name.clone());
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:?}");
+    }
 }
