@@ -391,11 +391,14 @@ impl TaskPlanner {
                 .child(format!("{done}/{total}"))
         });
         let group = SharedString::from(format!("task-{ix}"));
-        // On hover, the actions take the progress pill's place.
+        // On hover, the actions take the progress pill's place. Shown and
+        // hidden by visibility, not display: GPUI works the hover style out
+        // again between prepaint and paint, and a child shown in between is
+        // painted without having been prepainted, which panics.
         let actions = h_flex()
             .flex_none()
-            .hidden()
-            .group_hover(group.clone(), |s| s.flex())
+            .invisible()
+            .group_hover(group.clone(), |s| s.visible())
             .child(
                 small_button(("task-edit", ix), PENCIL, "Edit", cx).on_click({
                     let id = id.clone();
@@ -414,9 +417,24 @@ impl TaskPlanner {
                     })
                 }),
             );
-        let progress = progress.map(|pill| pill.group_hover(group.clone(), |s| s.hidden()));
+        let progress = progress.map(|pill| {
+            h_flex()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .items_center()
+                .group_hover(group.clone(), |s| s.invisible())
+                .child(pill)
+        });
+        let slot = div()
+            .relative()
+            .flex_none()
+            .child(actions)
+            .children(progress);
         let header = h_flex()
             .id(("task", ix))
+            .debug_selector(move || format!("task-{ix}"))
             .group(group)
             .items_start()
             .px_2()
@@ -443,8 +461,7 @@ impl TaskPlanner {
                     .when(finished, |this| this.text_color(theme.muted_foreground))
                     .child(task.title.clone()),
             )
-            .children(progress)
-            .child(actions)
+            .child(slot)
             .on_click({
                 let id = id.clone();
                 cx.listener(move |this, _, _, cx| this.toggle_expanded(&id, cx))
@@ -553,8 +570,8 @@ impl TaskPlanner {
                     row.child(
                         h_flex()
                             .flex_none()
-                            .hidden()
-                            .group_hover(group, |s| s.flex())
+                            .invisible()
+                            .group_hover(group, |s| s.visible())
                             .child(delegate(false))
                             .child(delegate(true)),
                     )

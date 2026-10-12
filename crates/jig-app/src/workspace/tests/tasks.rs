@@ -330,3 +330,34 @@ fn a_todo_runs_with_jig_with_its_whole_task(cx: &mut TestAppContext) {
         "the change waits for review"
     );
 }
+
+#[gpui_kit::test]
+fn hovering_a_task_shows_its_actions(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = project(cx);
+    jig_ai::tasks::create(
+        dir.path(),
+        "Tidy up",
+        "",
+        vec![jig_ai::tasks::Todo::new("Rename things")],
+    )
+    .unwrap();
+    step(cx, window, |window, cx| {
+        workspace.update(cx, |this, cx| this.tasks_changed(window, cx));
+        window.press("ctrl-shift-t", cx);
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let card = vcx.debug_bounds("task-0").expect("the task shows");
+    // The actions appear while the pointer is over the card, and its todo's
+    // buttons over the todo; drawing them must not trip over the hover.
+    for at in [
+        card.center(),
+        card.bottom_left() + gpui_kit::point(px(40.), px(20.)),
+    ] {
+        vcx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        for _ in 0..3 {
+            vcx.update(|window, cx| window.render_frame(cx));
+            vcx.run_until_parked();
+        }
+    }
+}
