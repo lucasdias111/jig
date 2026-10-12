@@ -27,6 +27,7 @@ mod lines;
 mod lsp;
 mod lsp_debug;
 mod menus;
+mod planner;
 mod project;
 mod project_search;
 mod providers;
@@ -51,6 +52,22 @@ use gpui_kit::*;
 use workspace::{Quit, Workspace};
 
 fn main() {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == jig_ai::tasks::mcp::FLAG)
+    {
+        let args: Vec<String> = std::env::args_os()
+            .skip(2)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        serve_tasks(&args);
+        return;
+    }
+    // Agents start Jig itself as their task tool.
+    if let Ok(executable) = std::env::current_exe() {
+        jig_ai::tasks::mcp::set_command(executable);
+    }
+
     let mut paths = std::env::args_os().skip(1).map(PathBuf::from);
     let path = paths.next();
     // Any further files open in tabs of their own.
@@ -150,4 +167,16 @@ pub fn open_window(
         // whole window, hiding the blur behind the sidebar and editor.
         cx.new(|cx| gpui_kit::base::Root::new(workspace, window, cx).bg(transparent_black()))
     })
+}
+
+/// `Jig --tasks-mcp`: the task planner as an agent's tool, on stdio, until
+/// the agent hangs up.
+fn serve_tasks(args: &[String]) {
+    let served = jig_ai::tasks::mcp::project_from_args(args).and_then(|project| {
+        jig_ai::tasks::mcp::serve(&project, std::io::stdin().lock(), std::io::stdout().lock())
+    });
+    if let Err(error) = served {
+        eprintln!("jig: {error:#}");
+        std::process::exit(1);
+    }
 }

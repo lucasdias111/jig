@@ -514,7 +514,7 @@ impl Workspace {
     /// Whether the review keys belong to something else: a modal, or the
     /// find panel, where Enter goes to the next match and Esc closes it.
     pub(super) fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
-        self.modal_open() || self.find_panel_focused(window, cx)
+        self.modal_open() || self.find_panel_focused(window, cx) || self.planner_focused(window, cx)
     }
 
     /// Tab accepts a change under review, or moves on in a snippet.

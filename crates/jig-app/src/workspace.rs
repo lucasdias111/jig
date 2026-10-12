@@ -21,6 +21,8 @@ mod home;
 mod hover;
 mod line_edits;
 mod lsp;
+mod navigation;
+mod planner;
 mod preferences;
 mod rename;
 mod run;
@@ -111,7 +113,11 @@ actions!(
         GoToLine,
         ZoomIn,
         ZoomOut,
-        ResetZoom
+        ResetZoom,
+        ToggleTaskPlanner,
+        NewTask,
+        GoBack,
+        GoForward
     ]
 );
 
@@ -204,6 +210,10 @@ pub struct Workspace {
     runs: run::RunState,
     breakpoints: breakpoints::Breakpoints,
     git: git::GitState,
+    /// The project's tasks, in the sidebar's Tasks view.
+    planner: planner::PlannerState,
+    /// Where jumps came from, for Go Back and Go Forward.
+    history: navigation::History,
     file_watch: file_watch::FileWatch,
     /// A save waiting on its formatter.
     pending_save: Option<format::PendingSave>,
@@ -292,6 +302,8 @@ impl Workspace {
             runs: run::RunState::new(cx),
             breakpoints: breakpoints::Breakpoints::load(),
             git: Default::default(),
+            planner: Default::default(),
+            history: Default::default(),
             file_watch: file_watch::FileWatch::start(window, cx),
             pending_save: None,
             status_note: None,
@@ -727,6 +739,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::zoom_in))
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::reset_zoom))
+            .on_action(cx.listener(Self::toggle_task_planner))
+            .on_action(cx.listener(Self::new_task))
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::go_forward))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))

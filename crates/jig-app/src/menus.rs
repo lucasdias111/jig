@@ -7,12 +7,12 @@ use crate::settings_window::OpenSettings;
 use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
     DuplicateLine, EditAgents, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations,
-    Find, FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoToFile,
-    GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NextProblem, NextTab, Open,
-    OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
-    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
-    SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
-    ToggleSidebar, ZoomIn, ZoomOut,
+    Find, FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack,
+    GoForward, GoToFile, GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask,
+    NextProblem, NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab,
+    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto,
+    StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment,
+    ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -71,6 +71,8 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Open…", Open),
                 MenuItem::action("Go to File…", GoToFile),
                 MenuItem::action("Go to Line…", GoToLine),
+                MenuItem::action("Go Back", GoBack),
+                MenuItem::action("Go Forward", GoForward),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Save As…", SaveAs),
@@ -119,6 +121,8 @@ pub fn set(cx: &mut App) {
             vec![
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Show Files", FocusFileTree),
+                MenuItem::action("Show Tasks", ToggleTaskPlanner),
+                MenuItem::action("New Task…", NewTask),
                 MenuItem::separator(),
                 MenuItem::action("Show Next Tab", NextTab),
                 MenuItem::action("Show Previous Tab", PreviousTab),

@@ -21,6 +21,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::config::{AgentModel, ProviderKind};
+use crate::tasks;
 use crate::{PromptRequest, ProviderConfig};
 
 /// A model OpenCode knows by itself, for trying the agent lane on its own.
@@ -92,7 +93,7 @@ fn opencode_provider(provider: &ProviderConfig, model: &str, api_key: Option<&st
 }
 
 /// How the agent should behave inside Jig, added to its own system prompt.
-const SYSTEM: &str = "You are running inside Jig, a code editor. The user talks to you from the code itself; a message may say which file they are in and what they selected. Make changes with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Shell commands, web access and subagents may wait for the user's go-ahead or be turned off; if one is turned down, carry on without it or ask. Change only what the task needs. When you are done, say briefly what you did; Markdown is fine. If the task is unclear, ask with your question tool or in your reply; later messages continue the same conversation.";
+const SYSTEM: &str = "You are running inside Jig, a code editor. The user talks to you from the code itself; a message may say which file they are in and what they selected. Make changes with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Shell commands, web access and subagents may wait for the user's go-ahead or be turned off; if one is turned down, carry on without it or ask. Change only what the task needs. When you are done, say briefly what you did; Markdown is fine. If the task is unclear, ask with your question tool or in your reply; later messages continue the same conversation. Write a plan as a numbered list, one step per item. Whenever you propose three or more steps, or work that spans several files, end your reply by asking whether to save the plan as a task in Jig's task planner, and save it with the jig_create_task tool only once the user agrees, short and laid out as the tool describes.";
 
 /// Whether the agent may use a tool: after asking the user each time, on
 /// its own, or not at all.
@@ -135,6 +136,10 @@ pub struct Permissions {
     pub web_fetch: Access,
     pub web_search: Access,
     pub subagents: Access,
+    /// Saving and updating tasks in Jig's task planner, which only writes
+    /// `.jig/tasks/`. The agent asks in the conversation first, so it's
+    /// allowed unless the user says otherwise.
+    pub tasks: Access,
     /// Its question tool; without it, it asks in its reply.
     pub questions: bool,
 }
@@ -146,6 +151,7 @@ impl Default for Permissions {
             web_fetch: Access::Ask,
             web_search: Access::Ask,
             subagents: Access::Ask,
+            tasks: Access::Allow,
             questions: true,
         }
     }
@@ -169,11 +175,28 @@ impl Permissions {
             ("external_directory", Access::Deny),
         ]
         .iter()
+        .map(|(permission, access)| (permission.to_string(), *access))
+        .chain(
+            tasks::mcp::TOOLS
+                .iter()
+                .map(|tool| (format!("{}_{tool}", tasks::mcp::NAME), self.tasks)),
+        )
         .map(|(permission, access)| {
             json!({"permission": permission, "pattern": "*", "action": access.key()})
         })
         .collect()
     }
+}
+
+/// `config` with Jig's task tool added, which OpenCode starts in each
+/// project's folder.
+fn with_task_tool(config: Option<&Value>) -> Option<Value> {
+    let Some(tool) = tasks::mcp::opencode_server() else {
+        return config.cloned();
+    };
+    let mut config = config.cloned().unwrap_or_else(|| json!({}));
+    config["mcp"][tasks::mcp::NAME] = tool;
+    Some(config)
 }
 
 /// The longest title Jig gives a conversation, in characters.
@@ -195,7 +218,7 @@ impl AgentServer {
     pub fn start(config: Option<&Value>) -> Result<Self> {
         let password = random_hex();
         let mut command = Command::new(opencode_binary());
-        if let Some(config) = config {
+        if let Some(config) = with_task_tool(config) {
             command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
         }
         let mut child = command
@@ -990,6 +1013,9 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
             field("description").unwrap_or_else(|| pattern.into()),
         ),
         "doom_loop" => ("Repeat the same step again", pattern.into()),
+        "jig_create_task" => ("Save a task", String::new()),
+        "jig_update_task" => ("Update a task", String::new()),
+        "jig_list_tasks" => ("Read the tasks", String::new()),
         _ => return None,
     };
     // OpenCode remembers these patterns once allowed always.
@@ -1030,6 +1056,7 @@ fn did(tool: &str, input: &Value) -> Option<String> {
         "websearch" => format!("Searched the web for {}", field("query")),
         "task" => format!("Subagent: {}", field("description")),
         "skill" => format!("Used skill {}", field("name")),
+        "jig_create_task" => format!("Saved the task {}", field("title")),
         _ => return None,
     })
 }
@@ -1071,6 +1098,9 @@ fn describe(tool: &str, input: &Value, directory: &str) -> String {
         "webfetch" | "websearch" => "Looking on the web".into(),
         "task" => "Working with a subagent".into(),
         "question" => "Asking".into(),
+        "jig_create_task" => "Saving a task".into(),
+        "jig_list_tasks" => "Reading the tasks".into(),
+        "jig_update_task" => "Updating a task".into(),
         other => format!("Running {other}"),
     }
 }
@@ -1376,6 +1406,21 @@ mod tests {
         assert_eq!(action("webfetch").as_deref(), Some("ask"));
         assert_eq!(action("question").as_deref(), Some("deny"));
         assert_eq!(action("edit").as_deref(), Some("ask"), "always");
+        assert_eq!(
+            action("jig_create_task").as_deref(),
+            Some("allow"),
+            "by default"
+        );
+        let asking = Permissions {
+            tasks: Access::Ask,
+            ..Permissions::default()
+        }
+        .rules();
+        assert!(
+            asking.as_array().unwrap().contains(
+                &json!({"permission": "jig_update_task", "pattern": "*", "action": "ask"})
+            )
+        );
         assert_eq!(
             action("external_directory").as_deref(),
             Some("deny"),

@@ -17,6 +17,7 @@ use super::{
 };
 use crate::file_tree::{FileTree, FileTreeEvent};
 use crate::git_panel::BRANCH_ICON;
+use crate::planner::TASKS_ICON;
 use crate::settings_window::OpenSettings;
 
 /// The activity bar's width.
@@ -44,6 +45,7 @@ pub(super) enum SidebarView {
     #[default]
     Files,
     Git,
+    Tasks,
 }
 
 impl Workspace {
@@ -101,6 +103,7 @@ impl Workspace {
             view,
             _events: events,
         });
+        self.start_planner(root, window, cx);
         self.refresh_git(window, cx);
     }
 
@@ -178,6 +181,7 @@ impl Workspace {
             match view {
                 SidebarView::Files => self.focus_tree(window, cx),
                 SidebarView::Git => self.show_git_view(window, cx),
+                SidebarView::Tasks => self.show_planner_view(window, cx),
             }
         }
         self.sync_git_watch(window, cx);
@@ -253,6 +257,7 @@ impl Workspace {
         let content = match self.sidebar_view {
             SidebarView::Files => tree.view.clone().into_any_element(),
             SidebarView::Git => self.render_git_view(cx),
+            SidebarView::Tasks => self.render_planner_view(),
         };
         Some(
             div()
@@ -280,6 +285,15 @@ impl Workspace {
                 cx.listener(move |this, _, window, cx| this.toggle_sidebar_view(view, window, cx)),
             )
         };
+        let theme = cx.theme();
+        // A task an agent made while the view was hidden.
+        let unseen = div()
+            .absolute()
+            .top(px(6.))
+            .right(px(6.))
+            .size(px(7.))
+            .rounded_full()
+            .bg(theme.info);
         Some(
             sidebar_panel(px(ACTIVITY_BAR_WIDTH), cx)
                 .h_full()
@@ -300,6 +314,16 @@ impl Workspace {
                     "Git (⌃⇧G)",
                     SidebarView::Git,
                 ))
+                .child(
+                    button(
+                        "activity-tasks",
+                        TASKS_ICON,
+                        "Tasks (⌃⇧T)",
+                        SidebarView::Tasks,
+                    )
+                    .relative()
+                    .when(self.planner.unseen, |this| this.child(unseen)),
+                )
                 .child(div().flex_1())
                 .child(settings_button(cx))
                 .into_any_element(),

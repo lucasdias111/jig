@@ -109,6 +109,7 @@ impl Workspace {
             match event {
                 FindInFilesEvent::Open { path, range } => {
                     this.close_find_in_files(cx);
+                    this.remember_location(cx);
                     this.open_file(path, window, cx);
                     if this.document().path.as_deref().is_some_and(|open| {
                         super::tabs::canonical(open) == super::tabs::canonical(path)

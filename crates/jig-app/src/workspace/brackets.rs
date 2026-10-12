@@ -24,6 +24,12 @@ pub(super) struct Structure {
 }
 
 impl super::tabs::Tab {
+    /// Where the cursor was when the brackets were last worked out, which
+    /// is before a move still under way.
+    pub(super) fn last_cursor(&self) -> Option<usize> {
+        self.structure.seen.map(|(cursor, _)| cursor)
+    }
+
     /// Where the bracket boxes are, for tests.
     #[cfg(test)]
     pub(super) fn structure_boxes(&self, cx: &App) -> Vec<std::ops::Range<usize>> {

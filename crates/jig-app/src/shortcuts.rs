@@ -251,6 +251,32 @@ pub const ALL: &[Shortcut] = &[
         IN_INPUT,
         FindReferences
     ),
+    // As in Xcode and VS Code on macOS. Elsewhere ⌃- is a smaller font, so
+    // it's VS Code's Alt-arrows.
+    shortcut!(
+        "go_back",
+        "Go back",
+        Navigation,
+        [if cfg!(target_os = "macos") {
+            "ctrl--"
+        } else {
+            "alt-left"
+        }],
+        ANYWHERE,
+        GoBack
+    ),
+    shortcut!(
+        "go_forward",
+        "Go forward",
+        Navigation,
+        [if cfg!(target_os = "macos") {
+            "ctrl-shift--"
+        } else {
+            "alt-right"
+        }],
+        ANYWHERE,
+        GoForward
+    ),
     // F8 alone is the debugger's step over.
     shortcut!(
         "next_problem",
@@ -403,6 +429,14 @@ pub const ALL: &[Shortcut] = &[
         ["ctrl-shift-g"],
         ANYWHERE,
         ToggleGitPanel
+    ),
+    shortcut!(
+        "toggle_task_planner",
+        "Show tasks",
+        View,
+        ["ctrl-shift-t"],
+        ANYWHERE,
+        ToggleTaskPlanner
     ),
     shortcut!(
         "zoom_in",

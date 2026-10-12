@@ -295,6 +295,11 @@ fn show_document(
         })
     });
     if same_file {
+        // The editor moves the cursor itself; where it was is the last
+        // place the workspace saw it.
+        if let Some(workspace) = workspace.upgrade() {
+            workspace.update(cx, |workspace, _| workspace.remember_last_cursor(&path));
+        }
         return false;
     }
     let Some(selection) = params.selection else {
@@ -324,6 +329,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.remember_location(cx);
         self.open_file(path, window, cx);
         if !self
             .document()

@@ -172,6 +172,7 @@ impl Workspace {
             return;
         };
         let entry = entries[ix].clone();
+        self.remember_location(cx);
         let editor = self.editor().clone();
         editor.select(entry.range.start..entry.range.start, cx);
         editor.focus(window, cx);

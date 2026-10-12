@@ -24,6 +24,7 @@ use crate::agent::{
     Access, AgentCommand, AgentEvent, AgentRequest, Conversation, EditChange, EditRequest,
     PermissionRequest, Permissions, Turn, canonical, relative,
 };
+use crate::tasks;
 
 /// The protocol version Jig speaks.
 const PROTOCOL_VERSION: u64 = 1;
@@ -538,8 +539,10 @@ impl Session {
         model: Option<&str>,
     ) -> Result<Self> {
         let directory = canonical(directory);
-        let created =
-            connection.request("session/new", json!({"cwd": directory, "mcpServers": []}))?;
+        let created = connection.request(
+            "session/new",
+            json!({"cwd": directory, "mcpServers": tasks::mcp::acp_servers(&directory)}),
+        )?;
         connection.learn_models(&created);
         let id = created["sessionId"]
             .as_str()
@@ -602,7 +605,11 @@ impl Session {
         let (sender, done) = channel();
         self.connection.request_then(
             "session/load",
-            json!({"sessionId": self.id, "cwd": self.directory, "mcpServers": []}),
+            json!({
+                "sessionId": self.id,
+                "cwd": self.directory,
+                "mcpServers": tasks::mcp::acp_servers(&self.directory),
+            }),
             Box::new(move |result| {
                 let _ = sender.send(result);
             }),
@@ -703,7 +710,12 @@ impl Session {
                     lock(&self.waiting).insert(ours.clone(), waiting);
                     return Ok(Some(AgentEvent::Edit(EditRequest { id: ours, ..edit })));
                 }
-                match turn.permissions.access(call.kind.as_str()) {
+                let access = if call.is_task_tool() {
+                    turn.permissions.tasks
+                } else {
+                    turn.permissions.access(call.kind.as_str())
+                };
+                match access {
                     Access::Allow => answer(&["allow_once", "allow_always"])?,
                     Access::Deny => answer(&["reject_once", "reject_always"])?,
                     Access::Ask => {
@@ -990,6 +1002,14 @@ impl ToolCall {
                 new: new.to_string(),
             },
         })
+    }
+
+    /// One of Jig's own task tools, as the agent names it: Claude Code's
+    /// `mcp__jig__create_task`, Gemini's `create_task (jig MCP Server)`.
+    fn is_task_tool(&self) -> bool {
+        let title = self.title.to_lowercase();
+        title.contains(tasks::mcp::NAME)
+            && tasks::mcp::TOOLS.iter().any(|tool| title.contains(tool))
     }
 
     fn command(&self) -> Option<String> {
@@ -1427,6 +1447,20 @@ read -r line
             "content": [{"type": "diff", "path": "/p/src/b.rs", "newText": "b"}],
         }));
         assert!(events.is_empty(), "it was reviewed");
+    }
+
+    #[test]
+    fn jigs_task_tools_are_known_by_name() {
+        let call = |title: &str| ToolCall {
+            title: title.into(),
+            kind: "other".into(),
+            ..ToolCall::default()
+        };
+        assert!(call("mcp__jig__create_task").is_task_tool());
+        assert!(call("update_task (jig MCP Server)").is_task_tool());
+        assert!(!call("mcp__other__create_task").is_task_tool());
+        assert!(!call("mcp__jig__something_else").is_task_tool());
+        assert_eq!(Permissions::default().tasks, Access::Allow);
     }
 
     #[test]

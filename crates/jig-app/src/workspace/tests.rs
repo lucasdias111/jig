@@ -15,6 +15,7 @@ mod jigs;
 mod quick;
 mod session;
 mod tabs;
+mod tasks;
 
 use std::path::Path;
 use std::sync::Arc;

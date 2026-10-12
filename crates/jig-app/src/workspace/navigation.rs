@@ -1,0 +1,135 @@
+//! Go Back and Go Forward (⌃- and ⌃⇧-): jumps (a task's link, Go to
+//! Definition, Go to Line, a problem, a search result) remember where the
+//! cursor was, so you can go back and forth between them.
+
+use std::path::{Path, PathBuf};
+
+use gpui_kit::*;
+use jig_editor::EditorHandle as _;
+
+use super::tabs::canonical;
+use super::{GoBack, GoForward, Workspace};
+
+/// More than anyone goes back through.
+const MAX_PLACES: usize = 100;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Place {
+    path: PathBuf,
+    /// The cursor, as a byte offset. Edits since may have moved what was
+    /// there; it's kept within the file.
+    offset: usize,
+}
+
+#[derive(Default)]
+pub(super) struct History {
+    back: Vec<Place>,
+    forward: Vec<Place>,
+}
+
+impl History {
+    fn push(stack: &mut Vec<Place>, place: Place) {
+        if stack.last() != Some(&place) {
+            stack.push(place);
+        }
+        if stack.len() > MAX_PLACES {
+            stack.remove(0);
+        }
+    }
+}
+
+impl Workspace {
+    /// Whether the current tab shows `path`.
+    pub(super) fn showing(&self, path: &Path) -> bool {
+        !self.home
+            && self
+                .document()
+                .path
+                .as_deref()
+                .is_some_and(|open| canonical(open) == canonical(path))
+    }
+
+    /// Where the cursor is, in a saved file.
+    fn here(&self, cx: &App) -> Option<Place> {
+        if self.home {
+            return None;
+        }
+        Some(Place {
+            path: self.document().path.clone()?,
+            offset: self.editor().cursor(cx),
+        })
+    }
+
+    /// About to jump somewhere: remember where the cursor is, for Go Back.
+    pub(super) fn remember_location(&mut self, cx: &App) {
+        if let Some(here) = self.here(cx) {
+            self.remember(here);
+        }
+    }
+
+    /// Remember where the cursor last was in `path`'s tab, before a jump
+    /// the editor is making itself.
+    pub(super) fn remember_last_cursor(&mut self, path: &Path) {
+        let offset = self
+            .tab_for(path)
+            .and_then(|ix| self.tabs[ix].last_cursor());
+        if let Some(offset) = offset {
+            self.remember(Place {
+                path: path.to_path_buf(),
+                offset,
+            });
+        }
+    }
+
+    fn remember(&mut self, place: Place) {
+        History::push(&mut self.history.back, place);
+        self.history.forward.clear();
+    }
+
+    pub(super) fn go_back(&mut self, _: &GoBack, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_history(true, window, cx);
+    }
+
+    pub(super) fn go_forward(
+        &mut self,
+        _: &GoForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_history(false, window, cx);
+    }
+
+    fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let here = self.here(cx);
+        let (from, to) = if back {
+            (&mut self.history.back, &mut self.history.forward)
+        } else {
+            (&mut self.history.forward, &mut self.history.back)
+        };
+        // Places in files since deleted are skipped.
+        let Some(place) = std::iter::from_fn(|| from.pop()).find(|place| place.path.is_file())
+        else {
+            return;
+        };
+        if let Some(here) = here {
+            History::push(to, here);
+        }
+        self.open_file(&place.path, window, cx);
+        if !self.showing(&place.path) {
+            return;
+        }
+        let text = self.editor().text(cx);
+        let mut offset = place.offset.min(text.len());
+        while !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        self.editor().select(offset..offset, cx);
+        self.editor().focus(window, cx);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(super) fn history_lengths(&self) -> (usize, usize) {
+        (self.history.back.len(), self.history.forward.len())
+    }
+}

@@ -208,6 +208,14 @@ fn permissions_section() -> Section {
             |p| p.subagents,
             |p, access| p.subagents = access,
         ))
+        .row(access_row(
+            "tasks",
+            "Tasks",
+            "Saving and updating tasks in the task planner. It asks you in the conversation first.",
+            &["task", "planner", "todo", "plan"],
+            |p| p.tasks,
+            |p, access| p.tasks = access,
+        ))
         .row(
             Row::new("questions", "Questions with choices")
                 .description("OpenCode asks with options to pick from. Off, it asks in its reply.")

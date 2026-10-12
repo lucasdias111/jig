@@ -14,6 +14,7 @@ mod models;
 mod openai_compat;
 pub mod prompt;
 pub mod response;
+pub mod tasks;
 
 pub use anthropic::AnthropicProvider;
 pub use config::{AgentModel, Config, ProviderConfig, ProviderKind, split_model};

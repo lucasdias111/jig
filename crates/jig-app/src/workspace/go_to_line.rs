@@ -51,6 +51,7 @@ impl Workspace {
             self.show_note("Type a line number, like 42 or 42:5.".into(), window, cx);
             return;
         };
+        self.remember_location(cx);
         self.editor().select(offset..offset, cx);
         self.editor().focus(window, cx);
     }
