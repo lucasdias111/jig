@@ -275,9 +275,9 @@ fn the_agent_s_question_is_answered_by_number_or_in_words(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn an_agent_that_wants_a_sign_in_offers_its_ways(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
-    let needed = jig_ai::acp::SignInNeeded {
+    let needed = jig_ai::agent::acp::SignInNeeded {
         agent: "Claude Code".into(),
-        methods: vec![jig_ai::acp::SignIn {
+        methods: vec![jig_ai::agent::acp::SignIn {
             id: "claude-ai-login".into(),
             name: "Claude Subscription".into(),
             description: String::new(),
@@ -684,7 +684,7 @@ fn with_claude_code(cx: &mut TestAppContext) {
         crate::settings::update(cx, |s| s.agent.using = "claude-code".into());
         crate::agents::remember_models(
             "claude-code",
-            jig_ai::acp::AgentModels {
+            jig_ai::agent::acp::AgentModels {
                 config_id: "model".into(),
                 current: "default".into(),
                 options: vec![

@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use gpui_kit::App;
-use jig_ai::acp::{AgentCommandLine, Connection};
-use jig_ai::agent::{AgentServer, AgentTarget};
-use jig_ai::harness::Backend;
+use jig_ai::agent::acp::{AgentCommandLine, Connection};
+use jig_ai::agent::harness::Backend;
+use jig_ai::agent::opencode;
 use serde_json::Value;
 
 use crate::agents::Kind;
 
 /// The running OpenCode server and the provider config it was started with.
-static SERVER: Mutex<Option<(Option<Value>, Arc<AgentServer>)>> = Mutex::new(None);
+static SERVER: Mutex<Option<(Option<Value>, Arc<opencode::Server>)>> = Mutex::new(None);
 
 /// Running ACP agents by key, with how each was started.
 type Running = HashMap<String, (AgentCommandLine, Arc<Connection>)>;
@@ -54,7 +54,7 @@ impl Pick {
 /// and keys are.
 #[derive(Clone, Debug)]
 pub enum Choice {
-    OpenCode(AgentTarget),
+    OpenCode(opencode::Target),
     Acp {
         key: String,
         name: String,
@@ -158,26 +158,26 @@ pub fn connect(choice: &Choice) -> anyhow::Result<Backend> {
 /// Ask an ACP agent which models it offers, by starting it and opening an
 /// empty conversation, which agents don't keep until something is said in
 /// it. Blocks, so call it off the main thread.
-pub fn look_up_models(choice: &Choice) -> anyhow::Result<Option<jig_ai::acp::AgentModels>> {
+pub fn look_up_models(choice: &Choice) -> anyhow::Result<Option<jig_ai::agent::acp::AgentModels>> {
     let Choice::Acp { .. } = choice else {
         return Ok(None);
     };
     let backend = connect(choice)?;
     if let Backend::Acp(connection) = &backend {
-        jig_ai::acp::Session::create(connection.clone(), &std::env::temp_dir(), None)?;
+        jig_ai::agent::acp::Session::create(connection.clone(), &std::env::temp_dir(), None)?;
     }
     Ok(backend.models())
 }
 
 /// The OpenCode server started with `config`, starting one if needed.
-fn server(config: Option<&Value>) -> anyhow::Result<Arc<AgentServer>> {
+fn server(config: Option<&Value>) -> anyhow::Result<Arc<opencode::Server>> {
     let mut server = SERVER.lock().unwrap_or_else(|error| error.into_inner());
     if let Some((started_with, server)) = server.as_ref()
         && started_with.as_ref() == config
     {
         return Ok(server.clone());
     }
-    let started = Arc::new(AgentServer::start(config)?);
+    let started = Arc::new(opencode::Server::start(config)?);
     *server = Some((config.cloned(), started.clone()));
     Ok(started)
 }

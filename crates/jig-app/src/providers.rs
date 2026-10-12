@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::{App, BorrowAppContext as _, Global, Task};
-use jig_ai::agent::AgentTarget;
+use jig_ai::agent::opencode;
 use jig_ai::{
     AgentModel, Config, ConfigFile, KeySource, KeyStore, Provider, ProviderConfig, ProviderTemplate,
 };
@@ -157,7 +157,7 @@ pub fn offered_by_provider(cx: &App) -> Vec<(String, String, String)> {
 
 /// OpenCode on `model` (`provider/model`), or on the agent model from the
 /// settings.
-pub fn agent_target_for(model: Option<&str>, cx: &App) -> Result<AgentTarget, String> {
+pub fn agent_target_for(model: Option<&str>, cx: &App) -> Result<opencode::Target, String> {
     let config = config(cx)?;
     let agent = match model {
         Some(id) => {
@@ -180,7 +180,7 @@ pub fn agent_target_for(model: Option<&str>, cx: &App) -> Result<AgentTarget, St
         }
         AgentModel::OpenCode(_) => None,
     };
-    Ok(AgentTarget::new(&agent, key.as_deref()))
+    Ok(opencode::Target::new(&agent, key.as_deref()))
 }
 
 /// Change the providers file and tell everyone.

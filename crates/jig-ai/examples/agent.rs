@@ -6,9 +6,10 @@
 
 use std::sync::Arc;
 
-use jig_ai::acp::{AgentCommandLine, Connection};
-use jig_ai::agent::{AgentEvent, AgentRequest, AgentServer, DEFAULT_MODEL, Permissions};
-use jig_ai::harness::Backend;
+use jig_ai::agent::acp::{AgentCommandLine, Connection};
+use jig_ai::agent::harness::Backend;
+use jig_ai::agent::opencode::{self, DEFAULT_MODEL};
+use jig_ai::agent::{AgentEvent, AgentRequest, Permissions};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -16,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     let prompt = args.next().expect("prompt");
     let command: Vec<String> = args.collect();
     let backend = match command.split_first() {
-        None => Backend::OpenCode(Arc::new(AgentServer::start(None)?)),
+        None => Backend::OpenCode(Arc::new(opencode::Server::start(None)?)),
         Some((program, rest)) => Backend::Acp(Connection::start(
             program,
             &AgentCommandLine {

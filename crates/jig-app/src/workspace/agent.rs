@@ -18,11 +18,11 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::PromptRequest;
-use jig_ai::acp::SignInNeeded;
+use jig_ai::agent::acp::SignInNeeded;
+use jig_ai::agent::harness::Session;
 use jig_ai::agent::{
     AgentEvent, AgentRequest, EditRequest, PermissionRequest, QuestionRequest, Turn,
 };
-use jig_ai::harness::Session;
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus,
     CommandPalette, Conversation, LiveStep, ModelChoice, ModelMenu, PastConversation,
@@ -43,7 +43,7 @@ enum Message {
     /// An earlier conversation, picked up again.
     Resumed(Session, Vec<Turn>),
     /// The models an agent (by key) says it offers.
-    Models(String, jig_ai::acp::AgentModels),
+    Models(String, jig_ai::agent::acp::AgentModels),
     Event(AgentEvent),
     /// The agent wants the user to sign in first.
     SignIn(SignInNeeded),
@@ -1000,7 +1000,7 @@ impl Workspace {
         let choice = crate::agent::choice_for(pick.as_ref(), cx);
         let task = cx.background_executor().spawn(async move {
             let backend = crate::agent::connect(&choice.map_err(anyhow::Error::msg)?)?;
-            if let jig_ai::harness::Backend::Acp(connection) = backend {
+            if let jig_ai::agent::harness::Backend::Acp(connection) = backend {
                 connection.authenticate(&method)?;
             }
             anyhow::Ok(())

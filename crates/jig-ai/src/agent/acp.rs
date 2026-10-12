@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::agent::{
+use super::{
     Access, AgentCommand, AgentEvent, AgentRequest, Conversation, EditChange, EditRequest,
     PermissionRequest, Permissions, Turn, canonical, relative,
 };
@@ -1204,7 +1204,7 @@ fn join(messages: &[(Option<String>, String)]) -> String {
 /// An earlier conversation as the agent replays it.
 struct Transcript {
     directory: String,
-    turns: Vec<crate::agent::Turn>,
+    turns: Vec<super::Turn>,
     calls: HashMap<String, ToolCall>,
     /// The message being replayed, by who said it and its id.
     current: Option<(bool, Option<String>)>,
@@ -1221,7 +1221,7 @@ impl Transcript {
     }
 
     fn add(&mut self, update: &Value) {
-        use crate::agent::Turn as Line;
+        use super::Turn as Line;
         let kind = update["sessionUpdate"].as_str().unwrap_or_default();
         let user = match kind {
             "user_message_chunk" => true,
@@ -1267,12 +1267,12 @@ impl Transcript {
 
     /// The lines, without what Jig adds about where the user is, and
     /// without the agent's words split by whitespace.
-    fn finish(self) -> Vec<crate::agent::Turn> {
-        use crate::agent::Turn as Line;
+    fn finish(self) -> Vec<super::Turn> {
+        use super::Turn as Line;
         self.turns
             .into_iter()
             .filter_map(|line| match line {
-                Line::User(text) => Some(Line::User(crate::agent::asked(&text).to_string())),
+                Line::User(text) => Some(Line::User(super::asked(&text).to_string())),
                 Line::Agent(text) if text.trim().is_empty() => None,
                 Line::Agent(text) => Some(Line::Agent(text.trim().to_string())),
                 other => Some(other),
@@ -1488,7 +1488,7 @@ read -r line
         ] {
             transcript.add(&update);
         }
-        use crate::agent::Turn as Line;
+        use super::Turn as Line;
         assert_eq!(
             transcript.finish(),
             [

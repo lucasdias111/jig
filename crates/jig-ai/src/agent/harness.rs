@@ -1,22 +1,19 @@
 //! The agent behind Agent mode, whichever it is: OpenCode through Jig's
-//! own client ([`crate::agent`]), or any agent that speaks the Agent Client
-//! Protocol ([`crate::acp`]). The UI only sees these two types.
+//! own client ([`opencode`]), or any agent that speaks the Agent Client
+//! Protocol ([`acp`]). The UI only sees these two types.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::acp;
-use crate::agent::{
-    AgentCommand, AgentEvent, AgentRequest, AgentServer, AgentSession, Conversation, Permissions,
-    Turn,
-};
+use super::{AgentCommand, AgentEvent, AgentRequest, Conversation, Permissions, Turn};
+use super::{acp, opencode};
 
 /// A running agent, shared by every conversation with it.
 #[derive(Clone)]
 pub enum Backend {
-    OpenCode(Arc<AgentServer>),
+    OpenCode(Arc<opencode::Server>),
     Acp(Arc<acp::Connection>),
 }
 
@@ -58,7 +55,7 @@ impl Backend {
         model: Option<&str>,
     ) -> Result<Session> {
         Ok(match self {
-            Backend::OpenCode(server) => Session::OpenCode(AgentSession::create(
+            Backend::OpenCode(server) => Session::OpenCode(opencode::Session::create(
                 server.clone(),
                 directory,
                 title,
@@ -74,7 +71,7 @@ impl Backend {
     pub fn open(&self, directory: &Path, id: &str) -> Result<Session> {
         Ok(match self {
             Backend::OpenCode(server) => {
-                Session::OpenCode(AgentSession::open(server.clone(), directory, id)?)
+                Session::OpenCode(opencode::Session::open(server.clone(), directory, id)?)
             }
             Backend::Acp(connection) => {
                 Session::Acp(acp::Session::open(connection.clone(), directory, id))
@@ -87,7 +84,7 @@ impl Backend {
 /// the agent while another thread runs [`Session::run`].
 #[derive(Clone)]
 pub enum Session {
-    OpenCode(AgentSession),
+    OpenCode(opencode::Session),
     Acp(acp::Session),
 }
 

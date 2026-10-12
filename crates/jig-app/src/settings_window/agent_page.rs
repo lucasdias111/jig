@@ -305,7 +305,7 @@ impl SettingsWindow {
 }
 
 /// The models `agent` offers, its default the one it's on.
-fn agent_model_dropdown(agent: &Agent, models: jig_ai::acp::AgentModels) -> Row {
+fn agent_model_dropdown(agent: &Agent, models: jig_ai::agent::acp::AgentModels) -> Row {
     let options: Vec<(SharedString, SharedString)> = models
         .options
         .iter()
