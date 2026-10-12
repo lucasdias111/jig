@@ -75,7 +75,7 @@ pub struct Debugger {
     /// Uninstall to move to the Trash.
     #[serde(default)]
     uninstall: Vec<String>,
-    help: Option<Help>,
+    help: Option<crate::tools::Help>,
     /// How the commands it debugs start, as words.
     #[serde(default)]
     commands: Vec<String>,
@@ -89,44 +89,6 @@ pub struct Debugger {
     build: Option<String>,
     launch: toml::Table,
     launch_program: Option<toml::Table>,
-}
-
-/// How to get a tool: one text, or one per system.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum Help {
-    Text(String),
-    PerOs {
-        macos: Option<String>,
-        linux: Option<String>,
-        default: Option<String>,
-    },
-}
-
-impl Help {
-    /// The text for this system.
-    pub(crate) fn text(&self) -> String {
-        match self {
-            Help::Text(text) => text.clone(),
-            Help::PerOs {
-                macos,
-                linux,
-                default,
-            } => {
-                let specific = if cfg!(target_os = "macos") {
-                    macos
-                } else if cfg!(target_os = "linux") {
-                    linux
-                } else {
-                    &None
-                };
-                specific
-                    .clone()
-                    .or_else(|| default.clone())
-                    .unwrap_or_default()
-            }
-        }
-    }
 }
 
 impl Debugger {
@@ -556,7 +518,7 @@ pub fn status(debugger: &Debugger) -> (String, bool) {
         let plugin = lsp_bundles(server)
             .into_iter()
             .next()
-            .map(|path| home_relative(&path))
+            .map(|path| crate::tools::home_relative(&path))
             .unwrap_or_default();
         return (format!("Using {server} with {plugin}"), true);
     }
@@ -564,7 +526,7 @@ pub fn status(debugger: &Debugger) -> (String, bool) {
     vars.set("port", json!("0"));
     let shown = debugger
         .adapter_command(&vars)
-        .map(|adapter| home_relative(&adapter.shown))
+        .map(|adapter| crate::tools::home_relative(&adapter.shown))
         .unwrap_or_default();
     (format!("Using {shown}"), true)
 }
@@ -577,30 +539,13 @@ pub fn install(debugger: &Debugger) -> Result<()> {
 
 fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
     let script = debugger.install.as_deref().context("Nothing to install")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("Couldn't create {}", dir.display()))?;
     let mut vars = Vars::new(dir);
     vars.set("debuggers", json!(dir));
-    let script = vars.expand_str(script).map_err(anyhow::Error::msg)?;
-    // Installers are sh scripts everywhere; on Windows, Git's sh runs them.
-    let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
-    let output = Command::new(sh)
-        .arg("-c")
-        .arg(&script)
-        .current_dir(dir)
-        .env("PATH", crate::lsp::search_path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Couldn't run the installer")?;
+    let script = crate::tools::expand_platform(script);
+    let script = vars.expand_str(&script).map_err(anyhow::Error::msg)?;
+    let result = crate::tools::run_installer(&script, dir);
     *CHECKS.lock().unwrap() = None;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let last: Vec<&str> = stderr.trim().lines().rev().take(3).collect();
-        let last: Vec<&str> = last.into_iter().rev().collect();
-        bail!("Installing failed: {}", last.join(" "));
-    }
-    Ok(())
+    result
 }
 
 /// What Jig installed of `debugger` that is still there: the `uninstall`
@@ -717,14 +662,7 @@ pub fn debuggers_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("JIG_DEBUGGERS_DIR") {
         return Some(PathBuf::from(dir));
     }
-    data_dir().map(|dir| {
-        dir.join(if cfg!(target_os = "macos") {
-            "Jig"
-        } else {
-            "jig"
-        })
-        .join("debuggers")
-    })
+    crate::tools::dir("debuggers")
 }
 
 pub(crate) fn data_dir() -> Option<PathBuf> {
@@ -800,17 +738,6 @@ fn program_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(crate::lsp::search_path())
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
-}
-
-/// `path` with the home folder as `~`, as people write it.
-fn home_relative(path: &Path) -> String {
-    let path = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path.starts_with(&home) => {
-            format!("~{}", &path[home.len()..])
-        }
-        _ => path,
-    }
 }
 
 #[cfg(test)]

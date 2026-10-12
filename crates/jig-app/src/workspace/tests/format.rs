@@ -217,3 +217,28 @@ command = ["/bin/sh", "-c", "tr a-z A-Z"]
         "the cursor stays"
     );
 }
+
+/// A formatter chosen for the language formats ahead of its server.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_chosen_formatter_goes_ahead_of_the_server(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (window, workspace, _) =
+        open_with_formatting_server(cx, dir.path(), "fn a() {}\n", |method, _| match method {
+            "textDocument/formatting" => serde_json::json!([]),
+            _ => serde_json::Value::Null,
+        });
+    crate::formatters::use_for_tests(
+        r#"
+[[formatter]]
+key = "upper"
+name = "Upper"
+languages = ["rust"]
+command = ["/bin/sh", "-c", "tr a-z A-Z"]
+"#,
+    );
+    cx.update(|cx| crate::settings::update(cx, |s| s.formatting.choose("rust", Some("upper"))));
+    let editor = cx.update(|cx| workspace.read(cx).editor().clone());
+    press(cx, window, "alt-shift-f");
+    wait_until(cx, |cx| cx.update(|cx| editor.text(cx)) == "FN A() {}\n");
+}

@@ -31,6 +31,7 @@ pub fn run(dir: &Path) {
         .chain([
             (Nav::detail(Page::Appearance, Detail::Colors), None),
             (Nav::detail(Page::Languages, Detail::Language(0)), None),
+            (Nav::detail(Page::Languages, Detail::Library), None),
             (Nav::page(Page::Appearance), Some("format")),
         ]);
     for dark in [false, true] {

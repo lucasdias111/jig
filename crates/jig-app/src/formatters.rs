@@ -10,8 +10,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
+
+use crate::tools::{self, Help};
 
 const BUILT_IN: &str = include_str!("../../../assets/default-formatters.toml");
 
@@ -44,23 +46,97 @@ pub struct Formatter {
     /// Jig's names for the languages it formats.
     pub languages: Vec<String>,
     command: Vec<String>,
+    /// A shell command installing it into `${dir}`, its own folder in
+    /// Jig's formatters folder.
+    install: Option<String>,
+    help: Option<Help>,
 }
 
 impl Formatter {
-    /// The program to run, if it's installed: on the `PATH`, or in a
-    /// `node_modules/.bin` above `file`, where Prettier usually is.
+    /// The program to run, if it's installed: on the `PATH`, in its own
+    /// folder if Jig installed it, or in a `node_modules/.bin` above
+    /// `file`, where Prettier usually is.
     pub fn program(&self, file: &Path) -> Option<PathBuf> {
         let name = self.command.first()?;
         if name.contains('/') || name.contains('\\') {
             return Some(PathBuf::from(name)).filter(|path| path.is_file());
         }
+        let own = self
+            .own_dir()
+            .map(|own| tools::bin_dirs(&own))
+            .into_iter()
+            .flatten();
         let local = file
             .ancestors()
             .skip(1)
             .map(|dir| dir.join("node_modules/.bin"));
         std::env::split_paths(crate::lsp::search_path())
+            .chain(own)
             .chain(local)
-            .find_map(|dir| executable_in(&dir, name))
+            .find_map(|dir| tools::executable_in(&dir, name))
+    }
+
+    pub fn installable(&self) -> bool {
+        self.install.is_some()
+    }
+
+    /// How to get it, for when it isn't installed.
+    pub fn help(&self) -> String {
+        self.help.as_ref().map_or_else(
+            || format!("Install {} and put it on the PATH.", self.name),
+            Help::text,
+        )
+    }
+
+    /// Its own folder in Jig's formatters folder, whether or not it's there.
+    fn own_dir(&self) -> Option<PathBuf> {
+        formatters_dir().map(|dir| dir.join(&self.key))
+    }
+
+    /// Whether Jig installed it, so Uninstall has something to remove.
+    pub fn installed_by_jig(&self) -> bool {
+        self.own_dir().is_some_and(|dir| dir.is_dir())
+    }
+
+    /// What Settings says about it: the program it runs, or how to get it,
+    /// and whether it's ready.
+    pub fn status(&self) -> (String, bool) {
+        match self.program(Path::new("/")) {
+            Some(program) => (format!("Using {}", tools::home_relative(&program)), true),
+            None if self.installable() => (
+                format!("{} isn't installed. Jig can install it.", self.name),
+                false,
+            ),
+            None => (
+                format!("{} isn't installed. {}", self.name, self.help()),
+                false,
+            ),
+        }
+    }
+
+    /// Run its install command. Blocks, so run it off the main thread.
+    pub fn install(&self) -> Result<()> {
+        let script = self.install.as_deref().context("Nothing to install")?;
+        let dir = self.own_dir().context("No home folder to install into")?;
+        tools::install_own_folder(script, &dir)?;
+        if self.program(Path::new("/")).is_none() {
+            bail!(
+                "The installer finished, but Jig still can't find {}.",
+                self.name
+            );
+        }
+        Ok(())
+    }
+
+    /// Move the folder Jig installed it into to the Trash.
+    pub fn uninstall(&self) -> Result<()> {
+        let Some(dir) = self.own_dir().filter(|dir| dir.is_dir()) else {
+            bail!(
+                "Jig didn't install {}, so there's nothing to remove.",
+                self.name
+            );
+        };
+        trash::delete(&dir).context("Couldn't move it to the Trash")
     }
 
     /// The arguments, with `${file}` and `${root}` filled in.
@@ -103,17 +179,15 @@ impl Formatter {
     }
 }
 
-/// `name`, as an executable in `dir`. Windows adds an extension.
-fn executable_in(dir: &Path, name: &str) -> Option<PathBuf> {
-    let extensions: &[&str] = if cfg!(windows) {
-        &["", ".exe", ".cmd", ".bat"]
-    } else {
-        &[""]
-    };
-    extensions
-        .iter()
-        .map(|extension| dir.join(format!("{name}{extension}")))
-        .find(|candidate| candidate.is_file())
+/// Where Jig keeps formatters it installs, beside its debuggers and
+/// language servers. `JIG_FORMATTERS_DIR` says otherwise.
+pub fn formatters_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("JIG_FORMATTERS_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    crate::debuggers::debuggers_dir()?
+        .parent()
+        .map(|dir| dir.join("formatters"))
 }
 
 /// Run `command` with `input` on its stdin and return its stdout, or why
@@ -182,11 +256,21 @@ pub struct Registry {
 impl Registry {
     /// The first installed formatter for `language`, for `file`.
     pub fn for_language(&self, language: &str, file: &Path) -> Option<Arc<Formatter>> {
-        self.formatters
-            .iter()
-            .filter(|f| f.languages.iter().any(|l| l == language))
+        self.serving(language)
             .find(|f| f.program(file).is_some())
             .cloned()
+    }
+
+    /// Every formatter for `language`, installed or not, first first.
+    pub fn serving(&self, language: &str) -> impl Iterator<Item = &Arc<Formatter>> {
+        self.formatters
+            .iter()
+            .filter(move |f| f.languages.iter().any(|l| l == language))
+    }
+
+    /// A formatter by key.
+    pub fn get(&self, key: &str) -> Option<Arc<Formatter>> {
+        self.formatters.iter().find(|f| f.key == key).cloned()
     }
 
     /// Whether any formatter, installed or not, is for `language`.
@@ -410,6 +494,8 @@ command = ["cargo", "fmt"]
             name: "Fake".into(),
             languages: vec!["rust".into()],
             command: vec!["/bin/sh".into(), "-c".into(), script.into()],
+            install: None,
+            help: None,
         }
     }
 

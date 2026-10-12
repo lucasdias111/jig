@@ -26,7 +26,8 @@
 # outermost      true: the outermost folder with a marker rather than the
 #                nearest, as a Cargo or Go workspace holds its members'.
 # install        A shell command Settings' Install button runs. ${dir} is
-#                the server's own folder, which Uninstall moves to the Trash.
+#                the server's own folder, which Uninstall moves to the Trash;
+#                ${os} and ${arch} name this computer (macos, aarch64).
 # help           How to get it, for when it isn't installed. A table of
 #                { macos, linux, default } when that differs.
 

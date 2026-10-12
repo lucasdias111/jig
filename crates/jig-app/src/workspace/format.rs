@@ -258,12 +258,26 @@ impl Workspace {
         };
         let language = tab.document.language(&self.settings.languages);
         let registry = formatters::registry();
-        let external = registry.for_language(language, &path);
-        let server = tab.lsp.as_ref().and_then(|lsp| {
-            let can = lsp.client.formatting();
-            let range = range.clone().filter(|_| can.range);
-            (can.document || range.is_some()).then(|| (lsp.client.clone(), lsp.uri.clone(), range))
-        });
+        // A formatter chosen for the language goes ahead of its server.
+        let chosen = self
+            .settings
+            .formatting
+            .chosen(language)
+            .and_then(|key| registry.get(key))
+            .filter(|formatter| formatter.program(&path).is_some());
+        let external = chosen
+            .clone()
+            .or_else(|| registry.for_language(language, &path));
+        let server = tab
+            .lsp
+            .as_ref()
+            .filter(|_| chosen.is_none())
+            .and_then(|lsp| {
+                let can = lsp.client.formatting();
+                let range = range.clone().filter(|_| can.range);
+                (can.document || range.is_some())
+                    .then(|| (lsp.client.clone(), lsp.uri.clone(), range))
+            });
         let text = text.to_string();
         let external_job = external.clone().map(|formatter| {
             let root = crate::project::root_for(&path);

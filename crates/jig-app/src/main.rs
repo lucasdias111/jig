@@ -43,6 +43,7 @@ mod shortcuts;
 mod snippets;
 mod text_edits;
 mod theme;
+mod tools;
 mod workspace;
 
 use std::path::PathBuf;

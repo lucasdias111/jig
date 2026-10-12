@@ -5,14 +5,13 @@
 //! found on the PATH and left alone.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
 
 use super::Server;
 
-/// Where Jig keeps servers it installs, beside its debuggers.
-/// `JIG_SERVERS_DIR` says otherwise.
+/// Where Jig keeps servers it installs, beside its debuggers and
+/// formatters. `JIG_SERVERS_DIR` says otherwise.
 pub fn servers_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("JIG_SERVERS_DIR") {
         return Some(PathBuf::from(dir));
@@ -39,7 +38,10 @@ pub fn status(server: &Server) -> (String, bool) {
         return ("Turned off in language-servers.toml.".into(), true);
     }
     match super::program_for(server) {
-        Some((program, _)) => (format!("Using {}", home_relative(&program)), true),
+        Some((program, _)) => (
+            format!("Using {}", crate::tools::home_relative(&program)),
+            true,
+        ),
         None if server.installable() => (
             format!("{} isn't installed. Jig can install it.", server.name),
             false,
@@ -66,32 +68,7 @@ pub fn install(server: &Server) -> Result<()> {
 
 fn install_into(server: &Server, dir: &Path) -> Result<()> {
     let script = server.install.as_deref().context("Nothing to install")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("Couldn't create {}", dir.display()))?;
-    let script = script.replace("${dir}", &dir.to_string_lossy());
-    // Installers are sh scripts everywhere; on Windows, Git's sh runs them.
-    let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
-    let output = Command::new(sh)
-        .arg("-c")
-        .arg(&script)
-        .current_dir(dir)
-        .env("PATH", super::search_path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Couldn't run the installer")?;
-    // An installer that put nothing here, as rustup's doesn't, or that
-    // failed, leaves no folder behind to read as installed.
-    if std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none()) {
-        std::fs::remove_dir(dir).ok();
-    }
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let last: Vec<&str> = stderr.trim().lines().rev().take(3).collect();
-        let last: Vec<&str> = last.into_iter().rev().collect();
-        bail!("Installing failed: {}", last.join(" "));
-    }
-    Ok(())
+    crate::tools::install_own_folder(script, dir)
 }
 
 /// Move the folder Jig installed `server` into to the Trash.
@@ -104,18 +81,6 @@ pub fn uninstall(server: &Server) -> Result<()> {
         );
     };
     trash::delete(&dir).context("Couldn't move it to the Trash")
-}
-
-/// `path` with the home folder as `~`.
-fn home_relative(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home
-        .as_deref()
-        .and_then(|home| path.strip_prefix(home).ok())
-    {
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -142,13 +107,6 @@ mod tests {
             text,
             "fake-ls isn't installed. Install fake-ls and put it on the PATH."
         );
-    }
-
-    #[test]
-    fn home_folder_shows_as_a_tilde() {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-        assert_eq!(home_relative(&home.join(".cargo/bin/x")), "~/.cargo/bin/x");
-        assert_eq!(home_relative(Path::new("/usr/bin/x")), "/usr/bin/x");
     }
 
     #[test]

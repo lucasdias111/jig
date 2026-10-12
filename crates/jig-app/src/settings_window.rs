@@ -105,6 +105,8 @@ impl Page {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Detail {
     Colors,
+    /// Every language Jig bundles, to add from.
+    Library,
     /// An index into `languages::bundled()`.
     Language(usize),
 }
@@ -132,6 +134,7 @@ impl Nav {
         match self.detail {
             None => self.page.title().into(),
             Some(Detail::Colors) => "Theme Colors".into(),
+            Some(Detail::Library) => "Language Library".into(),
             Some(Detail::Language(ix)) => language(ix).label.into(),
         }
     }
@@ -141,8 +144,8 @@ impl Nav {
         Page::ALL.into_iter().flat_map(|page| {
             let details: Vec<Detail> = match page {
                 Page::Appearance => vec![Detail::Colors],
-                Page::Languages => (0..languages::bundled().len())
-                    .map(Detail::Language)
+                Page::Languages => std::iter::once(Detail::Library)
+                    .chain((0..languages::bundled().len()).map(Detail::Language))
                     .collect(),
                 _ => Vec::new(),
             };
@@ -398,6 +401,7 @@ impl SettingsWindow {
             (Page::Appearance, _) => self.appearance_sections(cx),
             (Page::Editor, _) => appearance_page::editor_sections(),
             (Page::Languages, Some(Detail::Language(ix))) => self.language_sections(ix, cx),
+            (Page::Languages, Some(Detail::Library)) => self.library_sections(cx),
             (Page::Languages, _) => self.languages_sections(cx),
             (Page::Keyboard, _) => self.shortcuts_sections(cx),
             (Page::Providers, _) => self.providers_sections(cx),
@@ -783,6 +787,21 @@ mod tests {
                     .any(|label| label == "Trim trailing whitespace"),
                 "{found:?}"
             );
+        });
+
+        // A language not in the list is found in the Library, by name or
+        // extension.
+        update(handle, cx, |this, _, cx| {
+            let library = this.sections(Nav::detail(Page::Languages, Detail::Library), cx);
+            for query in ["ruby", "rb"] {
+                let found: Vec<String> = library
+                    .iter()
+                    .filter_map(|section| section.matching(query))
+                    .flat_map(|section| section.rows)
+                    .map(|row| row.id.to_string())
+                    .collect();
+                assert_eq!(found, ["library-ruby"], "{query}");
+            }
         });
 
         // Picking a page leaves the search.

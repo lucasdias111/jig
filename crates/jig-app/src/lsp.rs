@@ -49,7 +49,7 @@ pub struct Server {
     pub outermost: bool,
     /// A shell command installing it into `${dir}`, its own folder.
     install: Option<String>,
-    help: Option<crate::debuggers::Help>,
+    help: Option<crate::tools::Help>,
 }
 
 impl Server {
@@ -61,7 +61,7 @@ impl Server {
     pub fn help(&self) -> String {
         self.help.as_ref().map_or_else(
             || format!("Install {} and put it on the PATH.", self.name),
-            crate::debuggers::Help::text,
+            crate::tools::Help::text,
         )
     }
 
@@ -225,11 +225,9 @@ pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
         let (name, args) = argv.split_first()?;
         let program = find_program(name, path)
             .or_else(|| {
-                let own = own.as_ref()?;
-                [own.join("bin"), own.join("node_modules/.bin")]
-                    .into_iter()
-                    .map(|dir| dir.join(name))
-                    .find(|program| program.is_file())
+                crate::tools::bin_dirs(own.as_ref()?)
+                    .iter()
+                    .find_map(|dir| crate::tools::executable_in(dir, name))
             })
             // Debuggers' installers may have put it with them.
             .or_else(|| {

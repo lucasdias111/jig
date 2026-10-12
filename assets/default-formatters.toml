@@ -9,10 +9,17 @@
 # command    The program and its arguments. Runs in the file's folder.
 #            ${file} is the file's full path, for formatters that pick
 #            their settings or parser by it; ${root} the project's folder.
+# install    A shell command Settings' Install button runs. ${dir} is the
+#            formatter's own folder, which Uninstall moves to the Trash;
+#            ${os} and ${arch} name this computer (macos, aarch64).
+# help       How to get it, for when it isn't installed. A table of
+#            { macos, linux, default } when that differs.
 #
 # Formatters that aren't installed are skipped; for a language with more
-# than one, the first installed wins. Programs are looked for on the PATH
-# and in the project's node_modules/.bin.
+# than one, the one chosen on its Settings page wins, else its language
+# server, else the first installed. Programs are looked for on the PATH,
+# in the formatter's own folder (its bin and node_modules/.bin) and in the
+# project's node_modules/.bin.
 
 [[formatter]]
 key = "rustfmt"

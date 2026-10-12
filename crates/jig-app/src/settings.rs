@@ -256,6 +256,11 @@ pub struct FormatSettings {
     pub on_save: Vec<String>,
     pub trim_trailing_whitespace: bool,
     pub final_newline: bool,
+    /// The formatter each language uses, by language name and formatter
+    /// key, ahead of its language server. Unset, the language server
+    /// formats, or else the first formatter installed for it.
+    #[serde(rename = "use")]
+    pub using: BTreeMap<String, String>,
 }
 
 impl FormatSettings {
@@ -268,6 +273,20 @@ impl FormatSettings {
         if on {
             self.on_save.push(language.to_string());
         }
+    }
+
+    /// The formatter chosen for `language`, if one was.
+    pub fn chosen(&self, language: &str) -> Option<&str> {
+        self.using.get(language).map(String::as_str)
+    }
+
+    /// Choose `language`'s formatter by key; `None` goes back to its
+    /// language server.
+    pub fn choose(&mut self, language: &str, formatter: Option<&str>) {
+        match formatter {
+            Some(key) => self.using.insert(language.to_string(), key.to_string()),
+            None => self.using.remove(language),
+        };
     }
 }
 
@@ -405,6 +424,7 @@ mod tests {
         settings.languages.set_off("java", true);
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
+        settings.formatting.choose("python", Some("black"));
         settings.agent.using = "codex".into();
         settings
             .agent
