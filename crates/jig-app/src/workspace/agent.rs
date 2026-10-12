@@ -1601,7 +1601,13 @@ impl Workspace {
                 self.learn_commands(directory, commands, cx);
             }
             Message::Event(AgentEvent::Did(text)) => {
-                agent.entries.push(ChatEntry::Did(text));
+                // An edit that skipped review stays in sight, not folded
+                // away with the tool calls.
+                agent.entries.push(if text.ends_with("without asking") {
+                    ChatEntry::Note(text)
+                } else {
+                    ChatEntry::Did(text)
+                });
                 agent.scroll.scroll_to_bottom();
                 cx.notify();
             }

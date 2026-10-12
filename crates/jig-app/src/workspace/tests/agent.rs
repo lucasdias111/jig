@@ -816,3 +816,46 @@ fn a_long_reply_shows_its_end_and_says_when_there_is_more_below(cx: &mut TestApp
     let (down, max) = scroll(&mut vcx);
     assert_eq!(down, max, "back at the end");
 }
+
+#[gpui_kit::test]
+fn tool_calls_in_a_row_fold_into_their_count(cx: &mut TestAppContext) {
+    use jig_ai::agent::AgentEvent;
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            for call in ["Ran `grep -n foo`", "Ran `sed -n 1,9p a.rs`", "Read a.rs"] {
+                this.test_agent_request(AgentEvent::Did(call.into()), window, cx);
+            }
+            this.test_agent_request(
+                AgentEvent::Did("Edited b.rs without asking".into()),
+                window,
+                cx,
+            );
+            this.test_agent_request(AgentEvent::Did("Ran `cargo test`".into()), window, cx);
+        })
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    // The three calls after "Hello" fold into one row; the edit made
+    // without asking stays in sight, and the lone call after it shows as is.
+    let folded = vcx
+        .debug_bounds("agent-tools-1")
+        .expect("the calls fold into their count");
+    assert!(vcx.debug_bounds("agent-tools-5").is_none());
+    assert_eq!(
+        vcx.update(|_, cx| workspace.read(cx).agent_entries())[4],
+        ChatEntry::Note("Edited b.rs without asking".into())
+    );
+
+    assert!(vcx.debug_bounds("agent-tools-1-list").is_none());
+    // A click lists them, and another folds them again.
+    vcx.simulate_click(folded.center(), gpui_kit::Modifiers::none());
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-tools-1-list").is_some());
+    let folded = vcx.debug_bounds("agent-tools-1").unwrap();
+    vcx.simulate_click(folded.center(), gpui_kit::Modifiers::none());
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-tools-1-list").is_none());
+}

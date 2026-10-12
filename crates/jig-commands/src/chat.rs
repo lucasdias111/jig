@@ -131,6 +131,11 @@ const PIN_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 /// Earlier conversations (Lucide "history").
 const HISTORY_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>"#;
 
+/// Lucide "chevron-right".
+const CHEVRON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>"#;
+/// Lucide "chevron-down".
+const CHEVRON_DOWN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
+
 /// The corner grip (two short diagonal strokes).
 const GRIP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><path d="M20 11 11 20"/><path d="M20 17 17 20"/></svg>"#;
 
@@ -265,7 +270,8 @@ impl Conversation {
 }
 
 impl RenderOnce for Conversation {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let entries = transcript_rows(self.entries, window, cx);
         let theme = cx.theme();
         let accent = crate::surface::lane_accent(true, cx);
         let pinned = self.frame.pinned;
@@ -400,12 +406,7 @@ impl RenderOnce for Conversation {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .gap_2()
-            .children(
-                self.entries
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, entry)| render_entry(index, entry, cx)),
-            );
+            .children(entries);
         let more_below = follow_the_end(&self.scroll);
         let transcript_bounds = self.frame.transcript_bounds.clone();
         let transcript = div()
@@ -754,6 +755,79 @@ fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div
                         .text_color(accent),
                 ),
         )
+}
+
+/// The transcript's rows. A run of two or more tool calls folds into one
+/// "Used 5 tools" row that opens to list them, so the agent's words aren't
+/// lost among its `grep`s.
+fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+    let mut rows = Vec::new();
+    let mut entries = entries.into_iter().enumerate().peekable();
+    while let Some((index, entry)) = entries.next() {
+        let ChatEntry::Did(first) = entry else {
+            rows.push(render_entry(index, entry, cx));
+            continue;
+        };
+        let mut calls = vec![first];
+        while let Some((_, ChatEntry::Did(_))) = entries.peek() {
+            if let Some((_, ChatEntry::Did(text))) = entries.next() {
+                calls.push(text);
+            }
+        }
+        rows.push(if calls.len() == 1 {
+            render_entry(index, ChatEntry::Did(calls.remove(0)), cx)
+        } else {
+            tool_calls(index, calls, window, cx)
+        });
+    }
+    rows
+}
+
+/// Tool calls in a row, folded to their count; a click lists them.
+fn tool_calls(index: usize, calls: Vec<String>, window: &mut Window, cx: &mut App) -> AnyElement {
+    let open = window.use_keyed_state(("jig-agent-tools-open", index), cx, |_, _| false);
+    let is_open = *open.read(cx);
+    let theme = cx.theme();
+    let muted = theme.muted_foreground;
+    let summary = h_flex()
+        .id(("jig-agent-tools", index))
+        .debug_selector(move || format!("agent-tools-{index}"))
+        .gap_1()
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(|this| this.text_color(theme.foreground))
+        .on_click(move |_, _, cx| {
+            open.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })
+        })
+        .child(
+            gpui_kit::component::Icon::default()
+                .data(if is_open { CHEVRON_DOWN } else { CHEVRON })
+                .size(px(11.))
+                .text_color(muted),
+        )
+        .child(format!("Used {} tools", calls.len()));
+    v_flex()
+        .gap_1()
+        .child(summary)
+        .when(is_open, |this| {
+            this.child(
+                v_flex()
+                    .debug_selector(move || format!("agent-tools-{index}-list"))
+                    .ml(px(5.))
+                    .pl(px(10.))
+                    .gap_1()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .text_xs()
+                    .text_color(muted)
+                    .children(calls),
+            )
+        })
+        .into_any_element()
 }
 
 fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
