@@ -781,6 +781,17 @@ impl Workspace {
         self.on_agent_message(id, Message::SignIn(needed), window, cx);
     }
 
+    /// How far the transcript is scrolled down, and how far it could be.
+    #[cfg(test)]
+    pub(super) fn agent_scroll(&self) -> (Pixels, Pixels) {
+        let agent = self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .unwrap();
+        (-agent.scroll.offset().y, agent.scroll.max_offset().y)
+    }
+
     /// What the conversation waits on the user for, in a word.
     #[cfg(test)]
     pub(super) fn agent_waiting_on(&self) -> Option<&'static str> {

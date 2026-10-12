@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
@@ -405,11 +406,16 @@ impl RenderOnce for Conversation {
                     .enumerate()
                     .map(|(index, entry)| render_entry(index, entry, cx)),
             );
+        let more_below = follow_the_end(&self.scroll);
         let transcript_bounds = self.frame.transcript_bounds.clone();
         let transcript = div()
             .relative()
             .when(pinned, |this| this.flex_1().min_h_0())
             .child(transcript)
+            .vertical_scrollbar(&self.scroll)
+            .when(more_below, |this| {
+                this.child(more_below_button(&self.scroll, accent, cx))
+            })
             .child(
                 canvas(
                     move |drawn, _, _| transcript_bounds.set(drawn),
@@ -667,6 +673,54 @@ impl RenderOnce for Conversation {
             )
             .when(!pinned, |this| this.child(grip))
     }
+}
+
+/// Keep the transcript at its end while it's scrolled there, so a reply
+/// shows its last words: Markdown is laid out a frame after it arrives, so
+/// a single scroll to the bottom stops short of a long reply. Scrolled up,
+/// it stays put. Returns whether there's more below what shows.
+fn follow_the_end(scroll: &ScrollHandle) -> bool {
+    let max = scroll.max_offset().y;
+    let below = max + scroll.offset().y;
+    if below <= px(4.) {
+        scroll.scroll_to_bottom();
+        false
+    } else {
+        true
+    }
+}
+
+/// Shown while the transcript is scrolled up from its end; jumps there.
+fn more_below_button(scroll: &ScrollHandle, accent: Hsla, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let scroll = scroll.clone();
+    h_flex()
+        .absolute()
+        .bottom_1()
+        .left_0()
+        .right_0()
+        .justify_center()
+        .child(
+            h_flex()
+                .id("jig-agent-more-below")
+                .debug_selector(|| "agent-more-below".into())
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .shadow_sm()
+                .text_xs()
+                .text_color(accent)
+                .cursor_pointer()
+                .child("More below ↓")
+                .on_click(move |_, window, _| {
+                    scroll.scroll_to_bottom();
+                    window.refresh();
+                }),
+        )
 }
 
 /// The box the user replies or answers in. The whole box takes the click,

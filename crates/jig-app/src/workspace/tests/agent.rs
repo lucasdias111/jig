@@ -756,3 +756,63 @@ fn the_conversation_s_header_switches_its_model(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn a_long_reply_shows_its_end_and_says_when_there_is_more_below(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    // Over 4 KB, which the Markdown view parses in the background.
+    let long = (1..=150)
+        .map(|n| format!("Paragraph {n} of a long answer."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    // Drawn before the Markdown is parsed, as on screen: the reply is laid
+    // out short at first.
+    let ws = workspace.clone();
+    vcx.update(|window, cx| {
+        ws.update(cx, |this, cx| {
+            this.test_agent_request(jig_ai::agent::AgentEvent::Done(long), window, cx)
+        });
+        window.render_frame(cx);
+    });
+    for _ in 0..3 {
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+    }
+    let scroll = |vcx: &mut gpui_kit::VisualTestContext| {
+        vcx.update(|_, cx| workspace.read(cx).agent_scroll())
+    };
+    let (down, max) = scroll(&mut vcx);
+    assert!(max > px(0.), "the reply overflows the transcript");
+    assert_eq!(down, max, "it ends scrolled to the reply's last words");
+    assert!(vcx.debug_bounds("agent-more-below").is_none());
+
+    // Scrolled up, it stays put and offers the way back down.
+    let transcript = vcx.debug_bounds("agent-chat-header").unwrap();
+    let at = gpui_kit::point(transcript.center().x, transcript.bottom() + px(80.));
+    vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(120.))),
+        ..Default::default()
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+    }
+    let (down, max) = scroll(&mut vcx);
+    assert!(down < max, "scrolled up: {down:?} of {max:?}");
+    let more = vcx
+        .debug_bounds("agent-more-below")
+        .expect("it says there's more below");
+    vcx.simulate_click(more.center(), gpui_kit::Modifiers::none());
+    for _ in 0..2 {
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+    }
+    let (down, max) = scroll(&mut vcx);
+    assert_eq!(down, max, "back at the end");
+}
