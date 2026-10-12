@@ -79,6 +79,7 @@ fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Recorde
 
 fn request() -> PromptRequest {
     PromptRequest {
+        task: None,
         instruction: "Rename to b".into(),
         language: "rust".into(),
         file_name: Some("lib.rs".into()),

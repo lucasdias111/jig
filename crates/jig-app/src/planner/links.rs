@@ -47,6 +47,16 @@ pub fn target(url: &str, markdown: &str) -> Option<Target> {
     Some(Target::Code(CodeLink { path, line, symbol }))
 }
 
+/// The first link to code in `markdown`, e.g. a todo's.
+pub fn first_code_link(markdown: &str) -> Option<CodeLink> {
+    let link = Regex::new(r"\[[^\]]+\]\(([^)\s]+)\)").ok()?;
+    link.captures_iter(markdown)
+        .find_map(|captures| match target(&captures[1], markdown) {
+            Some(Target::Code(link)) => Some(link),
+            _ => None,
+        })
+}
+
 /// `L42`, `L42C5` or `L42-L50`.
 fn line_of(fragment: &str) -> Option<usize> {
     let digits: String = fragment
@@ -232,5 +242,16 @@ mod tests {
         };
         assert_eq!(locate(text, &file), None);
         assert!(whole_words("running run", "run") == vec![8]);
+    }
+
+    #[test]
+    fn finds_a_todos_first_link_to_code() {
+        let todo = "Read [the docs](https://x.dev), then fix [`go`](src/b.rs#L1)";
+        let link = first_code_link(todo).unwrap();
+        assert_eq!(
+            (link.path.as_str(), link.symbol.as_deref()),
+            ("src/b.rs", Some("go"))
+        );
+        assert_eq!(first_code_link("No links"), None);
     }
 }

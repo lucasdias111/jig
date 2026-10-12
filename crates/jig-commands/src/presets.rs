@@ -109,6 +109,8 @@ pub struct Invocation {
     pub agent: bool,
     /// Send the language server's problems on the target's lines.
     pub diagnostics: bool,
+    /// The planned task this run is one step of, as context.
+    pub task: Option<String>,
 }
 
 impl Invocation {
@@ -120,6 +122,7 @@ impl Invocation {
             comment: None,
             agent: preset.agent,
             diagnostics: preset.diagnostics,
+            task: None,
         }
     }
 
@@ -148,6 +151,7 @@ impl Invocation {
             comment: None,
             agent: false,
             diagnostics: false,
+            task: None,
             name: None,
             instruction: text.trim().to_string(),
             scope,

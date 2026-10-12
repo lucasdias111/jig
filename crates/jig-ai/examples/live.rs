@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
     };
     let instruction = "Add concise doc comments to this code. Do not change the code itself.";
     let request = PromptRequest {
+        task: None,
         instruction: instruction.into(),
         language: "rust".into(),
         file_name: Some("example.rs".into()),

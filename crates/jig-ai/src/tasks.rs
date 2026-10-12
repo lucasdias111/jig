@@ -114,6 +114,22 @@ impl Task {
         text
     }
 
+    /// The task as context for running its todo `todo`: the whole plan,
+    /// that step marked, and how to check it off.
+    pub fn step_context(&self, todo: usize) -> String {
+        let mut marked = self.clone();
+        if let Some(step) = marked.todos.get_mut(todo) {
+            step.text = format!("{} ← this step", step.text);
+        }
+        format!(
+            "{}\nTask id: {}. This step is todo {} of {}.",
+            marked.to_markdown().trim_end(),
+            self.id,
+            todo + 1,
+            self.todos.len()
+        )
+    }
+
     pub fn done(&self) -> usize {
         self.todos.iter().filter(|todo| todo.done).count()
     }
@@ -332,5 +348,15 @@ mod tests {
         assert!(path(project, "").is_err());
         assert!(path(project, "fine-id_2").is_ok());
         assert!(create(project, "  ", "", vec![]).is_err());
+    }
+
+    #[test]
+    fn a_step_comes_with_its_whole_task() {
+        let task = Task::parse("add-a-planner", FILE);
+        let context = task.step_context(1);
+        assert!(context.starts_with("# Add a planner\n"));
+        assert!(context.contains("- [x] Store tasks\n"));
+        assert!(context.contains("- [ ] Show them in the sidebar ← this step\n"));
+        assert!(context.ends_with("Task id: add-a-planner. This step is todo 2 of 3."));
     }
 }

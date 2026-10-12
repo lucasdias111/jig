@@ -42,6 +42,7 @@ pub fn run(provider: &dyn Provider, request: &PromptRequest) -> anyhow::Result<R
 pub fn check(provider: &dyn Provider) -> anyhow::Result<Reply> {
     let text = "fn area(w: f64, h: f64) -> f64 {\n    w * h\n}\n";
     let request = PromptRequest {
+        task: None,
         instruction: "Rename the parameters to width and height.".into(),
         comment: None,
         project_rules: None,

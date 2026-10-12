@@ -12,7 +12,7 @@ You receive a file in which the region to change is marked:
 - <<<SELECTION>>> ... <<<END>>> surrounds code to replace, or
 - <<<CURSOR>>> marks where new code is inserted.
 
-Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Diagnostics, when present, are the problems a language server reports on the region's lines, by line number in the file; they are what to fix. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. Reply with exactly one JSON object and nothing else:
+Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Diagnostics, when present, are the problems a language server reports on the region's lines, by line number in the file; they are what to fix. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. A task, when present, is the plan the instruction is one step of; it's context, so do only that step, in the marked region. Reply with exactly one JSON object and nothing else:
 {"replace": "<new text for the region>", "message": "<one short sentence>"}
 
 Rules for "replace":
@@ -39,6 +39,9 @@ pub struct PromptRequest {
     /// What the language server reports on the target's lines, for jigs
     /// that fix problems.
     pub diagnostics: Vec<Diagnostic>,
+    /// The planned task the instruction is one step of, when a todo from
+    /// the task planner is run: the whole task, that step marked.
+    pub task: Option<String>,
 }
 
 /// One problem a language server reports.
@@ -149,8 +152,13 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         .as_deref()
         .map(|rules| format!("<project_rules>\n{}\n</project_rules>\n\n", rules.trim()))
         .unwrap_or_default();
+    let task = request
+        .task
+        .as_deref()
+        .map(|task| format!("<task>\n{}\n</task>\n\n", task.trim()))
+        .unwrap_or_default();
     let user = format!(
-        "{rules}Language: {}\nFile: {file}\nInstruction: {}\n{note}{diagnostics}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
+        "{rules}{task}Language: {}\nFile: {file}\nInstruction: {}\n{note}{diagnostics}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
         request.language, request.instruction
     );
     (SYSTEM.to_string(), user)
@@ -162,6 +170,7 @@ mod tests {
 
     fn request(target: Range<usize>) -> PromptRequest {
         PromptRequest {
+            task: None,
             instruction: "Add docs".into(),
             language: "rust".into(),
             file_name: Some("lib.rs".into()),
@@ -179,6 +188,18 @@ mod tests {
         assert!(system.contains("\"replace\""));
         assert!(user.contains("Instruction: Add docs"));
         assert!(user.contains("fn a() {}\n<<<SELECTION>>>fn b() {}<<<END>>>\n"));
+    }
+
+    #[test]
+    fn includes_the_task_a_step_is_from() {
+        let mut step = request(10..19);
+        step.task = Some("# Plan\n- [ ] Add docs ← this step".into());
+        let (system, user) = build(&step);
+        assert!(system.contains("do only that step"));
+        assert!(
+            user.starts_with("<task>\n# Plan\n- [ ] Add docs ← this step\n</task>\n\nLanguage")
+        );
+        assert!(!build(&request(10..19)).1.contains("<task>"));
     }
 
     #[test]

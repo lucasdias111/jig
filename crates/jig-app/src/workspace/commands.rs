@@ -265,6 +265,7 @@ impl Workspace {
                 .as_deref()
                 .filter(|_| !invocation.agent)
                 .and_then(crate::project::agents_for),
+            task: invocation.task.clone(),
             diagnostics: if invocation.diagnostics {
                 self.problems_on_lines(&text, target.clone(), cx)
             } else {
@@ -436,6 +437,7 @@ impl Workspace {
     pub(super) fn modal_open(&self) -> bool {
         self.palette.is_some()
             || self.new_command.is_some()
+            || self.planner.form.is_some()
             || self.quick_open.is_some()
             || self.find_in_files.is_some()
     }
@@ -648,6 +650,7 @@ impl Workspace {
             // command input), so the floating window can't hear Escape.
             self.palette = None;
             self.new_command = None;
+            self.planner.form = None;
             self.quick_open = None;
             self.find_in_files = None;
             cx.stop_propagation();

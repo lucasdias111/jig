@@ -449,6 +449,12 @@ pub fn prompt(request: &PromptRequest) -> String {
     if let Some(note) = &request.comment {
         out.push_str(&format!("\nNote: {note}"));
     }
+    if let Some(task) = &request.task {
+        out.push_str(&format!(
+            "\n\nThis is one step of a planned task in Jig's task planner. Do only this step, and when it's done, check it off with the task tool's update_task.\n\n<task>\n{}\n</task>",
+            task.trim()
+        ));
+    }
     if !request.diagnostics.is_empty() {
         out.push_str("\nThe language server reports:");
         for diagnostic in &request.diagnostics {
@@ -1278,6 +1284,7 @@ mod tests {
     fn prompt_says_where_the_user_is() {
         let text = "fn a() {}\nfn b() {}\nfn c() {}\n".to_string();
         let request = PromptRequest {
+            task: None,
             instruction: "Add docs".into(),
             comment: Some("terse".into()),
             project_rules: None,
@@ -1292,12 +1299,14 @@ mod tests {
             "Add docs\nNote: terse\n\nI'm in src/lib.rs, with line 2 selected:\n```rust\nfn b() {}\n```"
         );
         let at_cursor = PromptRequest {
+            task: None,
             target: 20..20,
             comment: None,
             ..request
         };
         assert!(prompt(&at_cursor).ends_with("cursor on line 3. New code goes there."));
         let with_problems = PromptRequest {
+            task: None,
             diagnostics: vec![crate::prompt::Diagnostic {
                 line: 3,
                 severity: "error".into(),
@@ -1308,6 +1317,14 @@ mod tests {
         assert!(prompt(&with_problems).starts_with(
             "Add docs\nThe language server reports:\n- line 3, error: expected `;`\n\n"
         ));
+        let step = PromptRequest {
+            task: Some("# Plan\n\n## Todo\n\n- [ ] Add docs ← this step".into()),
+            ..with_problems
+        };
+        let asked = prompt(&step);
+        assert!(asked.starts_with("Add docs\n\nThis is one step of a planned task"));
+        assert!(asked.contains("update_task"));
+        assert!(asked.contains("<task>\n# Plan"));
     }
 
     #[test]

@@ -5,12 +5,13 @@
 //! returns. Agents add tasks with their tool ([`jig_ai::tasks::mcp`]); the
 //! workspace watches the folder, so theirs show up as they're made.
 
+pub mod form;
 pub mod links;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, StyledExt as _, h_flex, v_flex};
@@ -41,27 +42,16 @@ pub enum TaskPlannerEvent {
         path: PathBuf,
         link: CodeLink,
     },
+    /// Open the form for this task, or `None` for a new one.
+    Edit(Option<String>),
+    /// Hand todo `todo` of `task` to Jig mode, or with `agent`, to the
+    /// agent, the whole task coming along as context.
+    Delegate {
+        task: Task,
+        todo: usize,
+        agent: bool,
+    },
     Dismissed,
-}
-
-/// The task being made or edited.
-struct TaskForm {
-    /// `None` for a new task.
-    id: Option<String>,
-    title: Entity<InputState>,
-    description: Entity<TextareaState>,
-    todos: Vec<FormTodo>,
-    /// The field for one more todo, at the end.
-    new_todo: Entity<InputState>,
-    /// Gives each todo's row an id of its own as rows come and go.
-    next_key: usize,
-    _subscriptions: Vec<Subscription>,
-}
-
-struct FormTodo {
-    key: usize,
-    input: Entity<InputState>,
-    done: bool,
 }
 
 /// The field under an open task for adding a todo to it.
@@ -78,7 +68,6 @@ pub struct TaskPlanner {
     expanded: HashSet<String>,
     /// Every task seen, to open the ones that arrive (from an agent, say).
     known: Option<HashSet<String>>,
-    form: Option<TaskForm>,
     quick_add: Option<QuickAdd>,
     error: Option<String>,
     focus: FocusHandle,
@@ -100,7 +89,6 @@ impl TaskPlanner {
             tasks: Vec::new(),
             expanded: HashSet::new(),
             known: None,
-            form: None,
             quick_add: None,
             error: None,
             focus: cx.focus_handle(),
@@ -116,18 +104,13 @@ impl TaskPlanner {
     }
 
     /// Whether the panel, or a field in it, has the keyboard.
+    pub fn project(&self) -> &Path {
+        &self.project
+    }
+
     pub fn is_focused(&self, window: &Window, cx: &App) -> bool {
         self.focus.contains_focused(window, cx)
             || self.focus.is_focused(window)
-            || self.form.as_ref().is_some_and(|form| {
-                form.title.focus_handle(cx).is_focused(window)
-                    || form.description.focus_handle(cx).is_focused(window)
-                    || form.new_todo.focus_handle(cx).is_focused(window)
-                    || form
-                        .todos
-                        .iter()
-                        .any(|todo| todo.input.focus_handle(cx).is_focused(window))
-            })
             || self
                 .quick_add
                 .as_ref()
@@ -135,10 +118,7 @@ impl TaskPlanner {
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match &self.form {
-            Some(form) => form.title.update(cx, |input, cx| input.focus(window, cx)),
-            None => self.focus.focus(window, cx),
-        }
+        self.focus.focus(window, cx);
     }
 
     /// Read the tasks again. Tasks that weren't there before are opened,
@@ -203,14 +183,28 @@ impl TaskPlanner {
         self.reload(cx);
     }
 
-    /// Open the form for a new task.
-    pub fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_form(None, window, cx);
+    /// Ask for the form for a new task.
+    pub fn new_task(&mut self, cx: &mut Context<Self>) {
+        self.quick_add = None;
+        cx.emit(TaskPlannerEvent::Edit(None));
     }
 
-    fn edit(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.quick_add = None;
+        cx.emit(TaskPlannerEvent::Edit(Some(id.to_string())));
+    }
+
+    /// Hand todo `todo` of task `id`, as it is on disk now, to Jig mode or
+    /// the agent.
+    fn delegate(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
         match tasks::load(&self.project, id) {
-            Ok(task) => self.open_form(Some(task), window, cx),
+            Ok(task) if todo < task.todos.len() => {
+                cx.emit(TaskPlannerEvent::Delegate { task, todo, agent })
+            }
+            // Gone since it was shown.
+            Ok(_) => {
+                self.reload(cx);
+            }
             Err(error) => {
                 self.error = Some(format!("{error:#}"));
                 cx.notify();
@@ -218,176 +212,10 @@ impl TaskPlanner {
         }
     }
 
-    fn open_form(&mut self, task: Option<Task>, window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_add = None;
-        let task = task.unwrap_or_default();
-        let title = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Title")
-                .default_value(task.title.clone())
-        });
-        let description = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("Description, in Markdown. Link code as [`name`](src/file.rs#L12).")
-                .default_value(task.description.clone())
-        });
-        let new_todo = cx.new(|cx| InputState::new(window, cx).placeholder("Add a todo"));
-        let mut subscriptions = vec![
-            cx.subscribe_in(&title, window, |this, _, event, window, cx| {
-                if let InputEvent::PressEnter { .. } = event {
-                    this.save_form(window, cx);
-                }
-            }),
-            cx.subscribe_in(&description, window, |this, _, event, window, cx| {
-                if let InputEvent::PressEnter {
-                    secondary: true, ..
-                } = event
-                {
-                    this.save_form(window, cx);
-                }
-            }),
-            cx.subscribe_in(&new_todo, window, |this, _, event, window, cx| {
-                if let InputEvent::PressEnter { secondary, .. } = event {
-                    if *secondary {
-                        this.save_form(window, cx);
-                    } else {
-                        this.add_form_todo(window, cx);
-                    }
-                }
-            }),
-        ];
-        let mut form_todos = Vec::new();
-        for (key, todo) in task.todos.iter().enumerate() {
-            let input = cx.new(|cx| InputState::new(window, cx).default_value(todo.text.clone()));
-            subscriptions.push(Self::save_on_secondary_enter(&input, window, cx));
-            form_todos.push(FormTodo {
-                key,
-                input,
-                done: todo.done,
-            });
-        }
-        title.update(cx, |input, cx| input.focus(window, cx));
-        self.form = Some(TaskForm {
-            id: (!task.id.is_empty()).then_some(task.id),
-            title,
-            description,
-            next_key: form_todos.len(),
-            todos: form_todos,
-            new_todo,
-            _subscriptions: subscriptions,
-        });
-        self.error = None;
-        cx.notify();
-    }
-
-    fn save_on_secondary_enter(
-        input: &Entity<InputState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Subscription {
-        cx.subscribe_in(input, window, |this, _, event, window, cx| {
-            if let InputEvent::PressEnter {
-                secondary: true, ..
-            } = event
-            {
-                this.save_form(window, cx);
-            }
-        })
-    }
-
-    /// The new todo's field, entered: it joins the list, and the field
-    /// clears for the next.
-    fn add_form_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.form else {
-            return;
-        };
-        let text = form.new_todo.read(cx).value().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
-        form._subscriptions
-            .push(Self::save_on_secondary_enter(&input, window, cx));
-        form.todos.push(FormTodo {
-            key: form.next_key,
-            input,
-            done: false,
-        });
-        form.next_key += 1;
-        form.new_todo
-            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
-        cx.notify();
-    }
-
-    fn remove_form_todo(&mut self, key: usize, cx: &mut Context<Self>) {
-        if let Some(form) = &mut self.form {
-            form.todos.retain(|todo| todo.key != key);
-        }
-        cx.notify();
-    }
-
-    fn toggle_form_todo(&mut self, key: usize, cx: &mut Context<Self>) {
-        if let Some(todo) = self
-            .form
-            .as_mut()
-            .and_then(|form| form.todos.iter_mut().find(|todo| todo.key == key))
-        {
-            todo.done = !todo.done;
-        }
-        cx.notify();
-    }
-
-    pub fn save_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A todo typed but not entered still counts.
-        self.add_form_todo(window, cx);
-        let Some(form) = &self.form else {
-            return;
-        };
-        let title = form.title.read(cx).value().trim().to_string();
-        if title.is_empty() {
-            self.error = Some("Give the task a title.".into());
-            cx.notify();
-            return;
-        }
-        let description = form.description.read(cx).value().trim().to_string();
-        let todos: Vec<Todo> = form
-            .todos
-            .iter()
-            .map(|todo| Todo {
-                done: todo.done,
-                ..Todo::new(&todo.input.read(cx).value())
-            })
-            .filter(|todo| !todo.text.is_empty())
-            .collect();
-        let saved = match form.id.clone() {
-            Some(id) => tasks::save(
-                &self.project,
-                &Task {
-                    id: id.clone(),
-                    title,
-                    description,
-                    todos,
-                },
-            )
-            .map(|()| id),
-            None => tasks::create(&self.project, &title, &description, todos).map(|task| task.id),
-        };
-        match saved {
-            Ok(id) => {
-                self.form = None;
-                self.reload(cx);
-                self.expanded.insert(id);
-                self.focus.focus(window, cx);
-            }
-            Err(error) => self.error = Some(format!("{error:#}")),
-        }
-        cx.notify();
-    }
-
-    fn cancel_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.form = None;
-        self.error = None;
-        self.focus.focus(window, cx);
+    /// Read the tasks again and open `id`, e.g. one just saved.
+    pub fn reveal(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.reload(cx);
+        self.expanded.insert(id.to_string());
         cx.notify();
     }
 
@@ -445,11 +273,9 @@ impl TaskPlanner {
         self.escape(window, cx);
     }
 
-    /// Esc closes the form or the todo field, else leaves the panel.
+    /// Esc closes the todo field, else leaves the panel.
     pub fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() {
-            self.cancel_form(window, cx);
-        } else if self.quick_add.take().is_some() {
+        if self.quick_add.take().is_some() {
             self.focus.focus(window, cx);
             cx.notify();
         } else {
@@ -458,44 +284,8 @@ impl TaskPlanner {
     }
 
     #[cfg(test)]
-    pub fn form_open(&self) -> bool {
-        self.form.is_some()
-    }
-
-    #[cfg(test)]
     pub fn is_expanded(&self, id: &str) -> bool {
         self.expanded.contains(id)
-    }
-
-    #[cfg(test)]
-    pub fn fill_form(
-        &mut self,
-        title: &str,
-        description: &str,
-        todos: &[&str],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(form) = &self.form else {
-            return;
-        };
-        let (title_input, description_input, new_todo) = (
-            form.title.clone(),
-            form.description.clone(),
-            form.new_todo.clone(),
-        );
-        title_input.update(cx, |input, cx| {
-            input.set_value(title.to_string(), window, cx)
-        });
-        description_input.update(cx, |input, cx| {
-            input.set_value(description.to_string(), window, cx)
-        });
-        for todo in todos {
-            new_todo.update(cx, |input, cx| {
-                input.set_value(todo.to_string(), window, cx)
-            });
-            self.add_form_todo(window, cx);
-        }
     }
 
     #[cfg(test)]
@@ -504,8 +294,13 @@ impl TaskPlanner {
     }
 
     #[cfg(test)]
-    pub fn edit_task(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit(id, window, cx);
+    pub fn edit_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.edit(id, cx);
+    }
+
+    #[cfg(test)]
+    pub fn delegate_todo(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
+        self.delegate(id, todo, agent, cx);
     }
 
     #[cfg(test)]
@@ -563,12 +358,10 @@ impl TaskPlanner {
                     .text_color(theme.muted_foreground)
                     .child("Tasks"),
             )
-            .when(self.form.is_none(), |this| {
-                this.child(
-                    small_button("task-new", PLUS, "New Task", cx)
-                        .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx))),
-                )
-            })
+            .child(
+                small_button("task-new", PLUS, "New Task", cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.new_task(cx))),
+            )
             .into_any_element()
     }
 
@@ -597,8 +390,34 @@ impl TaskPlanner {
                 })
                 .child(format!("{done}/{total}"))
         });
+        let group = SharedString::from(format!("task-{ix}"));
+        // On hover, the actions take the progress pill's place.
+        let actions = h_flex()
+            .flex_none()
+            .hidden()
+            .group_hover(group.clone(), |s| s.flex())
+            .child(
+                small_button(("task-edit", ix), PENCIL, "Edit", cx).on_click({
+                    let id = id.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.edit(&id, cx)
+                    })
+                }),
+            )
+            .child(
+                small_button(("task-delete", ix), TRASH, "Move to Trash", cx).on_click({
+                    let id = id.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.delete(&id, cx)
+                    })
+                }),
+            );
+        let progress = progress.map(|pill| pill.group_hover(group.clone(), |s| s.hidden()));
         let header = h_flex()
             .id(("task", ix))
+            .group(group)
             .items_start()
             .px_2()
             .py(px(7.))
@@ -625,6 +444,7 @@ impl TaskPlanner {
                     .child(task.title.clone()),
             )
             .children(progress)
+            .child(actions)
             .on_click({
                 let id = id.clone();
                 cx.listener(move |this, _, _, cx| this.toggle_expanded(&id, cx))
@@ -671,8 +491,38 @@ impl TaskPlanner {
                 .child(text)
         };
         let todos = task.todos.iter().enumerate().map(|(todo_ix, todo)| {
+            let group = SharedString::from(format!("todo-{ix}-{todo_ix}"));
+            // Hand the step to Jig mode or the agent, the task with it.
+            let delegate = |agent: bool| {
+                let id = id.clone();
+                let accent = jig_commands::surface::lane_accent(agent, cx);
+                let tooltip = if agent {
+                    "Delegate to the agent"
+                } else {
+                    "Run with Jig"
+                };
+                div()
+                    .id(SharedString::from(format!(
+                        "todo-{}-{ix}-{todo_ix}",
+                        if agent { "agent" } else { "jig" }
+                    )))
+                    .flex_none()
+                    .size(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .text_color(accent)
+                    .hover(move |s| s.bg(accent.opacity(0.15)))
+                    .child(jig_commands::surface::lane_icon(agent).size(px(12.)))
+                    .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.delegate(&id, todo_ix, agent, cx)),
+                    )
+            };
             let id = id.clone();
             h_flex()
+                .group(group.clone())
                 .items_start()
                 .gap_2()
                 .child(
@@ -699,6 +549,16 @@ impl TaskPlanner {
                             cx,
                         )),
                 )
+                .when(!todo.done, |row| {
+                    row.child(
+                        h_flex()
+                            .flex_none()
+                            .hidden()
+                            .group_hover(group, |s| s.flex())
+                            .child(delegate(false))
+                            .child(delegate(true)),
+                    )
+                })
         });
         let adding = self
             .quick_add
@@ -732,219 +592,51 @@ impl TaskPlanner {
                 })
                 .into_any_element(),
         };
-        let action =
-            |element_id: (&'static str, usize), icon: &'static [u8], label: &'static str| {
-                h_flex()
-                    .id(element_id)
-                    .gap_1()
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded(px(5.))
-                    .text_size(px(11.5))
-                    .text_color(theme.muted_foreground)
-                    .hover(|s| {
-                        s.bg(theme.foreground.opacity(0.07))
-                            .text_color(theme.foreground)
-                    })
-                    .child(Icon::default().data(icon).size(px(11.)))
-                    .child(label)
-            };
         let divider = || div().h(px(1.)).bg(theme.foreground.opacity(0.08));
-        v_flex()
-            .child(divider())
-            .child(
-                v_flex()
-                    .px_3()
-                    .py_2p5()
-                    .gap_3()
-                    .when(!task.description.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme.foreground.opacity(0.8))
-                                .child(markdown(
-                                    SharedString::from(format!("task-description-{}", task.id)),
-                                    &task.description,
-                                    planner.clone(),
-                                    cx,
-                                )),
-                        )
-                    })
-                    .child(
-                        v_flex()
-                            .gap_1p5()
-                            .child(section(match task.todos.len() {
-                                0 => "TODO".to_string(),
-                                n => format!("TODO · {}/{n}", task.done()),
-                            }))
-                            .children(todos)
-                            .child(add_row),
-                    ),
-            )
-            .child(divider())
-            .child(
-                h_flex()
-                    .px_2()
-                    .py_1()
-                    .gap_1()
-                    .justify_end()
-                    .child(action(("task-edit", ix), PENCIL, "Edit").on_click({
-                        let id = id.clone();
-                        cx.listener(move |this, _, window, cx| this.edit(&id, window, cx))
-                    }))
-                    .child(
-                        action(("task-delete", ix), TRASH, "Move to Trash").on_click({
-                            let id = id.clone();
-                            cx.listener(move |this, _, _, cx| this.delete(&id, cx))
-                        }),
-                    ),
-            )
-    }
-
-    fn render_form(&self, form: &TaskForm, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let label = |text: &'static str| {
-            div()
-                .pt_1()
-                .text_size(px(11.))
-                .font_semibold()
-                .text_color(theme.muted_foreground)
-                .child(text)
-        };
-        let todos = form.todos.iter().map(|todo| {
-            let key = todo.key;
-            let group = SharedString::from(format!("form-todo-{key}"));
-            h_flex()
-                .group(group.clone())
-                .gap_1p5()
-                .child(
-                    checkbox(todo.done, cx)
-                        .id(("form-todo-check", key))
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.toggle_form_todo(key, cx)),
-                        ),
-                )
-                .child(
-                    div().flex_1().min_w_0().child(field(
-                        Input::new(&todo.input)
-                            .appearance(false)
-                            .cleanable(false)
-                            .suffix(
-                                small_button(("form-todo-remove", key), CROSS, "Remove", cx)
-                                    .invisible()
-                                    .group_hover(group, |s| s.visible())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.remove_form_todo(key, cx)
-                                    })),
-                            ),
-                        cx,
-                    )),
-                )
-        });
-        // In the checkboxes' column, so the field lines up with the todos.
-        let new_todo = h_flex()
-            .gap_1p5()
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(14.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme.muted_foreground)
-                    .child(Icon::default().data(PLUS).size(px(12.))),
-            )
-            .child(
-                div().flex_1().min_w_0().child(field(
-                    Input::new(&form.new_todo)
-                        .appearance(false)
-                        .cleanable(false),
-                    cx,
-                )),
-            );
-        let button = |id: &'static str, text: &'static str, primary: bool| {
-            div()
-                .id(id)
-                .debug_selector(move || id.into())
-                .flex_1()
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.))
-                .text_size(px(12.5))
-                .font_weight(FontWeight::MEDIUM)
-                .map(|this| {
-                    if primary {
-                        this.bg(theme.primary).text_color(theme.primary_foreground)
-                    } else {
-                        this.bg(theme.foreground.opacity(0.06))
-                    }
-                })
-                .hover(|s| s.opacity(0.9))
-                .child(text)
-        };
-        v_flex()
-            .px_1()
-            .gap_1p5()
-            .child(label(if form.id.is_some() {
-                "Edit Task"
-            } else {
-                "New Task"
-            }))
-            .child(field(
-                Input::new(&form.title).appearance(false).cleanable(false),
-                cx,
-            ))
-            .child(
-                div()
-                    .rounded(px(7.))
-                    .border_1()
-                    .border_color(theme.foreground.opacity(0.12))
-                    .bg(theme.foreground.opacity(0.03))
-                    .text_size(px(12.5))
-                    .child(
-                        Textarea::new(&form.description)
-                            .appearance(false)
-                            .h(px(110.)),
-                    ),
-            )
-            .child(label("Todo"))
-            .children(todos)
-            .child(new_todo)
-            .child(
-                h_flex()
-                    .pt_1()
-                    .gap_1p5()
-                    .child(
-                        button("task-cancel", "Cancel", false).on_click(
-                            cx.listener(|this, _, window, cx| this.cancel_form(window, cx)),
-                        ),
+        v_flex().child(divider()).child(
+            v_flex()
+                .px_3()
+                .py_2p5()
+                .gap_3()
+                .when(!task.description.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.foreground.opacity(0.8))
+                            .child(markdown(
+                                SharedString::from(format!("task-description-{}", task.id)),
+                                &task.description,
+                                planner.clone(),
+                                cx,
+                            )),
                     )
-                    .child(
-                        button("task-save", "Save", true).on_click(
-                            cx.listener(|this, _, window, cx| this.save_form(window, cx)),
-                        ),
-                    ),
-            )
-            .child(jig_commands::surface::hint("⌘↩ saves · Esc cancels", cx))
-            .into_any_element()
+                })
+                .child(
+                    v_flex()
+                        .gap_1p5()
+                        .child(section(match task.todos.len() {
+                            0 => "TODO".to_string(),
+                            n => format!("TODO · {}/{n}", task.done()),
+                        }))
+                        .children(todos)
+                        .child(add_row),
+                ),
+        )
     }
 }
 
 impl Render for TaskPlanner {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let body = match &self.form {
-            Some(form) => self.render_form(form, cx),
-            None if self.tasks.is_empty() => div()
+        let body = match () {
+            () if self.tasks.is_empty() => div()
                 .px_2()
                 .py_3()
                 .text_size(px(13.))
                 .text_color(theme.muted_foreground)
                 .child("No tasks yet. Make one with +, or ask the agent to plan something.")
                 .into_any_element(),
-            None => v_flex()
+            () => v_flex()
                 .gap_2()
                 .children(
                     self.tasks

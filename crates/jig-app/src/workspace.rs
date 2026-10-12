@@ -828,6 +828,7 @@ impl Render for Workspace {
                         .child(palette.view.clone()),
                 ))
             })
+            .children(self.render_task_form(window))
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
             .children(self.render_rename())

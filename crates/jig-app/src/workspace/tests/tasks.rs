@@ -77,28 +77,24 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
     let planner = planner(cx, &workspace);
     assert!(task_ids(cx, &planner).is_empty());
 
-    // A new task, from the form.
-    let view = planner.clone();
+    // A new task, from the form, a sheet over the window.
+    step(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::NewTask), cx)
+    });
+    let form = cx.update(|cx| workspace.read(cx).task_form().expect("the form"));
+    let view = form.clone();
     step(cx, window, move |window, cx| {
-        view.update(cx, |planner, cx| {
-            planner.new_task(window, cx);
-            planner.fill_form(
+        view.update(cx, |form, cx| {
+            form.fill(
                 "Add a planner",
                 "Starts in [`run`](src/a.rs#L3).",
                 &["Store tasks", "Show them"],
                 window,
                 cx,
-            );
+            )
         });
         window.render_frame(cx);
     });
-    let ws = workspace.clone();
-    let focused = cx
-        .update_window(window, move |_, window, cx| {
-            ws.read(cx).planner_focused(window, cx)
-        })
-        .unwrap();
-    assert!(focused, "the form has the keyboard");
     // ⌘↩ in the form saves; the workspace leaves the key to it.
     step(cx, window, |window, cx| window.press("secondary-enter", cx));
     let file = dir.path().join(".jig/tasks/add-a-planner.md");
@@ -107,10 +103,11 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
         "# Add a planner\n\nStarts in [`run`](src/a.rs#L3).\n\n## Todo\n\n- [ ] Store tasks\n- [ ] Show them\n"
     );
     assert_eq!(task_ids(cx, &planner), ["add-a-planner"]);
-    assert!(cx.update(|cx| {
-        let planner = planner.read(cx);
-        !planner.form_open() && planner.is_expanded("add-a-planner")
-    }));
+    assert!(
+        cx.update(|cx| workspace.read(cx).task_form().is_none()),
+        "closed"
+    );
+    assert!(cx.update(|cx| planner.read(cx).is_expanded("add-a-planner")));
 
     // Checking a todo off writes it.
     cx.update(|cx| {
@@ -142,19 +139,32 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
             .ends_with("- [ ] Link the code\n")
     );
 
-    // Edited: the same file, renamed in its title only; Esc leaves a form.
-    let view = planner.clone();
-    step(cx, window, move |window, cx| {
-        view.update(cx, |planner, cx| {
-            planner.edit_task("add-a-planner", window, cx);
-            planner.fill_form("A task planner", "Starts in a.rs.", &[], window, cx);
-            planner.save_form(window, cx);
-            planner.edit_task("add-a-planner", window, cx);
+    // Edited, from the card: the same file, renamed in its title only.
+    let edit = |cx: &mut TestAppContext| {
+        let view = planner.clone();
+        step(cx, window, move |_, cx| {
+            view.update(cx, |planner, cx| planner.edit_task("add-a-planner", cx))
         });
-        window.render_frame(cx);
+        cx.update(|cx| workspace.read(cx).task_form().expect("the form"))
+    };
+    let form = edit(cx);
+    step(cx, window, move |window, cx| {
+        form.update(cx, |form, cx| {
+            form.fill("A task planner", "Starts in a.rs.", &[], window, cx);
+            form.save(window, cx);
+        });
     });
-    step(cx, window, |window, cx| window.press("escape", cx));
-    assert!(!cx.update(|cx| planner.read(cx).form_open()), "Esc cancels");
+    assert!(cx.update(|cx| workspace.read(cx).task_form().is_none()));
+    // Esc leaves a form without saving.
+    edit(cx);
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    assert!(
+        cx.update(|cx| workspace.read(cx).task_form().is_none()),
+        "Esc cancels"
+    );
     let task = jig_ai::tasks::load(dir.path(), "add-a-planner").unwrap();
     assert_eq!(task.title, "A task planner");
     assert_eq!(task.description, "Starts in a.rs.");
@@ -252,5 +262,71 @@ fn task_links_open_the_code_and_go_back_and_forth(cx: &mut TestAppContext) {
         text(cx, &workspace),
         "use crate::b;\n\nfn run() {\n    b::go();\n}\n",
         "nothing typed into the code"
+    );
+}
+
+/// Records each request, and answers with the file unchanged but for a
+/// comment.
+struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Provider for Recorder {
+    fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
+        self.0.lock().unwrap().push(user.to_string());
+        Ok(r#"{"replace": "// a\nuse crate::b;\n\nfn run() {\n    b::go();\n}\n", "message": "Done."}"#.into())
+    }
+}
+
+#[gpui_kit::test]
+fn a_todo_runs_with_jig_with_its_whole_task(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = project(cx);
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = Recorder(asked.clone());
+    cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(Arc::new(provider))));
+    jig_ai::tasks::create(
+        dir.path(),
+        "Tidy up",
+        "Keep it small.",
+        vec![
+            jig_ai::tasks::Todo::new("Rename things"),
+            jig_ai::tasks::Todo::new("Comment [`run`](src/a.rs#L3)"),
+        ],
+    )
+    .unwrap();
+    let planner = planner(cx, &workspace);
+    step(cx, window, |window, cx| {
+        workspace.update(cx, |this, cx| this.tasks_changed(window, cx))
+    });
+
+    // The step links to a.rs, so Jig works there, on the whole file.
+    let view = planner.clone();
+    step(cx, window, move |_, cx| {
+        view.update(cx, |planner, cx| {
+            planner.delegate_todo("tidy-up", 1, false, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(current_file(cx, &workspace), "a.rs");
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    let user = &asked[0];
+    assert!(
+        user.contains("Instruction: Comment [`run`](src/a.rs#L3)"),
+        "{user}"
+    );
+    assert!(
+        user.contains("<task>\n# Tidy up\n\nKeep it small."),
+        "{user}"
+    );
+    assert!(
+        user.contains("- [ ] Comment [`run`](src/a.rs#L3) ← this step"),
+        "{user}"
+    );
+    assert!(
+        user.contains("<<<SELECTION>>>use crate::b;"),
+        "the whole file: {user}"
+    );
+    assert!(
+        cx.update(|cx| workspace.read(cx).previewing()),
+        "the change waits for review"
     );
 }

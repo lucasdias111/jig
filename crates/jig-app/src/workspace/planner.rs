@@ -13,8 +13,10 @@ use notify::Watcher as _;
 
 use super::sidebar::SidebarView;
 use super::{NewTask, ToggleTaskPlanner, Workspace};
+use crate::planner::form::{TaskForm, TaskFormEvent};
 use crate::planner::links::{self, CodeLink};
 use crate::planner::{TaskPlanner, TaskPlannerEvent};
+use jig_commands::presets::{Invocation, Scope};
 
 /// An agent writes a task in one go, but saves come as several events.
 const SETTLE: Duration = Duration::from_millis(100);
@@ -26,6 +28,13 @@ pub(super) struct PlannerState {
     pub(super) unseen: bool,
     _events: Option<Subscription>,
     _watch: Option<TaskWatch>,
+    /// New Task or Edit Task, while it's open.
+    pub(super) form: Option<OpenTaskForm>,
+}
+
+pub(super) struct OpenTaskForm {
+    view: Entity<TaskForm>,
+    _events: Subscription,
 }
 
 /// Watches the project's folder, `.jig` and `.jig/tasks`, each on its own,
@@ -108,6 +117,14 @@ impl Workspace {
                 let (path, link) = (path.clone(), link.clone());
                 this.open_code_link(&path, &link, window, cx);
             }
+            TaskPlannerEvent::Edit(id) => {
+                let id = id.clone();
+                this.open_task_form(id.as_deref(), window, cx);
+            }
+            TaskPlannerEvent::Delegate { task, todo, agent } => {
+                let (task, todo, agent) = (task.clone(), *todo, *agent);
+                this.delegate_todo(&task, todo, agent, window, cx);
+            }
             TaskPlannerEvent::Dismissed => this.focus_main(window, cx),
         });
         self.planner = PlannerState {
@@ -115,6 +132,7 @@ impl Workspace {
             unseen: false,
             _events: Some(events),
             _watch: TaskWatch::start(root, window, cx),
+            form: None,
         };
     }
 
@@ -189,12 +207,154 @@ impl Workspace {
             self.show_error("Open a project first, to plan its tasks.", window, cx);
             return;
         }
-        if !self.planner_shown() {
-            self.toggle_sidebar_view(SidebarView::Tasks, window, cx);
+        self.open_task_form(None, window, cx);
+    }
+
+    /// New Task, or with `id`, Edit Task, as a sheet over the window.
+    pub(super) fn open_task_form(
+        &mut self,
+        id: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self
+            .planner
+            .view
+            .as_ref()
+            .map(|view| view.read(cx).project().to_path_buf())
+        else {
+            return;
+        };
+        let task = match id.map(|id| jig_ai::tasks::load(&project, id)).transpose() {
+            Ok(task) => task,
+            Err(error) => return self.show_error(&format!("{error:#}"), window, cx),
+        };
+        self.palette = None;
+        self.new_command = None;
+        let view = cx.new(|cx| TaskForm::new(&project, task, window, cx));
+        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
+            TaskFormEvent::Saved(id) => {
+                let id = id.clone();
+                this.close_task_form(window, cx);
+                if !this.planner_shown() {
+                    this.toggle_sidebar_view(SidebarView::Tasks, window, cx);
+                }
+                if let Some(view) = this.planner.view.clone() {
+                    view.update(cx, |planner, cx| {
+                        planner.reveal(&id, cx);
+                        planner.focus(window, cx);
+                    });
+                }
+            }
+            TaskFormEvent::Cancelled => this.close_task_form(window, cx),
+        });
+        self.planner.form = Some(OpenTaskForm {
+            view,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn close_task_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.planner.form.take().is_some() {
+            match &self.planner.view {
+                Some(view) if self.planner_shown() => {
+                    view.update(cx, |planner, cx| planner.focus(window, cx))
+                }
+                _ => self.focus_main(window, cx),
+            }
+            cx.notify();
         }
-        if let Some(view) = self.planner.view.clone() {
-            view.update(cx, |planner, cx| planner.new_task(window, cx));
+    }
+
+    /// The task form, centred near the top like New Jig.
+    pub(super) fn render_task_form(&self, window: &Window) -> Option<AnyElement> {
+        let form = self.planner.form.as_ref()?;
+        let width = px(crate::planner::form::WIDTH);
+        let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
+        Some(
+            deferred(
+                anchored()
+                    .position(point(left, px(super::TITLE_BAR_HEIGHT + 8.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(form.view.clone()),
+            )
+            .into_any_element(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn task_form(&self) -> Option<Entity<TaskForm>> {
+        self.planner.form.as_ref().map(|form| form.view.clone())
+    }
+
+    /// Hand todo `todo` of `task` to Jig mode or the agent, the whole task
+    /// as context. Jig works on the code the step links to, in another
+    /// file, else on the selection or the whole file; the agent starts a
+    /// conversation about it.
+    pub(super) fn delegate_todo(
+        &mut self,
+        task: &jig_ai::tasks::Task,
+        todo: usize,
+        agent: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(step) = task.todos.get(todo) else {
+            return;
+        };
+        if self.previewing() {
+            return self.show_error(
+                "Accept or reject the change under review first.",
+                window,
+                cx,
+            );
         }
+        let project = self
+            .planner
+            .view
+            .as_ref()
+            .map(|view| view.read(cx).project().to_path_buf());
+        let mut whole_file = false;
+        if let Some((link, path)) = links::first_code_link(&step.text)
+            .zip(project)
+            .map(|(link, project)| {
+                let path = project.join(&link.path);
+                (link, path)
+            })
+            .filter(|(_, path)| path.is_file())
+            && !self.showing(&path)
+        {
+            self.open_code_link(&path, &link, window, cx);
+            whole_file = true;
+        }
+        if self.home && !agent {
+            return self.show_error(
+                "Open the file this step is about first, for Jig to work in.",
+                window,
+                cx,
+            );
+        }
+        let selected = !self.editor().selection(cx).is_empty();
+        let scope = if agent || (selected && !whole_file) {
+            Scope::Selection
+        } else {
+            Scope::File
+        };
+        let mut name: String = step.text.chars().take(40).collect();
+        if step.text.chars().count() > 40 {
+            name.push('…');
+        }
+        let invocation = Invocation {
+            name: Some(name),
+            instruction: step.text.clone(),
+            scope,
+            comment: None,
+            agent,
+            diagnostics: false,
+            task: Some(task.step_context(todo)),
+        };
+        self.run_command(invocation, window, cx);
     }
 
     /// Open the code a task links to, remembering where we were for Go Back.

@@ -1578,6 +1578,7 @@ mod tests {
                     comment: None,
                     agent: false,
                     diagnostics: false,
+                    task: None,
                     name: None,
                     instruction: "add".into(),
                     scope: Scope::Cursor
