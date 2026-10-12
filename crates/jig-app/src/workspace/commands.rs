@@ -670,14 +670,7 @@ impl Workspace {
             self.editor().clear_highlights(cx);
             cx.stop_propagation();
             cx.notify();
-        } else if self.show_agent_edit(window, cx) || self.stop_agent_turn(window, cx) {
-            // An edit waiting in another tab: Esc goes back to it. Else Esc
-            // stops the agent's turn.
-            cx.stop_propagation();
-        } else if self.chat.is_some() {
-            self.close_chat(window, cx);
-            // The agent's reply box may have had the keyboard.
-            self.editor().focus(window, cx);
+        } else if self.escape_agent(window, cx) {
             cx.stop_propagation();
         } else {
             // The first Escape closes the completion list, the next leaves

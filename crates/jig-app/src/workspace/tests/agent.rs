@@ -859,3 +859,46 @@ fn tool_calls_in_a_row_fold_into_their_count(cx: &mut TestAppContext) {
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-tools-1-list").is_none());
 }
+
+#[gpui_kit::test]
+fn escape_closes_the_docked_conversation(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(
+                jig_ai::agent::AgentEvent::Done("All done, see below.".into()),
+                window,
+                cx,
+            );
+        })
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let pin = vcx.debug_bounds("agent-chat-pin").expect("a pin button");
+    vcx.simulate_click(pin.center(), gpui_kit::Modifiers::none());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.update(|_, cx| workspace.read(cx).chat.is_some()));
+    // Working in the sidebar beside it: the Tasks view has the keyboard.
+    vcx.update(|window, cx| window.press("ctrl-shift-t", cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.update(|window, cx| workspace.read(cx).planner_focused(window, cx)));
+    vcx.update(|window, cx| window.press("escape", cx));
+    vcx.run_until_parked();
+    assert!(
+        vcx.update(|_, cx| workspace.read(cx).chat.is_none()),
+        "Esc closes it, from the sidebar too"
+    );
+    assert!(
+        vcx.update(|window, cx| workspace
+            .read(cx)
+            .editor()
+            .state()
+            .focus_handle(cx)
+            .is_focused(window)),
+        "and the code has the keyboard"
+    );
+}

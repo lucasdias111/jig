@@ -125,7 +125,7 @@ impl Workspace {
                 let (task, todo, agent) = (task.clone(), *todo, *agent);
                 this.delegate_todo(&task, todo, agent, window, cx);
             }
-            TaskPlannerEvent::Dismissed => this.focus_main(window, cx),
+            TaskPlannerEvent::Dismissed => this.leave_sidebar(window, cx),
         });
         self.planner = PlannerState {
             view: Some(view),

@@ -448,7 +448,7 @@ impl Workspace {
                 this.open_file(&path, window, cx);
             }
             GitPanelEvent::Changed => this.git_changed(window, cx),
-            GitPanelEvent::Dismissed => this.focus_main(window, cx),
+            GitPanelEvent::Dismissed => this.leave_sidebar(window, cx),
             GitPanelEvent::Branches => {
                 this.open_branch_picker(branch_picker::Mode::Switch, window, cx)
             }

@@ -1225,6 +1225,29 @@ impl Workspace {
         true
     }
 
+    /// Esc for the agent conversation: back to its edit waiting in another
+    /// tab, else stop its turn, else close it. False with nothing to do.
+    pub(super) fn escape_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.show_agent_edit(window, cx) || self.stop_agent_turn(window, cx) {
+            return true;
+        }
+        if self.chat.is_none() {
+            return false;
+        }
+        self.close_chat(window, cx);
+        // The agent's reply box may have had the keyboard.
+        self.focus_main(window, cx);
+        true
+    }
+
+    /// Esc in a sidebar view with nothing of its own left to close: back to
+    /// the code, and Esc goes on to the agent conversation, which is often
+    /// docked beside the sidebar.
+    pub(super) fn leave_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_main(window, cx);
+        self.escape_agent(window, cx);
+    }
+
     /// The pin button: dock the conversation to the window's right edge, or
     /// float it at the code again.
     fn toggle_agent_chat_pin(&mut self, cx: &mut Context<Self>) {

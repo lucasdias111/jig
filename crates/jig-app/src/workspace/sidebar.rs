@@ -95,7 +95,7 @@ impl Workspace {
         let view = cx.new(|cx| FileTree::new(root, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             FileTreeEvent::Open(path) => this.open_file(path, window, cx),
-            FileTreeEvent::Dismissed => this.focus_main(window, cx),
+            FileTreeEvent::Dismissed => this.leave_sidebar(window, cx),
             FileTreeEvent::Renamed { from, to } => this.follow_rename(from, to, window, cx),
             FileTreeEvent::Trashed(path) => this.close_trashed(path, window, cx),
         });
