@@ -25,6 +25,9 @@ pub const WIDTH: f32 = 460.;
 /// Tallest the transcript grows before it scrolls.
 const TRANSCRIPT_HEIGHT: f32 = 280.;
 
+/// Tallest a request's command (or other detail) grows before it scrolls.
+const REQUEST_DETAIL_HEIGHT: f32 = 140.;
+
 /// One line of the conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChatEntry {
@@ -467,71 +470,72 @@ impl RenderOnce for Conversation {
                 .when(!removed.trim().is_empty(), |this| {
                     this.child(crate::bubble::removed_lines(&removed, cx))
                 })
-                .child(crate::surface::hint(
-                    "tab or enter to accept · esc to reject",
-                    cx,
-                )),
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1p5()
+                        .child(decide_button(0, "Accept", "↩", true, &self.on_decide, cx))
+                        .child(decide_button(
+                            1,
+                            "Accept all",
+                            ALWAYS_KEY,
+                            false,
+                            &self.on_decide,
+                            cx,
+                        ))
+                        .child(decide_button(
+                            2,
+                            "Reject",
+                            "esc",
+                            false,
+                            &self.on_decide,
+                            cx,
+                        )),
+                ),
             ChatStatus::Asking {
                 title,
                 detail,
                 always,
-            } => {
-                let on_decide = self.on_decide.clone();
-                let button = |index: usize, label: String, key: &'static str, primary: bool| {
-                    let on_decide = on_decide.clone();
-                    let theme = cx.theme();
-                    h_flex()
-                        .id(("jig-agent-decide", index))
-                        .debug_selector(move || format!("agent-decide-{index}"))
-                        .gap_1p5()
-                        .px_2()
-                        .py_0p5()
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(accent.opacity(0.35))
-                        .when(primary, |this| this.bg(accent.opacity(0.16)))
-                        .cursor_pointer()
-                        .hover(|this| this.bg(accent.opacity(0.22)))
-                        .text_xs()
-                        .child(div().truncate().child(label))
-                        .child(div().text_color(theme.muted_foreground).child(key))
-                        .when_some(on_decide, |this, on_decide| {
-                            this.on_click(move |_, window, cx| on_decide(&index, window, cx))
-                        })
-                };
-                let shortcut = if cfg!(target_os = "macos") {
-                    "⌘↩"
-                } else {
-                    "ctrl ↩"
-                };
-                v_flex()
-                    .gap_2()
-                    .child(
+            } => v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(format!("{title}?")),
+                )
+                .when(!detail.trim().is_empty(), |this| {
+                    // A long command scrolls in its box, so the buttons
+                    // below it stay in reach.
+                    this.child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(format!("{title}?")),
+                            .id("jig-agent-request-detail")
+                            .debug_selector(|| "agent-request-detail".into())
+                            .max_h(px(REQUEST_DETAIL_HEIGHT))
+                            .overflow_y_scroll()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .bg(theme.foreground.opacity(0.05))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_xs()
+                            .child(detail),
                     )
-                    .when(!detail.trim().is_empty(), |this| {
-                        this.child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded(px(6.))
-                                .bg(theme.foreground.opacity(0.05))
-                                .font_family(theme.mono_font_family.clone())
-                                .text_xs()
-                                .child(detail),
-                        )
-                    })
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_1p5()
-                            .child(button(0, "Allow".into(), "↩", true))
-                            .child(button(1, always, shortcut, false))
-                            .child(button(2, "Deny".into(), "esc", false)),
-                    )
-            }
+                })
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1p5()
+                        .child(decide_button(0, "Allow", "↩", true, &self.on_decide, cx))
+                        .child(decide_button(
+                            1,
+                            always,
+                            ALWAYS_KEY,
+                            false,
+                            &self.on_decide,
+                            cx,
+                        ))
+                        .child(decide_button(2, "Deny", "esc", false, &self.on_decide, cx)),
+                ),
             ChatStatus::Question {
                 question,
                 options,
@@ -674,6 +678,47 @@ impl RenderOnce for Conversation {
             )
             .when(!pinned, |this| this.child(grip))
     }
+}
+
+/// The key for "always": allowing a kind of request, or accepting every
+/// edit, for the rest of the conversation.
+const ALWAYS_KEY: &str = if cfg!(target_os = "macos") {
+    "⌘↩"
+} else {
+    "ctrl ↩"
+};
+
+/// One of a request's buttons, labelled with its key: 0 says yes, 1 yes
+/// for the rest of the conversation, 2 no.
+fn decide_button(
+    index: usize,
+    label: impl Into<SharedString>,
+    key: &'static str,
+    primary: bool,
+    on_decide: &Option<OptionHandler>,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let accent = crate::surface::lane_accent(true, cx);
+    let on_decide = on_decide.clone();
+    h_flex()
+        .id(("jig-agent-decide", index))
+        .debug_selector(move || format!("agent-decide-{index}"))
+        .gap_1p5()
+        .px_2()
+        .py_0p5()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(accent.opacity(0.35))
+        .when(primary, |this| this.bg(accent.opacity(0.16)))
+        .cursor_pointer()
+        .hover(|this| this.bg(accent.opacity(0.22)))
+        .text_xs()
+        .child(div().truncate().child(label.into()))
+        .child(div().text_color(theme.muted_foreground).child(key))
+        .when_some(on_decide, |this, on_decide| {
+            this.on_click(move |_, window, cx| on_decide(&index, window, cx))
+        })
 }
 
 /// Keep the transcript at its end while it's scrolled there, so a reply

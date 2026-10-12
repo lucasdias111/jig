@@ -116,6 +116,9 @@ pub(super) struct AgentRun {
     /// the rest of the conversation, for agents that can't remember that
     /// themselves.
     always_allowed: Vec<String>,
+    /// ⌘↩ on an edit: the agent's edits are written without review for the
+    /// rest of the conversation, each still listed in it.
+    accept_edits: bool,
     /// What the conversation is called in OpenCode: what was first asked.
     title: String,
     /// Files the agent changed, to catch up with the disk when it's done
@@ -166,6 +169,9 @@ struct PendingEdit {
     created: bool,
     /// The agent left the writing to Jig.
     jig_writes: bool,
+    /// The buffer's text before the edit went in, to put back if it's
+    /// rejected.
+    before: String,
 }
 
 impl Drop for AgentRun {
@@ -710,6 +716,7 @@ impl Workspace {
             models_open: false,
             sign_in: None,
             always_allowed: Vec::new(),
+            accept_edits: false,
             title: asked.clone(),
             touched: Vec::new(),
             step: LiveStep::default(),
@@ -1161,6 +1168,10 @@ impl Workspace {
         };
         let request = match agent.pending.take() {
             Some(Pending::Permission(request)) => request,
+            Some(edit @ Pending::Edit(_)) => {
+                agent.pending = Some(edit);
+                return self.accept_all_agent_edits(id, window, cx);
+            }
             other => {
                 agent.pending = other;
                 return false;
@@ -1191,11 +1202,41 @@ impl Workspace {
         true
     }
 
+    /// ⌘↩ on the agent's edit: accept it, and its later edits as they come.
+    fn accept_all_agent_edits(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.settle_agent_edit(true, Some(window), cx) {
+            return false;
+        }
+        if let Some(agent) = self.agent_run(id) {
+            agent.accept_edits = true;
+            agent.entries.push(ChatEntry::Note(
+                "Edits: accepted for the rest of this conversation.".into(),
+            ));
+            agent.scroll.scroll_to_bottom();
+        }
+        self.show_next_request(id, window, cx);
+        cx.notify();
+        true
+    }
+
     /// One of the request's buttons: 0 allows, 1 allows always, 2 denies.
+    /// For an edit: 0 accepts it, 1 accepts it and the rest, 2 rejects it.
     fn decide_agent_request(&mut self, button: usize, window: &mut Window, cx: &mut Context<Self>) {
-        match button {
-            0 => self.settle_agent_request(true, window, cx),
-            1 => self.allow_agent_request_always(window, cx),
+        let edit = self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| matches!(agent.pending, Some(Pending::Edit(_))));
+        match (edit, button) {
+            (true, 0) => self.settle_agent_edit(true, Some(window), cx),
+            (true, 2) => self.settle_agent_edit(false, Some(window), cx),
+            (false, 0) => self.settle_agent_request(true, window, cx),
+            (_, 1) => self.allow_agent_request_always(window, cx),
             _ => self.settle_agent_request(false, window, cx),
         };
         self.editor().focus(window, cx);
@@ -1383,7 +1424,7 @@ impl Workspace {
         const GAP: f32 = 32.;
         const MARGIN: f32 = 8.;
         let width = self
-            .run
+            .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .map_or(px(jig_commands::chat::WIDTH), |agent| agent.frame.width);
@@ -1707,6 +1748,23 @@ impl Workspace {
         }
         match agent.queue.pop_front() {
             None => {}
+            Some(Request::Edit(edit)) if agent.accept_edits => {
+                match self.write_agent_edit(&edit, window, cx) {
+                    Ok(true) => self.show_next_request(id, window, cx),
+                    // Unsaved changes in its file: left to `show_edit`, which
+                    // tells the agent to leave it alone.
+                    Ok(false) => {
+                        if let Err(error) = self.show_edit(&edit, window, cx) {
+                            self.answer_edit(&edit.id, false, Some(&error), cx);
+                            self.show_next_request(id, window, cx);
+                        }
+                    }
+                    Err(error) => {
+                        self.answer_edit(&edit.id, false, Some(&error), cx);
+                        self.show_next_request(id, window, cx);
+                    }
+                }
+            }
             Some(Request::Edit(edit)) => {
                 if let Err(error) = self.show_edit(&edit, window, cx) {
                     // Tell the agent, so it can try again.
@@ -1746,6 +1804,50 @@ impl Workspace {
             }
             Some(Request::Question(_)) => self.show_next_request(id, window, cx),
         }
+    }
+
+    /// Accept the agent's edit without showing it, its edits having been
+    /// accepted for the conversation: written to disk (by Jig or by the
+    /// agent once told), its open tab caught up, and listed. False, with
+    /// nothing done, when its open tab has unsaved changes.
+    fn write_agent_edit(
+        &mut self,
+        edit: &EditRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        let tab = self.tab_for(&edit.path);
+        if tab.is_some_and(|ix| self.tabs[ix].dirty) {
+            return Ok(false);
+        }
+        let created = !edit.path.exists();
+        let disk = std::fs::read_to_string(&edit.path).unwrap_or_default();
+        let new = edit.change.apply(&disk).map_err(|error| {
+            format!("Jig couldn't apply that edit: {error:#}. Read the file again.")
+        })?;
+        if edit.change.written_by_jig() {
+            std::fs::write(&edit.path, &new)
+                .map_err(|error| format!("Jig couldn't write the file: {error}"))?;
+            if let Some(ix) = tab {
+                self.catch_up_with_disk(ix, window, cx);
+            }
+        }
+        if created {
+            self.refresh_tree(cx);
+        }
+        self.answer_edit(&edit.id, true, None, cx);
+        let path = self.relative(&edit.path);
+        if let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) {
+            agent.entries.push(ChatEntry::Edit {
+                path,
+                accepted: true,
+            });
+            // Written by the agent: caught up with when the turn ends.
+            agent.touched.push(edit.path.clone());
+            agent.scroll.scroll_to_bottom();
+        }
+        cx.notify();
+        Ok(true)
     }
 
     fn show_edit(
@@ -1802,6 +1904,7 @@ impl Workspace {
                 path: edit.path.clone(),
                 created,
                 jig_writes: edit.change.written_by_jig(),
+                before: old.clone(),
             }));
         }
         self.editor().clear_highlights(cx);
@@ -1826,7 +1929,7 @@ impl Workspace {
         cx.on_next_frame(window, move |this, window, cx| {
             let anchor = this.agent_anchor(range, window, cx);
             if let Some(run) = this
-                .run
+                .chat
                 .as_mut()
                 .filter(|run| !run.agent.as_ref().is_some_and(|agent| agent.moved))
             {
@@ -1889,7 +1992,7 @@ impl Workspace {
                 return false;
             }
         };
-        run.preview = None;
+        let preview = run.preview.take();
         if let Some(agent) = run.agent.as_mut() {
             let path = match &run.bubble {
                 Bubble::Preview { message, .. } => message.clone(),
@@ -1927,7 +2030,20 @@ impl Workspace {
             tab.document.saved_text = text;
             tab.dirty = false;
         } else if let Some(window) = window {
-            self.editor().undo(window, cx);
+            // Put the old text back over the new, rather than undo: undo
+            // finds nothing when no key has gone through the editor since
+            // the edit, as when Reject is clicked.
+            if let Some(preview) = preview {
+                let now = self.editor().text(cx);
+                let start = preview.range.start;
+                let old = (pending.before.len() + preview.range.len())
+                    .checked_sub(now.len())
+                    .and_then(|old_len| pending.before.get(start..start + old_len));
+                if let Some(old) = old {
+                    self.editor().apply_edit(preview.range, old, window, cx);
+                    self.editor().select(start..start, cx);
+                }
+            }
             if pending.created {
                 let _ = std::fs::remove_file(&pending.path);
                 let run = self.chat.take();
@@ -1945,7 +2061,7 @@ impl Workspace {
 
     fn answer_edit(&self, edit_id: &str, accept: bool, note: Option<&str>, cx: &mut Context<Self>) {
         let session = self
-            .run
+            .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .and_then(|agent| agent.session.clone());
@@ -2029,7 +2145,7 @@ impl Workspace {
 
     fn relative(&self, path: &Path) -> String {
         let root = self
-            .run
+            .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .map(|agent| agent.directory.clone())

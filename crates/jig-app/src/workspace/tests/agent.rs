@@ -902,3 +902,158 @@ fn escape_closes_the_docked_conversation(cx: &mut TestAppContext) {
         "and the code has the keyboard"
     );
 }
+
+#[gpui_kit::test]
+fn command_enter_accepts_the_agent_s_edits_for_the_conversation(cx: &mut TestAppContext) {
+    use jig_ai::agent::{AgentEvent, EditChange, EditRequest};
+    let (dir, window, workspace) = three_files(cx);
+    let write = |id: &str, name: &str, text: &str| {
+        AgentEvent::Edit(EditRequest {
+            id: id.into(),
+            path: dir.path().join(name),
+            change: EditChange::Write(text.into()),
+        })
+    };
+    let first = write("e1", "a.rs", "// a, edited\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(first, window, cx);
+        })
+    });
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    assert_eq!(waiting(cx), Some("edit"), "the first one is reviewed");
+
+    step(cx, window, |window, cx| window.press("secondary-enter", cx));
+    assert_eq!(waiting(cx), None);
+    let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
+    assert_eq!(read("a.rs"), "// a, edited\n");
+    assert!(
+        cx.update(|cx| workspace.read(cx).agent_entries())
+            .contains(&ChatEntry::Note(
+                "Edits: accepted for the rest of this conversation.".into()
+            ))
+    );
+
+    // The next one, in a file that isn't open, is written without a review
+    // and without leaving the tab on screen.
+    let next = write("e2", "b.rs", "// b, edited\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.test_agent_request(next, window, cx))
+    });
+    assert_eq!(waiting(cx), None);
+    assert_eq!(read("b.rs"), "// b, edited\n");
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_entries()).last(),
+        Some(&ChatEntry::Edit {
+            path: "b.rs".into(),
+            accepted: true
+        })
+    );
+    assert!(
+        cx.update(|cx| workspace.read(cx).editor().text(cx)) == "// a, edited\n",
+        "still on a.rs"
+    );
+
+    // One in the open tab catches it up with the disk.
+    let again = write("e3", "a.rs", "// a, edited twice\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.test_agent_request(again, window, cx))
+    });
+    assert_eq!(waiting(cx), None);
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).editor().text(cx)),
+        "// a, edited twice\n"
+    );
+}
+
+#[gpui_kit::test]
+fn an_edit_is_settled_with_its_buttons(cx: &mut TestAppContext) {
+    use jig_ai::agent::{AgentEvent, EditChange, EditRequest};
+    let (dir, window, workspace) = three_files(cx);
+    let write = |id: &str, name: &str, text: &str| {
+        AgentEvent::Edit(EditRequest {
+            id: id.into(),
+            path: dir.path().join(name),
+            change: EditChange::Write(text.into()),
+        })
+    };
+    let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    let click = |cx: &mut TestAppContext, button: &'static str| {
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.update(|window, cx| window.render_frame(cx));
+        let at = vcx.debug_bounds(button).expect("the button shows");
+        vcx.simulate_click(at.center(), gpui_kit::Modifiers::none());
+        vcx.run_until_parked();
+    };
+
+    // Reject turns it down and leaves the file as it was.
+    let first = write("e1", "a.rs", "// a, rejected\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(first, window, cx);
+        })
+    });
+    assert_eq!(waiting(cx), Some("edit"));
+    click(cx, "agent-decide-2");
+    assert_eq!(waiting(cx), None);
+    assert_eq!(read("a.rs"), "// a.rs\n");
+
+    // Accept takes this one.
+    let second = write("e2", "a.rs", "// a, accepted\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.test_agent_request(second, window, cx))
+    });
+    click(cx, "agent-decide-0");
+    assert_eq!(waiting(cx), None);
+    assert_eq!(read("a.rs"), "// a, accepted\n");
+
+    // Accept all takes this one and the next, unseen.
+    let third = write("e3", "b.rs", "// b, accepted\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.test_agent_request(third, window, cx))
+    });
+    assert_eq!(waiting(cx), Some("edit"));
+    click(cx, "agent-decide-1");
+    assert_eq!(read("b.rs"), "// b, accepted\n");
+    let fourth = write("e4", "c.rs", "// c, accepted\n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.test_agent_request(fourth, window, cx))
+    });
+    assert_eq!(waiting(cx), None);
+    assert_eq!(read("c.rs"), "// c, accepted\n");
+}
+
+#[gpui_kit::test]
+fn a_long_command_scrolls_and_leaves_its_buttons_in_reach(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let command = (1..=200)
+        .map(|n| format!("echo line {n}"))
+        .collect::<Vec<_>>()
+        .join(" && \n");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(permission(&command), window, cx);
+        })
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let detail = vcx
+        .debug_bounds("agent-request-detail")
+        .expect("the command shows");
+    assert!(detail.size.height <= px(141.), "{detail:?}");
+    let height = vcx.update(|window, _| window.viewport_size().height);
+    let allow = vcx.debug_bounds("agent-decide-0").expect("Allow shows");
+    assert!(allow.bottom() < height, "{allow:?} in {height:?}");
+}
