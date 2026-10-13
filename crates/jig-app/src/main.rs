@@ -80,55 +80,59 @@ fn main() {
         return;
     }
 
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        languages::gdscript::register();
-        languages::grammars::register();
-        let settings_error = settings::init(cx);
-        providers::init(cx);
-        recent::init(cx);
-        session::init(cx);
-        agent::init(cx);
-        theme::init(cx);
-        theme::apply(None, cx);
-        cx.bind_keys(workspace::key_bindings());
-        // Before the menus: they show only shortcuts bound by then.
-        settings_window::init(cx);
-        menus::init(cx);
-        // Last: it takes over the shortcuts Settings can change.
-        shortcuts::init(cx);
-        // Reached only when no window handles Quit (e.g. none is open).
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        // Settings alone can't open a file, so it doesn't keep Jig running.
-        cx.on_window_closed(|cx, _| {
-            let windows = cx.windows();
-            if windows
-                .iter()
-                .all(|window| settings_window::is_settings_window(*window, cx))
-            {
-                cx.quit();
-            }
-        })
-        .detach();
+    // GPUI Kit's icons (chevrons, search, menus) load from its asset source;
+    // without it they draw as nothing.
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            languages::gdscript::register();
+            languages::grammars::register();
+            let settings_error = settings::init(cx);
+            providers::init(cx);
+            recent::init(cx);
+            session::init(cx);
+            agent::init(cx);
+            theme::init(cx);
+            theme::apply(None, cx);
+            cx.bind_keys(workspace::key_bindings());
+            // Before the menus: they show only shortcuts bound by then.
+            settings_window::init(cx);
+            menus::init(cx);
+            // Last: it takes over the shortcuts Settings can change.
+            shortcuts::init(cx);
+            // Reached only when no window handles Quit (e.g. none is open).
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            // Settings alone can't open a file, so it doesn't keep Jig running.
+            cx.on_window_closed(|cx, _| {
+                let windows = cx.windows();
+                if windows
+                    .iter()
+                    .all(|window| settings_window::is_settings_window(*window, cx))
+                {
+                    cx.quit();
+                }
+            })
+            .detach();
 
-        let window = open_window(path, &more, cx).expect("failed to open window");
-        cx.activate(true);
-        if let Some(error) = settings_error {
-            window
-                .update(cx, |_, window, cx| {
-                    let detail = format!("Using the defaults until it's fixed. {error}");
-                    // Nothing to do with the answer.
-                    drop(window.prompt(
-                        PromptLevel::Warning,
-                        "Your settings couldn't be read",
-                        Some(&detail),
-                        &["OK"],
-                        cx,
-                    ));
-                })
-                .ok();
-        }
-    });
+            let window = open_window(path, &more, cx).expect("failed to open window");
+            cx.activate(true);
+            if let Some(error) = settings_error {
+                window
+                    .update(cx, |_, window, cx| {
+                        let detail = format!("Using the defaults until it's fixed. {error}");
+                        // Nothing to do with the answer.
+                        drop(window.prompt(
+                            PromptLevel::Warning,
+                            "Your settings couldn't be read",
+                            Some(&detail),
+                            &["OK"],
+                            cx,
+                        ));
+                    })
+                    .ok();
+            }
+        });
 }
 
 /// Open a Jig window on `path` (a file, a folder or nothing), with `more`
