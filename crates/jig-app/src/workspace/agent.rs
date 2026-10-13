@@ -1267,9 +1267,13 @@ impl Workspace {
     }
 
     /// Esc for the agent conversation: back to its edit waiting in another
-    /// tab, else stop its turn, else close it. False with nothing to do.
+    /// tab, else reject the edit here, else stop its turn, else close it.
+    /// False with nothing to do.
     pub(super) fn escape_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.show_agent_edit(window, cx) || self.stop_agent_turn(window, cx) {
+        if self.show_agent_edit(window, cx)
+            || (self.agent_edit_here() && self.settle_agent_edit(false, Some(window), cx))
+            || self.stop_agent_turn(window, cx)
+        {
             return true;
         }
         if self.chat.is_none() {
@@ -1282,11 +1286,21 @@ impl Workspace {
     }
 
     /// Esc in a sidebar view with nothing of its own left to close: back to
-    /// the code, and Esc goes on to the agent conversation, which is often
-    /// docked beside the sidebar.
+    /// the code, and the agent conversation, often docked beside the
+    /// sidebar, closes once it's idle. A working agent, or one waiting on
+    /// the user, is left alone: stopping it is for Esc in the code.
     pub(super) fn leave_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_main(window, cx);
-        self.escape_agent(window, cx);
+        let idle = self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| {
+                agent.finished && agent.pending.is_none() && agent.queue.is_empty()
+            });
+        if idle {
+            self.close_chat(window, cx);
+        }
     }
 
     /// The pin button: dock the conversation to the window's right edge, or
@@ -1390,6 +1404,16 @@ impl Workspace {
     /// so the user can say what to do instead. Returns false when there is
     /// no turn to stop.
     pub(super) fn stop_agent_turn(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // An edit still in the buffer goes, as when rejected, rather than
+        // staying there read-only.
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| !agent.finished && matches!(agent.pending, Some(Pending::Edit(_))))
+        {
+            self.settle_agent_edit(false, Some(window), cx);
+        }
         let Some(run) = self.chat.as_mut() else {
             return false;
         };
@@ -1837,10 +1861,12 @@ impl Workspace {
         }
         self.answer_edit(&edit.id, true, None, cx);
         let path = self.relative(&edit.path);
+        let diff = crate::diff::edit_lines(&disk, &new);
         if let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) {
             agent.entries.push(ChatEntry::Edit {
                 path,
                 accepted: true,
+                diff,
             });
             // Written by the agent: caught up with when the turn ends.
             agent.touched.push(edit.path.clone());
@@ -1976,12 +2002,15 @@ impl Workspace {
     fn settle_agent_edit_here(
         &mut self,
         accept: bool,
-        window: Option<&mut Window>,
+        mut window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The edit as proposed, still in the buffer, for its diff.
+        let proposed = self.editor().text(cx);
         let Some(run) = self.chat.as_mut() else {
             return false;
         };
+        let id = run.id;
         let Some(agent) = run.agent.as_mut() else {
             return false;
         };
@@ -2001,6 +2030,7 @@ impl Workspace {
             agent.entries.push(ChatEntry::Edit {
                 path,
                 accepted: accept,
+                diff: crate::diff::edit_lines(&pending.before, &proposed),
             });
             agent.scroll.scroll_to_bottom();
             run.bubble = Bubble::Running {
@@ -2029,7 +2059,7 @@ impl Workspace {
             let tab = self.tab_mut();
             tab.document.saved_text = text;
             tab.dirty = false;
-        } else if let Some(window) = window {
+        } else if let Some(window) = window.as_deref_mut() {
             // Put the old text back over the new, rather than undo: undo
             // finds nothing when no key has gone through the editor since
             // the edit, as when Reject is clicked.
@@ -2055,6 +2085,11 @@ impl Workspace {
         }
         let written = note.is_none();
         self.answer_edit(&pending.id, accept && written, note.as_deref(), cx);
+        // The agent may have asked for more at once, e.g. several edits, and
+        // sends nothing else until those are answered too: show the next.
+        if let Some(window) = window {
+            self.show_next_request(id, window, cx);
+        }
         cx.notify();
         true
     }
@@ -2178,7 +2213,11 @@ fn chat_entry(turn: Turn) -> ChatEntry {
     match turn {
         Turn::User(text) => ChatEntry::User(text),
         Turn::Agent(text) => ChatEntry::Agent(text),
-        Turn::Edit { path, accepted } => ChatEntry::Edit { path, accepted },
+        Turn::Edit { path, accepted } => ChatEntry::Edit {
+            path,
+            accepted,
+            diff: Vec::new(),
+        },
         Turn::Did(text) => ChatEntry::Did(text),
     }
 }

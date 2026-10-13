@@ -135,9 +135,66 @@ pub fn preview_edit<'a>(old: &str, new: &'a str, start: usize) -> PreviewEdit<'a
     }
 }
 
+/// Unchanged lines shown around each change in an edit's diff.
+const EDIT_CONTEXT: usize = 3;
+/// An edit's diff is cut off after this many lines, e.g. for a new file.
+const EDIT_LINES: usize = 400;
+
+/// What an edit changed, for the agent conversation to show: each change
+/// with a few unchanged lines around it, and a gap between changes.
+pub fn edit_lines(old: &str, new: &str) -> Vec<jig_commands::DiffLine> {
+    use jig_commands::DiffLine;
+    use similar::ChangeTag;
+    let diff = similar::TextDiff::from_lines(old, new);
+    let mut lines = Vec::new();
+    for (ix, group) in diff.grouped_ops(EDIT_CONTEXT).iter().enumerate() {
+        if ix > 0 {
+            lines.push(DiffLine::Gap);
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let text = change.value().trim_end_matches(['\n', '\r']).to_string();
+                lines.push(match change.tag() {
+                    ChangeTag::Equal => DiffLine::Same(text),
+                    ChangeTag::Delete => DiffLine::Removed(text),
+                    ChangeTag::Insert => DiffLine::Added(text),
+                });
+            }
+        }
+    }
+    if lines.len() > EDIT_LINES {
+        lines.truncate(EDIT_LINES);
+        lines.push(DiffLine::Gap);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edit_shows_its_changes_with_some_context() {
+        use jig_commands::DiffLine::*;
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n";
+        let new = "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n";
+        assert_eq!(
+            edit_lines(old, new),
+            [
+                Same("a".into()),
+                Removed("b".into()),
+                Added("B".into()),
+                Same("c".into()),
+                Same("d".into()),
+                Same("e".into()),
+                Gap,
+                Same("i".into()),
+                Same("j".into()),
+                Same("k".into()),
+                Added("l".into()),
+            ]
+        );
+    }
 
     #[test]
     fn added_doc_comments_are_the_only_change() {

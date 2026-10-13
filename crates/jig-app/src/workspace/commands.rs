@@ -463,11 +463,11 @@ impl Workspace {
 
     /// Keep the change on screen. It is already in the buffer as one undo
     /// step.
-    pub(super) fn accept_preview(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn accept_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.accept_quick_preview(cx) {
             return true;
         }
-        self.agent_edit_here() && self.settle_agent_edit(true, None, cx)
+        self.agent_edit_here() && self.settle_agent_edit(true, Some(window), cx)
     }
 
     /// Keep a jig's change under review, if there is one.
@@ -528,7 +528,7 @@ impl Workspace {
     ) {
         if !self.keys_elsewhere(window, cx)
             && (self.settle_agent_request(true, window, cx)
-                || self.accept_preview(cx)
+                || self.accept_preview(window, cx)
                 || self.snippet_step(true, cx))
         {
             cx.stop_propagation();
@@ -564,7 +564,7 @@ impl Workspace {
     /// agent asks to do.
     fn accept_or_propagate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.keys_elsewhere(window, cx)
-            && (self.settle_agent_request(true, window, cx) || self.accept_preview(cx))
+            && (self.settle_agent_request(true, window, cx) || self.accept_preview(window, cx))
         {
             cx.stop_propagation();
         } else {
@@ -670,17 +670,29 @@ impl Workspace {
             self.editor().clear_highlights(cx);
             cx.stop_propagation();
             cx.notify();
-        } else if self.escape_agent(window, cx) {
-            cx.stop_propagation();
-        } else {
+        } else if self.code_takes_escape(cx) {
             // The first Escape closes the completion list, the next leaves
-            // the snippet.
+            // the snippet; neither stops the agent.
             let listing = self.editor().state().read(cx).completion_menu_state().open;
             if !listing {
                 self.end_snippet();
             }
             cx.propagate();
+        } else if self.escape_agent(window, cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
         }
+    }
+
+    /// The code has a completion list open or a snippet being filled in,
+    /// which Esc closes before anything else.
+    fn code_takes_escape(&self, cx: &App) -> bool {
+        self.editor().state().read(cx).completion_menu_state().open
+            || self
+                .tabs
+                .get(self.active)
+                .is_some_and(|tab| tab.snippet.is_some())
     }
 
     /// Any edit makes a shown reply stale.

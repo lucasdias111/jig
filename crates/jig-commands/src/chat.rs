@@ -35,16 +35,30 @@ pub enum ChatEntry {
     User(String),
     /// The agent's closing words for a turn.
     Agent(String),
-    /// An edit the agent proposed, and whether the user took it.
+    /// An edit the agent proposed, and whether the user took it. `diff`
+    /// is what it changed, opened from its row; empty when not known, as
+    /// for an earlier conversation picked up again.
     Edit {
         path: String,
         accepted: bool,
+        diff: Vec<DiffLine>,
     },
     /// Something the agent did besides editing, e.g. "Ran `cargo test`".
     Did(String),
     /// Something that happened to the run, e.g. "Stopped."
     Note(String),
     Error(String),
+}
+
+/// One line of an edit's diff.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffLine {
+    /// Unchanged, shown around a change.
+    Same(String),
+    Removed(String),
+    Added(String),
+    /// Unchanged lines left out between two changes.
+    Gap,
 }
 
 /// What the conversation is waiting on.
@@ -809,9 +823,20 @@ fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -
     let mut rows = Vec::new();
     let mut entries = entries.into_iter().enumerate().peekable();
     while let Some((index, entry)) = entries.next() {
-        let ChatEntry::Did(first) = entry else {
-            rows.push(render_entry(index, entry, cx));
-            continue;
+        let first = match entry {
+            ChatEntry::Did(first) => first,
+            ChatEntry::Edit {
+                path,
+                accepted,
+                diff,
+            } if !diff.is_empty() => {
+                rows.push(edit_with_diff(index, path, accepted, diff, window, cx));
+                continue;
+            }
+            entry => {
+                rows.push(render_entry(index, entry, cx));
+                continue;
+            }
         };
         let mut calls = vec![first];
         while let Some((_, ChatEntry::Did(_))) = entries.peek() {
@@ -875,6 +900,112 @@ fn tool_calls(index: usize, calls: Vec<String>, window: &mut Window, cx: &mut Ap
         .into_any_element()
 }
 
+/// An edit's row, with how many lines it adds and removes; a click opens
+/// its diff below it, in a box of its own that scrolls.
+fn edit_with_diff(
+    index: usize,
+    path: String,
+    accepted: bool,
+    diff: Vec<DiffLine>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let open = window.use_keyed_state(("jig-agent-edit-open", index), cx, |_, _| false);
+    let is_open = *open.read(cx);
+    let theme = cx.theme();
+    let muted = theme.muted_foreground;
+    let count = |kind: fn(&DiffLine) -> bool| diff.iter().filter(|line| kind(line)).count();
+    let added = count(|line| matches!(line, DiffLine::Added(_)));
+    let removed = count(|line| matches!(line, DiffLine::Removed(_)));
+    let row = h_flex()
+        .id(("jig-agent-edit", index))
+        .debug_selector(move || format!("agent-edit-{index}"))
+        .gap_1p5()
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            open.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })
+        })
+        .child(
+            gpui_kit::component::Icon::default()
+                .data(if is_open { CHEVRON_DOWN } else { CHEVRON })
+                .size(px(11.))
+                .text_color(muted),
+        )
+        .child(if accepted {
+            "Edited"
+        } else {
+            "Rejected an edit to"
+        })
+        .child(file_name(path, cx))
+        .when(added > 0, |this| {
+            this.child(div().text_color(theme.success).child(format!("+{added}")))
+        })
+        .when(removed > 0, |this| {
+            this.child(div().text_color(theme.danger).child(format!("−{removed}")))
+        });
+    v_flex()
+        .gap_1()
+        .child(row)
+        .when(is_open, |this| this.child(diff_view(index, diff, cx)))
+        .into_any_element()
+}
+
+/// Tallest an edit's diff grows before it scrolls.
+const DIFF_HEIGHT: f32 = 220.;
+
+/// An edit's lines, removed in red and added in green, with the unchanged
+/// lines around them. Long lines scroll sideways rather than wrap.
+fn diff_view(index: usize, diff: Vec<DiffLine>, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let line = |sign: &'static str, text: String, bg: Option<Hsla>, color: Hsla| {
+        h_flex()
+            .min_w_full()
+            .px_1p5()
+            .gap_1p5()
+            .whitespace_nowrap()
+            .when_some(bg, |this, bg| this.bg(bg))
+            .child(div().flex_none().w(px(8.)).text_color(color).child(sign))
+            .child(div().flex_none().text_color(color).child(text))
+    };
+    div()
+        .id(("jig-agent-diff", index))
+        .debug_selector(move || format!("agent-diff-{index}"))
+        .max_h(px(DIFF_HEIGHT))
+        .overflow_scroll()
+        .py_1()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.foreground.opacity(0.03))
+        .font_family(theme.mono_font_family.clone())
+        .text_size(px(11.5))
+        .child(
+            v_flex()
+                .min_w_full()
+                .children(diff.into_iter().map(|diff_line| match diff_line {
+                    DiffLine::Same(text) => line(" ", text, None, theme.muted_foreground),
+                    DiffLine::Removed(text) => line(
+                        "-",
+                        text,
+                        Some(theme.danger.opacity(0.12)),
+                        theme.foreground,
+                    ),
+                    DiffLine::Added(text) => line(
+                        "+",
+                        text,
+                        Some(theme.success.opacity(0.14)),
+                        theme.foreground,
+                    ),
+                    DiffLine::Gap => line(" ", "⋯".into(), None, theme.muted_foreground),
+                })),
+        )
+}
+
 fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
     let theme = cx.theme();
     match entry {
@@ -910,7 +1041,7 @@ fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
             .text_color(theme.muted_foreground)
             .child(text)
             .into_any_element(),
-        ChatEntry::Edit { path, accepted } => h_flex()
+        ChatEntry::Edit { path, accepted, .. } => h_flex()
             .gap_1p5()
             .text_xs()
             .text_color(theme.muted_foreground)

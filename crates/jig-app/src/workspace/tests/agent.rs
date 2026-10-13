@@ -949,7 +949,11 @@ fn command_enter_accepts_the_agent_s_edits_for_the_conversation(cx: &mut TestApp
         cx.update(|cx| workspace.read(cx).agent_entries()).last(),
         Some(&ChatEntry::Edit {
             path: "b.rs".into(),
-            accepted: true
+            accepted: true,
+            diff: vec![
+                jig_commands::DiffLine::Removed("// b.rs".into()),
+                jig_commands::DiffLine::Added("// b, edited".into()),
+            ],
         })
     );
     assert!(
@@ -1056,4 +1060,126 @@ fn a_long_command_scrolls_and_leaves_its_buttons_in_reach(cx: &mut TestAppContex
     let height = vcx.update(|window, _| window.viewport_size().height);
     let allow = vcx.debug_bounds("agent-decide-0").expect("Allow shows");
     assert!(allow.bottom() < height, "{allow:?} in {height:?}");
+}
+
+#[gpui_kit::test]
+fn escape_stops_the_agent_only_from_the_code_with_nothing_else_to_close(cx: &mut TestAppContext) {
+    use jig_ai::agent::AgentEvent;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "counter = 1\n").unwrap();
+    let (window, workspace) = open(cx, &path);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(AgentEvent::Step("Reading".into()), window, cx);
+            this.editor().select(12..12, cx);
+            this.editor().focus(window, cx);
+        })
+    });
+    let stopped = |cx: &mut TestAppContext| {
+        cx.update(|cx| workspace.read(cx).agent_entries())
+            .contains(&ChatEntry::Note("Stopped.".into()))
+    };
+
+    // Esc closes the completion list, and leaves the agent working.
+    type_slowly(cx, window, "c");
+    assert!(cx.update(|cx| {
+        workspace
+            .read(cx)
+            .editor()
+            .state()
+            .read(cx)
+            .completion_menu_state()
+            .open
+    }));
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    assert!(!stopped(cx), "the agent works on");
+
+    // Esc in the Tasks view leaves the code with the keyboard, and the agent
+    // working.
+    step(cx, window, |window, cx| window.press("ctrl-shift-t", cx));
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    assert!(!stopped(cx), "the agent works on");
+    assert!(cx.update(|cx| workspace.read(cx).chat.is_some()));
+
+    // From the code, with nothing else open, it stops the agent.
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert!(stopped(cx));
+}
+
+#[gpui_kit::test]
+fn edits_asked_for_at_once_are_reviewed_one_after_another(cx: &mut TestAppContext) {
+    use jig_ai::agent::{AgentEvent, EditChange, EditRequest};
+    let (dir, window, workspace) = three_files(cx);
+    let write = |id: &str, name: &str, text: &str| {
+        AgentEvent::Edit(EditRequest {
+            id: id.into(),
+            path: dir.path().join(name),
+            change: EditChange::Write(text.into()),
+        })
+    };
+    // The agent asks for both, then waits for both answers.
+    let (first, second) = (
+        write("e1", "a.rs", "// a, edited\n"),
+        write("e2", "b.rs", "// b, edited\n"),
+    );
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(first, window, cx);
+            this.test_agent_request(second, window, cx);
+        })
+    });
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
+
+    step(cx, window, |window, cx| window.press("tab", cx));
+    assert_eq!(read("a.rs"), "// a, edited\n");
+    assert_eq!(
+        waiting(cx),
+        Some("edit"),
+        "the second shows at once, with nothing more from the agent"
+    );
+    step(cx, window, |window, cx| window.press("tab", cx));
+    assert_eq!(read("b.rs"), "// b, edited\n");
+    assert_eq!(waiting(cx), None);
+}
+
+#[gpui_kit::test]
+fn an_edit_in_the_conversation_opens_to_its_diff(cx: &mut TestAppContext) {
+    use jig_ai::agent::{AgentEvent, EditChange, EditRequest};
+    let (dir, window, workspace) = three_files(cx);
+    let edit = AgentEvent::Edit(EditRequest {
+        id: "e1".into(),
+        path: dir.path().join("a.rs"),
+        change: EditChange::Write("// a, edited\n".into()),
+    });
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            this.test_agent_request(edit, window, cx);
+        })
+    });
+    step(cx, window, |window, cx| window.press("tab", cx));
+    // "Hello", then the edit.
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(
+        vcx.debug_bounds("agent-diff-1").is_none(),
+        "folded at first"
+    );
+    let row = vcx.debug_bounds("agent-edit-1").expect("the edit's row");
+    vcx.simulate_click(row.center(), gpui_kit::Modifiers::none());
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-diff-1").is_some(), "open");
 }
