@@ -313,11 +313,6 @@ impl TaskPlanner {
     }
 
     #[cfg(test)]
-    pub fn implement_task(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.implement(id, cx);
-    }
-
-    #[cfg(test)]
     pub fn delegate_todo(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
         self.delegate(id, todo, agent, cx);
     }

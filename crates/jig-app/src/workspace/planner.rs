@@ -320,24 +320,7 @@ impl Workspace {
                 cx,
             );
         }
-        let instruction = if task.todos.is_empty() {
-            format!("Implement the task “{}”.", task.title)
-        } else {
-            format!(
-                "Implement the task “{}”: work through its open todos in order.",
-                task.title
-            )
-        };
-        let invocation = Invocation {
-            name: Some(task.title.clone()),
-            instruction,
-            scope: Scope::Selection,
-            comment: None,
-            agent: true,
-            diagnostics: false,
-            task: Some(task.context()),
-        };
-        self.run_command(invocation, window, cx);
+        self.run_command(implement_invocation(task), window, cx);
     }
 
     pub(super) fn delegate_todo(
@@ -432,5 +415,27 @@ impl Workspace {
         }
         self.editor().focus(window, cx);
         cx.notify();
+    }
+}
+
+/// What the agent is asked to implement all of `task`: the conversation is
+/// named after it, and the whole task comes along as context.
+pub(super) fn implement_invocation(task: &jig_ai::tasks::Task) -> Invocation {
+    let instruction = if task.todos.is_empty() {
+        format!("Implement the task “{}”.", task.title)
+    } else {
+        format!(
+            "Implement the task “{}”: work through its open todos in order.",
+            task.title
+        )
+    };
+    Invocation {
+        name: Some(task.title.clone()),
+        instruction,
+        scope: Scope::Selection,
+        comment: None,
+        agent: true,
+        diagnostics: false,
+        task: Some(task.context()),
     }
 }
