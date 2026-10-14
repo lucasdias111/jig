@@ -1,4 +1,4 @@
-//! Pictures of every Settings page, light and dark, for looking at the
+//! Pictures of every Settings page and of About Jig, light and dark, for looking at the
 //! design without a screen: `JIG_SNAPSHOTS=<folder> cargo run -p jig-app
 //! --features snapshots`. macOS only, since it needs GPUI's Metal renderer,
 //! and run from `main` because the Mac platform must be made on the main
@@ -100,6 +100,55 @@ pub fn run(dir: &Path) {
             image.save(dir.join(name)).expect("saving a snapshot");
         }
     }
+    for dark in [false, true] {
+        about(dir, dark);
+    }
     std::fs::remove_dir_all(&config).ok();
     START.set(Nav::page(Page::Appearance));
+}
+
+/// About Jig, at the size it opens.
+fn about(dir: &Path, dark: bool) {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        settings::update(cx, |s| {
+            s.appearance.theme = if dark {
+                ThemeChoice::Dark
+            } else {
+                ThemeChoice::Light
+            }
+        });
+        crate::theme::init(cx);
+        crate::theme::apply(None, cx);
+    });
+    let (handle, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(280.), px(300.)),
+                    })),
+                    focus: false,
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| crate::about_window::AboutWindow::new(window, cx)),
+            )
+        })
+        .expect("opening About Jig");
+    for _ in 0..3 {
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+            .expect("drawing About Jig");
+    }
+    let image = cx.capture_screenshot(handle).expect("rendering with Metal");
+    let name = format!("about-{}.png", if dark { "dark" } else { "light" });
+    image.save(dir.join(name)).expect("saving a snapshot");
 }

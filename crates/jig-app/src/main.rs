@@ -5,6 +5,7 @@
 // `Jig --tasks-mcp` still reach it either way.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod about_window;
 mod agent;
 mod agents;
 mod brackets;
@@ -110,13 +111,11 @@ fn main() {
             shortcuts::init(cx);
             // Reached only when no window handles Quit (e.g. none is open).
             cx.on_action(|_: &Quit, cx| cx.quit());
-            // Settings alone can't open a file, so it doesn't keep Jig running.
+            // Settings and About can't open a file, so they don't keep Jig
+            // running.
             cx.on_window_closed(|cx, _| {
                 let windows = cx.windows();
-                if windows
-                    .iter()
-                    .all(|window| settings_window::is_settings_window(*window, cx))
-                {
+                if !windows.iter().any(|window| is_editor_window(*window, cx)) {
                     cx.quit();
                 }
             })
@@ -140,6 +139,11 @@ fn main() {
                     .ok();
             }
         });
+}
+
+/// Whether `window` is one of Jig's editor windows, not Settings or About.
+pub fn is_editor_window(window: AnyWindowHandle, cx: &App) -> bool {
+    !settings_window::is_settings_window(window, cx) && !about_window::is_about_window(window, cx)
 }
 
 /// Open a Jig window on `path` (a file, a folder or nothing), with `more`

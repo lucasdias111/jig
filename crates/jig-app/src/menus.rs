@@ -26,21 +26,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-    cx.on_action(|_: &About, cx| {
-        let Some(window) = cx.active_window() else {
-            return;
-        };
-        window
-            .update(cx, |_, window, cx| {
-                let detail = format!(
-                    "Version {}\nAI jigs at the cursor.",
-                    crate::update::current_version()
-                );
-                // Nothing to do with the answer.
-                drop(window.prompt(PromptLevel::Info, "Jig", Some(&detail), &["OK"], cx));
-            })
-            .ok();
-    });
+    cx.on_action(|_: &About, cx| crate::about_window::open(cx));
     set(cx);
 }
 

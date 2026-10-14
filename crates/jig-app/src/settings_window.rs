@@ -223,7 +223,7 @@ pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
         let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
         let Some(target) = windows
             .into_iter()
-            .find(|window| !is_settings_window(*window, cx))
+            .find(|window| crate::is_editor_window(*window, cx))
         else {
             return;
         };
@@ -241,7 +241,7 @@ pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
 fn send_to_every_workspace(action: impl Fn() -> Box<dyn Action> + 'static, cx: &mut App) {
     cx.defer(move |cx| {
         for target in cx.windows() {
-            if !is_settings_window(target, cx) {
+            if crate::is_editor_window(target, cx) {
                 target
                     .update(cx, |_, window, cx| window.dispatch_action(action(), cx))
                     .ok();
