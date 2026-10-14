@@ -34,6 +34,9 @@ actions!(
     [
         SelectPrevious,
         SelectNext,
+        ExtendPrevious,
+        ExtendNext,
+        SelectAll,
         CollapseOrParent,
         ExpandOrChild,
         OpenSelected,
@@ -53,6 +56,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("up", SelectPrevious, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some(CONTEXT)),
+        KeyBinding::new("shift-up", ExtendPrevious, Some(CONTEXT)),
+        KeyBinding::new("shift-down", ExtendNext, Some(CONTEXT)),
+        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("left", CollapseOrParent, Some(CONTEXT)),
         KeyBinding::new("right", ExpandOrChild, Some(CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
@@ -280,6 +286,69 @@ pub fn moved_path(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
     })
 }
 
+/// `paths` without those inside another of them, which go along with it.
+fn outermost(paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|path| {
+            !paths
+                .iter()
+                .any(|other| other != *path && path.starts_with(other))
+        })
+        .cloned()
+        .collect()
+}
+
+/// What moving entries into a folder did: where each one went, and why it
+/// stopped short, if it did.
+#[derive(Debug, Default, PartialEq)]
+pub struct Moved {
+    pub moves: Vec<(PathBuf, PathBuf)>,
+    pub error: Option<String>,
+}
+
+/// Move each of `paths` into `dir`, keeping its name. Everything is checked
+/// first, so a name already taken or a folder dropped into one inside it
+/// moves nothing; entries already in `dir`, or `dir` itself, stay put.
+pub fn move_entries(paths: &[PathBuf], dir: &Path) -> Moved {
+    let name_of = |path: &Path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let paths: Vec<PathBuf> = outermost(paths)
+        .into_iter()
+        .filter(|path| path.parent() != Some(dir) && path != dir)
+        .collect();
+    let mut targets = HashSet::new();
+    for path in &paths {
+        let name = name_of(path);
+        let error = if dir.starts_with(path) {
+            Some(format!("{name} can't go inside itself."))
+        } else if dir.join(&name).exists() || !targets.insert(name.clone()) {
+            Some(format!("{name} already exists in {}.", name_of(dir)))
+        } else {
+            None
+        };
+        if error.is_some() {
+            return Moved {
+                moves: Vec::new(),
+                error,
+            };
+        }
+    }
+    let mut moved = Moved::default();
+    for path in paths {
+        let to = dir.join(name_of(&path));
+        if let Err(error) = std::fs::rename(&path, &to) {
+            moved.error = Some(format!("Could not move {}: {error}", name_of(&path)));
+            break;
+        }
+        moved.moves.push((path, to));
+    }
+    moved
+}
+
 /// The byte range of `name` without its extension, which a rename field
 /// starts with selected so typing keeps the extension. Dotfiles and
 /// folders are taken whole.
@@ -382,7 +451,14 @@ struct Naming {
 pub struct FileTree {
     model: TreeModel,
     naming: Option<Naming>,
+    /// The row the keyboard is on: the selection, or the last row added to
+    /// a selection of several.
     selected: Option<usize>,
+    /// Every selected row while there are several, picked with ⌘- or
+    /// Shift-click, Shift-arrows or ⌘A; empty while there's one.
+    marked: HashSet<PathBuf>,
+    /// Where a Shift range starts.
+    anchor: Option<PathBuf>,
     /// The file open in the editor, highlighted in the tree.
     active: Option<PathBuf>,
     focus_handle: FocusHandle,
@@ -395,6 +471,8 @@ impl FileTree {
             model: TreeModel::new(root),
             naming: None,
             selected: None,
+            marked: HashSet::new(),
+            anchor: None,
             active: None,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
@@ -434,8 +512,15 @@ impl FileTree {
     /// Mark `path` as the open file, expanding folders so it can be seen.
     pub fn set_active(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
         self.active = path.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+        let lead = self.selected_path();
         if let Some(ix) = path.and_then(|p| self.model.reveal(p)) {
-            self.selected = Some(ix);
+            // Revealing may have opened folders above the selection.
+            self.selected = lead.and_then(|lead| self.model.index_of(&lead));
+            if !self.is_selected(ix) {
+                self.selected = Some(ix);
+                self.marked.clear();
+                self.anchor = self.selected_path();
+            }
             self.scroll_handle
                 .scroll_to_item(ix, ScrollStrategy::Center);
         }
@@ -446,7 +531,53 @@ impl FileTree {
         let selected = self.selected_path();
         self.model.refresh();
         self.selected = selected.and_then(|path| self.model.index_of(&path));
+        self.forget_missing();
         cx.notify();
+    }
+
+    /// Drop selected rows that are gone, from disk or from view.
+    fn forget_missing(&mut self) {
+        let model = &self.model;
+        self.marked.retain(|path| model.index_of(path).is_some());
+        if self.marked.len() < 2 {
+            self.marked.clear();
+        }
+    }
+
+    /// The selected rows, top to bottom.
+    fn selection(&self) -> Vec<Row> {
+        if self.marked.is_empty() {
+            return self
+                .selected
+                .and_then(|ix| self.model.rows().get(ix))
+                .cloned()
+                .into_iter()
+                .collect();
+        }
+        self.model
+            .rows()
+            .iter()
+            .filter(|row| self.marked.contains(&row.path))
+            .cloned()
+            .collect()
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selection().into_iter().map(|row| row.path).collect()
+    }
+
+    #[cfg(test)]
+    pub fn selected_names(&self) -> Vec<String> {
+        self.selection().into_iter().map(|row| row.name).collect()
+    }
+
+    fn is_selected(&self, ix: usize) -> bool {
+        self.selected == Some(ix)
+            || self
+                .model
+                .rows()
+                .get(ix)
+                .is_some_and(|row| self.marked.contains(&row.path))
     }
 
     fn selected_path(&self) -> Option<PathBuf> {
@@ -455,11 +586,128 @@ impl FileTree {
             .map(|row| row.path.clone())
     }
 
+    /// Select just row `ix`.
     fn select(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.marked.clear();
+        self.selected = Some(ix);
+        self.anchor = self.selected_path();
+        self.scroll_handle
+            .scroll_to_item(ix, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    /// ⌘-click: add row `ix` to the selection, or take it out.
+    fn toggle_selected(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(path) = self.model.rows().get(ix).map(|row| row.path.clone()) else {
+            return;
+        };
+        if self.marked.is_empty() {
+            self.marked.extend(self.selected_path());
+        }
+        if self.marked.remove(&path) {
+            self.selected = self
+                .model
+                .rows()
+                .iter()
+                .position(|row| self.marked.contains(&row.path));
+        } else {
+            self.marked.insert(path.clone());
+            self.selected = Some(ix);
+        }
+        self.anchor = self.selected_path();
+        if self.marked.len() < 2 {
+            self.marked.clear();
+        }
+        cx.notify();
+    }
+
+    /// Shift-click or Shift-arrow: select every row from the anchor to `ix`.
+    fn extend_to(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let from = self
+            .anchor
+            .as_deref()
+            .and_then(|path| self.model.index_of(path))
+            .or(self.selected)
+            .unwrap_or(ix);
+        let range = from.min(ix)..=from.max(ix);
+        self.marked = self.model.rows()[range]
+            .iter()
+            .map(|row| row.path.clone())
+            .collect();
+        if self.marked.len() < 2 {
+            self.marked.clear();
+        }
+        if self.anchor.is_none() {
+            self.anchor = self.model.rows().get(from).map(|row| row.path.clone());
+        }
         self.selected = Some(ix);
         self.scroll_handle
             .scroll_to_item(ix, ScrollStrategy::Nearest);
         cx.notify();
+    }
+
+    fn extend_previous(&mut self, _: &ExtendPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        let ix = self.selected.map_or(0, |ix| ix.saturating_sub(1));
+        self.extend_to(ix, cx);
+    }
+
+    fn extend_next(&mut self, _: &ExtendNext, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(last) = self.model.rows().len().checked_sub(1) else {
+            return;
+        };
+        let ix = self.selected.map_or(0, |ix| (ix + 1).min(last));
+        self.extend_to(ix, cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.marked = self
+            .model
+            .rows()
+            .iter()
+            .map(|row| row.path.clone())
+            .collect();
+        if self.marked.len() < 2 {
+            self.marked.clear();
+        }
+        if self.selected.is_none() && !self.model.rows().is_empty() {
+            self.selected = Some(0);
+        }
+        cx.notify();
+    }
+
+    /// A press on row `ix`, before it's known to be a click or a drag. A
+    /// plain press inside a selection of several keeps it, so it can be
+    /// dragged; the click that follows, if it's one, selects just the row.
+    fn press_row(&mut self, ix: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
+        if modifiers.secondary() {
+            self.toggle_selected(ix, cx);
+        } else if modifiers.shift {
+            self.extend_to(ix, cx);
+        } else if !self.marked.is_empty() && self.is_selected(ix) {
+            self.selected = Some(ix);
+            cx.notify();
+        } else {
+            self.select(ix, cx);
+        }
+    }
+
+    fn click_row(
+        &mut self,
+        ix: usize,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_handle.focus(window, cx);
+        let modifiers = match event {
+            ClickEvent::Mouse(click) => click.down.modifiers,
+            _ => event.modifiers(),
+        };
+        if modifiers.secondary() || modifiers.shift {
+            return;
+        }
+        self.select(ix, cx);
+        self.activate(ix, cx);
     }
 
     /// Open a file, or expand or collapse a folder.
@@ -532,7 +780,14 @@ impl FileTree {
         }
     }
 
+    /// Escape: back to one selected row, then back to the code.
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.marked.is_empty() {
+            self.marked.clear();
+            self.anchor = self.selected_path();
+            cx.notify();
+            return;
+        }
         cx.emit(FileTreeEvent::Dismissed);
     }
 
@@ -565,6 +820,7 @@ impl FileTree {
 
     /// Turn the selected row into a name field to rename it.
     fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.marked.clear();
         let Some(row) = self
             .selected
             .and_then(|ix| self.model.rows().get(ix))
@@ -705,7 +961,12 @@ impl FileTree {
         cx: &mut Context<Self>,
     ) {
         self.cancel_new(cx);
-        self.selected = ix;
+        // Right-clicking inside a selection of several acts on all of it.
+        if ix.is_none_or(|ix| !self.is_selected(ix)) {
+            self.marked.clear();
+            self.selected = ix;
+            self.anchor = self.selected_path();
+        }
         // The menu's actions go to whatever has focus.
         self.focus_handle.focus(window, cx);
         cx.notify();
@@ -713,9 +974,11 @@ impl FileTree {
             .menu("New File…", Box::new(NewFileHere))
             .menu("New Folder…", Box::new(NewFolderHere));
         if ix.is_some() {
+            menu = menu.separator();
+            if self.marked.is_empty() {
+                menu = menu.menu("Rename…", Box::new(RenameSelected));
+            }
             menu = menu
-                .separator()
-                .menu("Rename…", Box::new(RenameSelected))
                 .menu("Move to Trash", Box::new(TrashSelected))
                 .separator()
                 .menu("Copy Path", Box::new(CopyPath))
@@ -738,24 +1001,33 @@ impl FileTree {
         self.start_rename(window, cx);
     }
 
-    /// Ask, then move the selected file or folder to the Trash. The Trash
-    /// keeps it, so this can be undone from there.
+    /// Ask, then move the selected files and folders to the Trash. The
+    /// Trash keeps them, so this can be undone from there.
     fn trash_selected(&mut self, _: &TrashSelected, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self
-            .selected
-            .and_then(|ix| self.model.rows().get(ix))
-            .cloned()
-        else {
-            return;
-        };
-        let detail = if row.is_dir {
-            "The folder and everything in it go to the Trash."
-        } else {
-            "It goes to the Trash."
+        let rows = self.selection();
+        let paths = outermost(&rows.iter().map(|row| row.path.clone()).collect::<Vec<_>>());
+        let (title, detail) = match rows.as_slice() {
+            [] => return,
+            [row] => (
+                format!("Move {} to the Trash?", row.name),
+                if row.is_dir {
+                    "The folder and everything in it go to the Trash."
+                } else {
+                    "It goes to the Trash."
+                },
+            ),
+            rows => (
+                format!("Move {} items to the Trash?", rows.len()),
+                if rows.iter().any(|row| row.is_dir) {
+                    "They go to the Trash, folders with everything in them."
+                } else {
+                    "They go to the Trash."
+                },
+            ),
         };
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Move {} to the Trash?", row.name),
+            &title,
             Some(detail),
             &["Move to Trash", "Cancel"],
             cx,
@@ -765,22 +1037,24 @@ impl FileTree {
                 return;
             }
             this.update_in(cx, |this, window, cx| {
-                match trash::delete(&row.path) {
-                    Ok(()) => {
-                        this.model.refresh();
-                        let last = this.model.rows().len().checked_sub(1);
-                        this.selected = this.selected.zip(last).map(|(ix, last)| ix.min(last));
-                        cx.emit(FileTreeEvent::Trashed(row.path));
-                    }
-                    Err(error) => {
-                        drop(window.prompt(
-                            PromptLevel::Critical,
-                            &format!("Could not move {} to the Trash.", row.name),
-                            Some(&error.to_string()),
-                            &["OK"],
-                            cx,
-                        ));
-                    }
+                let result = trash::delete_all(&paths);
+                this.model.refresh();
+                this.marked.clear();
+                let last = this.model.rows().len().checked_sub(1);
+                this.selected = this.selected.zip(last).map(|(ix, last)| ix.min(last));
+                this.anchor = this.selected_path();
+                // A failure part way may have trashed some already.
+                for path in paths.into_iter().filter(|path| !path.exists()) {
+                    cx.emit(FileTreeEvent::Trashed(path));
+                }
+                if let Err(error) = result {
+                    drop(window.prompt(
+                        PromptLevel::Critical,
+                        "Could not move everything to the Trash.",
+                        Some(&error.to_string()),
+                        &["OK"],
+                        cx,
+                    ));
                 }
                 this.focus_handle.focus(window, cx);
                 cx.notify();
@@ -790,17 +1064,83 @@ impl FileTree {
         .detach();
     }
 
-    fn copy_path(&mut self, _: &CopyPath, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(path) = self.selected_path() {
-            cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+    /// Move what's dragged into `dir`: the whole selection when the dragged
+    /// row is part of it, else just that row. Open tabs follow.
+    pub fn move_into(
+        &mut self,
+        dragged: &Path,
+        dir: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_new(cx);
+        let selection = self.selected_paths();
+        let paths = if selection.iter().any(|path| path == dragged) {
+            selection
+        } else {
+            vec![dragged.to_path_buf()]
+        };
+        let moved = move_entries(&paths, dir);
+        self.model.refresh();
+        if dir != self.model.root() {
+            self.model.set_expanded(dir, true);
+        }
+        self.marked = moved.moves.iter().map(|(_, to)| to.clone()).collect();
+        self.selected = moved
+            .moves
+            .first()
+            .and_then(|(_, to)| self.model.index_of(to))
+            .or_else(|| self.model.index_of(dragged));
+        self.anchor = self.selected_path();
+        self.forget_missing();
+        self.focus_handle.focus(window, cx);
+        for (from, to) in moved.moves {
+            cx.emit(FileTreeEvent::Renamed { from, to });
+        }
+        if let Some(error) = moved.error {
+            drop(window.prompt(PromptLevel::Critical, &error, None, &["OK"], cx));
+        }
+        cx.notify();
+    }
+
+    /// What a drag of `path` shows under the pointer.
+    fn drag_label(&self, path: &Path) -> SharedString {
+        let selection = self.selection();
+        if selection.len() > 1 && selection.iter().any(|row| row.path == path) {
+            return format!("{} items", selection.len()).into();
+        }
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into()
+    }
+
+    /// Copy the selected paths, one per line.
+    fn copy_paths(&self, relative: bool, cx: &mut Context<Self>) {
+        let root = self.model.root();
+        let lines: Vec<String> = self
+            .selected_paths()
+            .iter()
+            .map(|path| {
+                let path = if relative {
+                    path.strip_prefix(root).unwrap_or(path)
+                } else {
+                    path
+                };
+                path.display().to_string()
+            })
+            .collect();
+        if !lines.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(lines.join("\n")));
         }
     }
 
+    fn copy_path(&mut self, _: &CopyPath, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_paths(false, cx);
+    }
+
     fn copy_relative_path(&mut self, _: &CopyRelativePath, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(path) = self.selected_path() {
-            let relative = path.strip_prefix(self.model.root()).unwrap_or(&path);
-            cx.write_to_clipboard(ClipboardItem::new_string(relative.display().to_string()));
-        }
+        self.copy_paths(true, cx);
     }
 
     /// Show the selected entry, or the project folder, in the system's
@@ -820,6 +1160,32 @@ fn reveal_label() -> &'static str {
         "Reveal in File Explorer"
     } else {
         "Reveal in File Manager"
+    }
+}
+
+/// A row being dragged to another folder.
+struct DraggedEntry {
+    path: PathBuf,
+}
+
+/// What follows the pointer while rows are dragged: their name, or how
+/// many there are.
+struct DragPreview {
+    label: SharedString,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_0p5()
+            .rounded(px(5.))
+            .text_size(px(12.))
+            .bg(theme.sidebar_primary)
+            .text_color(theme.sidebar_primary_foreground)
+            .shadow_sm()
+            .child(self.label.clone())
     }
 }
 
@@ -915,7 +1281,8 @@ impl Render for FileTree {
                                 _ => list_ix,
                             };
                             let row = &this.model.rows()[ix];
-                            let selected = this.selected == Some(ix);
+                            let drop_fill = theme.sidebar_primary.opacity(0.25);
+                            let selected = this.is_selected(ix);
                             let active = this.active.as_ref() == Some(&row.path);
                             // Like a Finder sidebar: the accent fill marks the
                             // keyboard selection while the tree has focus, a
@@ -1017,11 +1384,44 @@ impl Render for FileTree {
                                 // previous selection until the click completes.
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| this.select(ix, cx)),
+                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        this.press_row(ix, event.modifiers, cx)
+                                    }),
                                 )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.focus_handle.focus(window, cx);
-                                    this.activate(ix, cx);
+                                .on_click(cx.listener(move |this, event, window, cx| {
+                                    this.click_row(ix, event, window, cx)
+                                }))
+                                .on_drag(
+                                    DraggedEntry {
+                                        path: row.path.clone(),
+                                    },
+                                    {
+                                        let tree = cx.entity().downgrade();
+                                        move |dragged, _, _, cx| {
+                                            let label = tree
+                                                .upgrade()
+                                                .map(|tree| tree.read(cx).drag_label(&dragged.path))
+                                                .unwrap_or_default();
+                                            cx.new(|_| DragPreview { label })
+                                        }
+                                    },
+                                )
+                                // Dropped on a folder, rows go into it; on a
+                                // file, beside it.
+                                .when(row.is_dir, |this| {
+                                    this.drag_over::<DraggedEntry>(move |style, _, _, _| {
+                                        style.bg(drop_fill)
+                                    })
+                                })
+                                .on_drop(cx.listener({
+                                    let dir = if row.is_dir {
+                                        row.path.clone()
+                                    } else {
+                                        row.path.parent().map(Path::to_path_buf).unwrap_or_default()
+                                    };
+                                    move |this, dragged: &DraggedEntry, window, cx| {
+                                        this.move_into(&dragged.path, &dir, window, cx)
+                                    }
                                 }))
                                 .on_mouse_down(
                                     MouseButton::Right,
@@ -1050,6 +1450,9 @@ impl Render for FileTree {
             .on_action(cx.listener(Self::cancel_naming))
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::extend_previous))
+            .on_action(cx.listener(Self::extend_next))
+            .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::collapse_or_parent))
             .on_action(cx.listener(Self::expand_or_child))
             .on_action(cx.listener(Self::open_selected))
@@ -1104,7 +1507,12 @@ impl Render for FileTree {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    // Rows stop the press, so this is the space below them.
+                    // Rows stop the drop and the press, so these are for
+                    // the space below them: the project folder.
+                    .on_drop(cx.listener(|this, dragged: &DraggedEntry, window, cx| {
+                        let root = this.model.root().to_path_buf();
+                        this.move_into(&dragged.path, &root, window, cx)
+                    }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -1122,7 +1530,10 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::{NewEntry, TreeModel, create_entry, moved_path, rename_entry, stem_range};
+    use super::{
+        Moved, NewEntry, TreeModel, create_entry, move_entries, moved_path, outermost,
+        rename_entry, stem_range,
+    };
 
     fn names(model: &TreeModel) -> Vec<String> {
         model
@@ -1281,6 +1692,56 @@ mod tests {
         );
         assert_eq!(moved_path(from, from, to), Some(to.into()));
         assert_eq!(moved_path(Path::new("/p/srcs/a.rs"), from, to), None);
+    }
+
+    #[test]
+    fn moves_entries_into_a_folder() {
+        let dir = project();
+        let root = dir.path();
+        let (readme, ui, empty) = (
+            root.join("README.md"),
+            root.join("src/ui"),
+            root.join("empty"),
+        );
+        let moved = move_entries(&[readme.clone(), ui.clone()], &empty);
+        assert_eq!(moved.error, None);
+        assert_eq!(
+            moved.moves,
+            [(readme, empty.join("README.md")), (ui, empty.join("ui"))]
+        );
+        assert!(
+            empty.join("ui/tree.rs").is_file(),
+            "a folder takes its contents"
+        );
+
+        let (src, main) = (root.join("src"), root.join("src/main.rs"));
+        assert_eq!(
+            move_entries(&[main.clone(), src.clone()], &src),
+            Moved::default(),
+            "what's already there, and the folder itself, stay put"
+        );
+        assert_eq!(
+            move_entries(std::slice::from_ref(&empty), &empty.join("ui")).error,
+            Some("empty can't go inside itself.".into())
+        );
+        fs::write(root.join("main.rs"), "").unwrap();
+        let taken = move_entries(&[empty.join("README.md"), main.clone()], root);
+        let root_name = root.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            taken.error,
+            Some(format!("main.rs already exists in {root_name}."))
+        );
+        assert!(taken.moves.is_empty() && main.is_file(), "nothing moves");
+        assert!(empty.join("README.md").is_file(), "not even the free names");
+    }
+
+    #[test]
+    fn entries_inside_a_moved_folder_go_with_it() {
+        let paths = ["/p/src".into(), "/p/src/a.rs".into(), "/p/b.rs".into()];
+        assert_eq!(
+            outermost(&paths),
+            [Path::new("/p/src"), Path::new("/p/b.rs")]
+        );
     }
 
     #[test]

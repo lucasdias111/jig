@@ -513,3 +513,74 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
     });
     assert!(!cx.update(|cx| workspace.read(cx).sidebar_open));
 }
+
+fn tree_selection(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+    cx.update(|cx| {
+        let tree = workspace.read(cx).tree.as_ref().unwrap().view.read(cx);
+        tree.selected_names()
+    })
+}
+
+#[gpui_kit::test]
+fn selecting_several_files_and_moving_them_moves_their_tabs(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+    std::fs::write(dir.path().join("a.rs"), ORIGINAL).unwrap();
+    std::fs::write(dir.path().join("b.rs"), "").unwrap();
+    std::fs::write(dir.path().join("c.rs"), "").unwrap();
+    let (window, workspace) = open(cx, &dir.path().join("a.rs"));
+
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-shift-e", cx);
+    });
+    assert_eq!(tree_selection(cx, &workspace), ["a.rs"]);
+    step(cx, window, |window, cx| {
+        window.press("shift-down", cx);
+        window.press("shift-down", cx);
+    });
+    assert_eq!(tree_selection(cx, &workspace), ["a.rs", "b.rs", "c.rs"]);
+    step(cx, window, |window, cx| window.press("shift-up", cx));
+    assert_eq!(tree_selection(cx, &workspace), ["a.rs", "b.rs"]);
+    step(cx, window, |window, cx| window.press("secondary-a", cx));
+    assert_eq!(
+        tree_selection(cx, &workspace),
+        ["lib", "a.rs", "b.rs", "c.rs"]
+    );
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(
+        tree_selection(cx, &workspace),
+        ["b.rs"],
+        "Escape goes back to one row"
+    );
+    assert!(
+        tree_focused(cx, window, &workspace),
+        "and stays in the tree"
+    );
+
+    step(cx, window, |window, cx| {
+        window.press("shift-up", cx);
+    });
+    let (ws, lib, a) = (
+        workspace.clone(),
+        dir.path().join("lib").canonicalize().unwrap(),
+        dir.path().join("a.rs").canonicalize().unwrap(),
+    );
+    let into = lib.clone();
+    step(cx, window, move |window, cx| {
+        let tree = ws.read(cx).tree.as_ref().unwrap().view.clone();
+        tree.update(cx, |tree, cx| tree.move_into(&a, &into, window, cx));
+    });
+    assert_eq!(
+        tree_rows(cx, &workspace),
+        ["lib", "  a.rs", "  b.rs", "c.rs"]
+    );
+    assert_eq!(tree_selection(cx, &workspace), ["a.rs", "b.rs"]);
+    cx.update(|cx| {
+        let ws = workspace.read(cx);
+        let open = ws.document().path.clone().unwrap();
+        assert_eq!(open.canonicalize().unwrap(), lib.join("a.rs"));
+        assert_eq!(ws.editor().text(cx), ORIGINAL);
+    });
+}
