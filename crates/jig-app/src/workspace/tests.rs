@@ -16,6 +16,7 @@ mod quick;
 mod session;
 mod tabs;
 mod tasks;
+mod update;
 
 use std::path::Path;
 use std::sync::Arc;

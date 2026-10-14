@@ -30,6 +30,7 @@ pub struct Settings {
     pub colors: ColorSettings,
     /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
     pub shortcuts: BTreeMap<String, String>,
+    pub updates: UpdateSettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +107,19 @@ impl Default for EditorSettings {
             autocomplete: true,
             selection_button: true,
         }
+    }
+}
+
+/// Whether Jig looks for a new version by itself, under `[updates]`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    pub automatic: bool,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { automatic: true }
     }
 }
 
@@ -424,6 +438,7 @@ mod tests {
         settings.languages.set_off("java", true);
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
+        settings.updates.automatic = false;
         settings.formatting.choose("python", Some("black"));
         settings.agent.using = "codex".into();
         settings

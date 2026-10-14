@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
+use jig_ai::process::NoWindow as _;
 use serde_json::{Value, json};
 
 use crate::debuggers::AdapterCommand;
@@ -66,6 +67,7 @@ impl Client {
     /// Start `adapter` in `cwd`, talking over its stdin and stdout.
     pub fn start(id: usize, adapter: &AdapterCommand, cwd: &Path, inbox: Inbox) -> Result<Self> {
         let mut child = Command::new(&adapter.program)
+            .no_window()
             .args(&adapter.args)
             .current_dir(cwd)
             .env("PATH", crate::lsp::search_path())
@@ -202,6 +204,7 @@ impl Server {
     /// Start `adapter`, whose arguments already name `port`, in `cwd`.
     pub fn start(adapter: &AdapterCommand, cwd: &Path, port: u16) -> Result<Self> {
         let child = Command::new(&adapter.program)
+            .no_window()
             .args(&adapter.args)
             .current_dir(cwd)
             .env("PATH", crate::lsp::search_path())

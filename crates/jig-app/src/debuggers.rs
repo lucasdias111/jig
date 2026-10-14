@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
+use jig_ai::process::NoWindow as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -222,6 +223,7 @@ impl Debugger {
                 .map(|(key, value)| Some((key.clone(), vars.expand_str(value).ok()?)))
                 .collect::<Option<Vec<_>>>()?;
             let status = Command::new(resolve_program(&words[0]).ok()?)
+                .no_window()
                 .args(&words[1..])
                 .envs(env)
                 .env("PATH", crate::lsp::search_path())
@@ -707,6 +709,7 @@ fn js_debug() -> Option<PathBuf> {
 /// shows its contents. Empty when there's no Rust toolchain.
 fn rust_init_commands(cwd: &Path) -> Vec<String> {
     let Some(sysroot) = Command::new("rustc")
+        .no_window()
         .args(["--print", "sysroot"])
         .current_dir(cwd)
         .env("PATH", crate::lsp::search_path())

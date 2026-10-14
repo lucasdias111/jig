@@ -1,5 +1,5 @@
 //! The Settings window (⌘,), laid out like a Mac app's: a sidebar of pages
-//! (Appearance, Editor, Languages, Keyboard, and Models, Jigs and Agent
+//! (Appearance, Editor, Languages, Keyboard, Updates, and Models, Jigs and Agent
 //! under AI) with a search field, and the chosen page as titled cards of
 //! rows. Languages and theme colors open pages of their own, with a back
 //! button in the title bar.
@@ -13,6 +13,7 @@ mod shortcuts_page;
 #[cfg(feature = "snapshots")]
 pub mod snapshots;
 mod ui;
+mod updates_page;
 
 use std::collections::HashMap;
 
@@ -40,6 +41,7 @@ const TEXT_CURSOR: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="
 const CODE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>"#;
 const KEYBOARD: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01"/><path d="M10 9h.01"/><path d="M14 9h.01"/><path d="M18 9h.01"/><path d="M6 13h.01"/><path d="M18 13h.01"/><path d="M10 13h4"/><path d="M7 16h10"/></svg>"#;
 const SPARKLES: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg>"#;
+const DOWNLOAD: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8"/><path d="m8 12 4 4 4-4"/></svg>"#;
 const COMMAND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>"#;
 
 /// The bar across the top, holding the traffic lights and the page's title.
@@ -55,6 +57,7 @@ pub enum Page {
     Editor,
     Languages,
     Keyboard,
+    Updates,
     Providers,
     JigMode,
     AgentMode,
@@ -62,11 +65,12 @@ pub enum Page {
 
 impl Page {
     /// In sidebar order; the pages from `Providers` on sit under "AI".
-    pub const ALL: [Page; 7] = [
+    pub const ALL: [Page; 8] = [
         Page::Appearance,
         Page::Editor,
         Page::Languages,
         Page::Keyboard,
+        Page::Updates,
         Page::Providers,
         Page::JigMode,
         Page::AgentMode,
@@ -78,6 +82,7 @@ impl Page {
             Page::Editor => "Editor",
             Page::Languages => "Languages",
             Page::Keyboard => "Keyboard",
+            Page::Updates => "Updates",
             Page::Providers => "Providers",
             Page::JigMode => "Jig mode",
             Page::AgentMode => "Agent mode",
@@ -90,6 +95,7 @@ impl Page {
             Page::Editor => TEXT_CURSOR,
             Page::Languages => CODE,
             Page::Keyboard => KEYBOARD,
+            Page::Updates => DOWNLOAD,
             Page::Providers => SPARKLES,
             Page::JigMode => COMMAND,
             Page::AgentMode => jig_commands::surface::AGENT_ICON,
@@ -212,7 +218,7 @@ pub fn is_settings_window(window: AnyWindowHandle, cx: &App) -> bool {
 }
 
 /// Run `action` in the frontmost editor window, bringing it forward.
-fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
+pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
     cx.defer(move |cx| {
         let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
         let Some(target) = windows
@@ -289,6 +295,7 @@ impl SettingsWindow {
             cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx)),
             cx.observe_global::<settings::AppSettings>(|_, cx| cx.notify()),
             cx.observe_global::<providers::Providers>(|_, cx| cx.notify()),
+            cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify()),
             // Jigs or providers may have been edited in the meantime.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -404,6 +411,7 @@ impl SettingsWindow {
             (Page::Languages, Some(Detail::Library)) => self.library_sections(cx),
             (Page::Languages, _) => self.languages_sections(cx),
             (Page::Keyboard, _) => self.shortcuts_sections(cx),
+            (Page::Updates, _) => self.updates_sections(cx),
             (Page::Providers, _) => self.providers_sections(cx),
             (Page::JigMode, _) => self.jig_mode_sections(cx),
             (Page::AgentMode, _) => self.agent_sections(cx),
@@ -875,6 +883,33 @@ mod tests {
         });
         draw(handle, cx);
         cx.update(|cx| providers::disconnect("ollama", cx).unwrap());
+        draw(handle, cx);
+    }
+
+    #[gpui_kit::test]
+    fn the_updates_page_draws_in_every_state(cx: &mut TestAppContext) {
+        use crate::update::{self, State, Version};
+        let handle = open_on(Nav::page(Page::Updates), cx);
+        let version = Version(9, 0, 0);
+        for state in [
+            State::Idle,
+            State::Checking,
+            State::UpToDate,
+            State::Downloading(version),
+            State::Ready {
+                version,
+                archive: "Jig.zip".into(),
+            },
+            State::Manual {
+                version,
+                reason: "Move Jig to your Applications folder.".into(),
+            },
+            State::Failed("Couldn't reach GitHub.".into()),
+        ] {
+            cx.update(|cx| update::set_for_test(state, cx));
+            draw(handle, cx);
+        }
+        cx.update(|cx| settings::update(cx, |s| s.updates.automatic = false));
         draw(handle, cx);
     }
 

@@ -4,6 +4,7 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
+use crate::update::CheckForUpdates;
 use crate::workspace::{
     AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
     DuplicateLine, EditAgents, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations,
@@ -33,7 +34,7 @@ pub fn init(cx: &mut App) {
             .update(cx, |_, window, cx| {
                 let detail = format!(
                     "Version {}\nAI jigs at the cursor.",
-                    env!("CARGO_PKG_VERSION")
+                    crate::update::current_version()
                 );
                 // Nothing to do with the answer.
                 drop(window.prompt(PromptLevel::Info, "Jig", Some(&detail), &["OK"], cx));
@@ -52,6 +53,7 @@ pub fn set(cx: &mut App) {
             "Jig",
             vec![
                 MenuItem::action("About Jig", About),
+                MenuItem::action("Check for Updates…", CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),

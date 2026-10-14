@@ -11,6 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use jig_ai::process::NoWindow as _;
 
 /// Untracked folders with more files than this aren't staged.
 pub const MAX_NEW_FOLDER_FILES: usize = 1000;
@@ -335,6 +336,7 @@ fn checked(output: Output) -> Result<Output> {
 fn command(dir: &Path) -> Command {
     let mut command = Command::new("git");
     command
+        .no_window()
         .arg("-C")
         .arg(dir)
         .args(["-c", "core.quotepath=off", "-c", "color.ui=false"])

@@ -1,7 +1,15 @@
 name: Release
 
-# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) builds
-# Jig.app and publishes it as a GitHub release.
+# Pushing a version tag (git tag v0.3.0 && git push origin v0.3.0) builds
+# Jig for macOS, Linux and Windows, signs each build and publishes them as a
+# GitHub release, which running copies of Jig then offer as an update.
+#
+# The tag must match the version in Cargo.toml: Jig compares the two, so a
+# mismatch would offer the same update forever.
+#
+# Signing needs the MINISIGN_KEY secret: the contents of the minisign secret
+# key whose public half is `PUBLIC_KEY` in crates/jig-app/src/update/release.rs.
+# Jig won't install a build that isn't signed with it.
 on:
   push:
     tags: ["v*"]
@@ -13,15 +21,90 @@ permissions:
   contents: write
 
 jobs:
-  macos:
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            asset: Jig-macos-arm64.zip
+          # The oldest Ubuntu runner, so the build runs on older glibc too.
+          - os: ubuntu-22.04
+            asset: Jig-linux-x86_64.tar.gz
+          - os: windows-latest
+            asset: Jig-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - name: Check the tag matches Cargo.toml
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match Cargo.toml's version $version" >&2
+            exit 1
+          fi
+      - name: Install GPUI's Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev \
+            libfontconfig1-dev libfreetype-dev libssl-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
-      - run: script/bundle-macos.sh
-      # ditto keeps the bundle's structure and permissions, which zip can lose.
-      - run: ditto -c -k --keepParent target/Jig.app Jig-macos-arm64.zip
+      - name: Build Jig.app
+        if: runner.os == 'macOS'
+        # ditto keeps the bundle's structure and permissions, which zip can lose.
+        run: |
+          script/bundle-macos.sh
+          ditto -c -k --keepParent target/Jig.app ${{ matrix.asset }}
+      - name: Build Jig
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release -p jig-app
+          tar -czf ${{ matrix.asset }} -C target/release Jig
+      - name: Build Jig.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release -p jig-app
+          Compress-Archive -Path target/release/Jig.exe -DestinationPath ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sign the builds
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+        # The trusted comment, which the key signs too, names the version and
+        # the build, so an older signed build can't pass as this one.
+        run: |
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "The MINISIGN_KEY secret isn't set, so the builds can't be signed." >&2
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          key=$(mktemp)
+          printf '%s\n' "$MINISIGN_KEY" > "$key"
+          version=${GITHUB_REF_NAME#v}
+          cd dist
+          for asset in *; do
+            minisign -S -s "$key" -m "$asset" -t "jig $version $asset" < /dev/null
+          done
+          rm -f "$key"
+          ls -l
       - uses: softprops/action-gh-release@v3
         with:
-          files: Jig-macos-arm64.zip
+          files: dist/*
           generate_release_notes: true

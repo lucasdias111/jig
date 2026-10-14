@@ -17,6 +17,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
 use gpui_kit::SharedString;
+#[cfg(windows)]
+use jig_ai::process::NoWindow as _;
 use regex::Regex;
 
 use crate::run_configs::RunConfig;
@@ -216,6 +218,7 @@ impl Process {
         // of its own, so the tree goes at once.
         #[cfg(not(unix))]
         let _ = Command::new("taskkill")
+            .no_window()
             .args(["/T", "/F", "/PID", &self.pid.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -244,7 +247,7 @@ pub fn shell_command(script: &str) -> Command {
         use std::os::windows::process::CommandExt as _;
         let mut command = Command::new("cmd");
         // cmd parses its own command line, so the script goes as written.
-        command.arg("/C").raw_arg(script);
+        command.no_window().arg("/C").raw_arg(script);
         command
     }
 }

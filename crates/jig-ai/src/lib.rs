@@ -10,6 +10,7 @@ mod http;
 pub mod keys;
 mod models;
 mod openai_compat;
+pub mod process;
 pub mod prompt;
 pub mod response;
 pub mod tasks;

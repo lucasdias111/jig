@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
+use jig_ai::process::NoWindow as _;
 use serde::Deserialize;
 
 /// How to get a tool: one text, or one per system.
@@ -79,6 +80,7 @@ pub fn run_installer(script: &str, dir: &Path) -> Result<()> {
     // Installers are sh scripts everywhere; on Windows, Git's sh runs them.
     let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
     let output = Command::new(sh)
+        .no_window()
         .arg("-c")
         .arg(&script)
         .current_dir(dir)

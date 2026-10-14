@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result, bail};
+use jig_ai::process::NoWindow as _;
 use serde::Deserialize;
 
 use crate::tools::{self, Help};
@@ -164,6 +165,7 @@ impl Formatter {
             .ok_or_else(|| format!("{} isn't installed.", self.name))?;
         let mut command = Command::new(program);
         command
+            .no_window()
             .args(self.args(file, root))
             .env("PATH", crate::lsp::search_path());
         if let Some(dir) = file.parent().filter(|dir| dir.is_dir()) {

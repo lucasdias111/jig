@@ -1,5 +1,10 @@
 //! Jig: a code editor where AI works through small commands at the cursor.
 
+// A windowed app on Windows, so no console window opens beside it. Debug
+// builds keep theirs, for what Jig prints there. Pipes an agent hands
+// `Jig --tasks-mcp` still reach it either way.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod agent;
 mod agents;
 mod brackets;
@@ -44,6 +49,7 @@ mod snippets;
 mod text_edits;
 mod theme;
 mod tools;
+mod update;
 mod workspace;
 
 use std::path::PathBuf;
@@ -93,6 +99,7 @@ fn main() {
             recent::init(cx);
             session::init(cx);
             agent::init(cx);
+            update::init(cx);
             theme::init(cx);
             theme::apply(None, cx);
             cx.bind_keys(workspace::key_bindings());

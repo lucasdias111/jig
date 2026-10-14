@@ -18,6 +18,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::{App, Global};
+use jig_ai::process::NoWindow as _;
 use serde::Deserialize;
 
 pub use client::{Client, Response};
@@ -243,7 +244,7 @@ pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
 fn command_for(server: &Server, root: &Path) -> Option<Command> {
     let (program, args) = program_for(server)?;
     let mut command = Command::new(program);
-    command.args(args).env("PATH", search_path());
+    command.no_window().args(args).env("PATH", search_path());
     if server.name == "jdtls" {
         command.arg("-data").arg(jdtls_data(root));
     }

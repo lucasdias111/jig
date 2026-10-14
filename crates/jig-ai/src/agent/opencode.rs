@@ -13,6 +13,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use crate::process::NoWindow as _;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
@@ -155,6 +156,7 @@ impl Server {
             command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
         }
         let mut child = command
+            .no_window()
             .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
             .env("OPENCODE_SERVER_PASSWORD", &password)
             .stdin(Stdio::null())

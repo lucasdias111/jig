@@ -9,6 +9,7 @@ use gpui_kit::App;
 use jig_ai::agent::acp::{AgentCommandLine, Connection};
 use jig_ai::agent::harness::Backend;
 use jig_ai::agent::opencode;
+use jig_ai::process::NoWindow as _;
 use serde_json::Value;
 
 use crate::agents::Kind;
@@ -213,6 +214,7 @@ pub fn open_in_terminal(command: &AgentCommandLine) -> anyhow::Result<()> {
         words.push(command.program.to_string_lossy().into_owned());
         words.extend(command.args.iter().cloned());
         std::process::Command::new("cmd")
+            .no_window()
             .args(words)
             .envs(command.env.iter().map(|(k, v)| (k, v)))
             .spawn()

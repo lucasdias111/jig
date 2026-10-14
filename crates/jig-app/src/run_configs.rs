@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result};
+use jig_ai::process::NoWindow as _;
 use serde::Deserialize;
 
 /// The project's own configurations, relative to its root.
@@ -221,6 +222,7 @@ struct Target {
 /// knows the workspace's members and the targets it infers from `src/bin`.
 fn cargo(root: &Path) -> Vec<RunConfig> {
     let output = Command::new(find_program("cargo").unwrap_or_else(|| "cargo".into()))
+        .no_window()
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(root)
         .env("PATH", crate::lsp::search_path())

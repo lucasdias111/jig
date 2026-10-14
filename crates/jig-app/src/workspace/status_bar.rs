@@ -3,10 +3,12 @@
 //! highlighted.
 
 use gpui_kit::component::input::EditorState;
-use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::*;
 
 use super::Workspace;
+use crate::update::{self, RestartToUpdate};
 use crate::{indentation, languages};
 
 pub(super) const HEIGHT: f32 = 24.;
@@ -75,10 +77,51 @@ impl Workspace {
                     .child(note.message.clone())
             }))
             .child(div().flex_1())
+            .children(render_update(cx))
             .child(tab.cursor.clone())
             .child(item(indentation::label(tab.indentation).into()))
             .child(item(tab.document.encoding().into()))
             .child(item(tab.document.line_ending().into()))
             .child(item(language.into()))
     }
+}
+
+/// "Restart to Update" once an update is downloaded, or where to get one
+/// this copy of Jig can't install itself.
+fn render_update(cx: &App) -> Option<AnyElement> {
+    let theme = cx.theme();
+    let (label, tooltip): (SharedString, SharedString) = match update::state(cx) {
+        update::State::Ready { version, .. } => (
+            "Restart to Update".into(),
+            format!("Jig {version} is downloaded").into(),
+        ),
+        update::State::Manual { version, reason } => {
+            (format!("Jig {version} Available").into(), reason.into())
+        }
+        _ => return None,
+    };
+    let ready = matches!(update::state(cx), update::State::Ready { .. });
+    let accent = theme.primary;
+    Some(
+        h_flex()
+            .id("update")
+            .debug_selector(|| "update".into())
+            .flex_none()
+            .h_full()
+            .px_1p5()
+            .gap_1()
+            .text_color(accent)
+            .hover(move |s| s.bg(accent.opacity(0.12)))
+            .child(Icon::new(IconName::ArrowDown).size(px(12.)))
+            .child(label)
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .on_click(move |_, window, cx| {
+                if ready {
+                    window.dispatch_action(Box::new(RestartToUpdate), cx);
+                } else {
+                    update::open_releases_page(cx);
+                }
+            })
+            .into_any_element(),
+    )
 }

@@ -338,6 +338,9 @@ impl Workspace {
         .detach();
         cx.observe_global::<crate::lsp::diagnostics::Diagnostics>(Self::problems_reported)
             .detach();
+        // A downloaded update shows in the status bar.
+        cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify())
+            .detach();
         // A running configuration would outlive Jig otherwise.
         cx.on_app_quit(|this, _| {
             this.stop_process();
@@ -615,6 +618,24 @@ impl Workspace {
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
         self.when_discard_ok(None, window, cx, |_, _, cx| cx.quit());
     }
+
+    /// Install the downloaded update and start it on this window's project
+    /// or file, as quitting would: unsaved changes are asked about first.
+    fn restart_to_update(
+        &mut self,
+        _: &crate::update::RestartToUpdate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.when_discard_ok(None, window, cx, |this, window, cx| {
+            let reopen = this
+                .project_root(cx)
+                .or_else(|| this.document().path.clone());
+            if let Err(error) = crate::update::restart(reopen, cx) {
+                this.show_error(&error, window, cx);
+            }
+        });
+    }
 }
 
 /// Jig's bindings. The ones Settings can change are in
@@ -679,6 +700,7 @@ impl Render for Workspace {
             // No background here: on macOS the window is translucent and
             // the sidebar lets it show; the editor side paints its own.
             .on_action(cx.listener(Self::quit))
+            .on_action(cx.listener(Self::restart_to_update))
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))

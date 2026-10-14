@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use crate::process::NoWindow as _;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
@@ -131,6 +132,7 @@ impl Connection {
     pub fn start(name: &str, command: &AgentCommandLine) -> Result<Arc<Self>> {
         let mut process = Command::new(&command.program);
         process
+            .no_window()
             .args(&command.args)
             .envs(command.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
