@@ -3,6 +3,7 @@ name = "jig-commands"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 gpui-kit.workspace = true

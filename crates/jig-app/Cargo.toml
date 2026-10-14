@@ -3,6 +3,7 @@ name = "jig-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 # Capitalised because an unbundled macOS app is named in the menu bar after
 # its executable.

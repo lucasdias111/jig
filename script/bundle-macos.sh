@@ -16,6 +16,15 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/Jig "$app/Contents/MacOS/Jig"
 cp assets/app-icon/Jig.icns "$app/Contents/Resources/Jig.icns"
+cp LICENSE "$app/Contents/Resources/LICENSE"
+# The licences of what's built in, which a release must carry; a local build
+# without cargo-about goes without (CI=true, as on GitHub, insists).
+if cargo about --version >/dev/null 2>&1 || [ "${CI:-}" = true ]; then
+    script/third-party-notices.sh
+    cp target/THIRD-PARTY-NOTICES.txt "$app/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+else
+    echo "Skipping THIRD-PARTY-NOTICES.txt: cargo-about isn't installed." >&2
+fi
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

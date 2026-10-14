@@ -1,0 +1,15 @@
+Jig includes third-party software, listed below with the licences it is
+used under. Jig itself is licensed under the Apache License 2.0.
+
+{{#each licenses}}
+================================================================================
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

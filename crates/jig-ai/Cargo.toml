@@ -3,6 +3,7 @@ name = "jig-ai"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 # No GPUI here: this crate is plain Rust so it can be tested on its own.
 [dependencies]
