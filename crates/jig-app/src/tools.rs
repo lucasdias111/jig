@@ -166,6 +166,8 @@ mod tests {
         assert_eq!(error.unwrap_err().to_string(), "Installing failed: nope");
     }
 
+    // Windows has no HOME, so paths there show in full.
+    #[cfg(unix)]
     #[test]
     fn home_folder_shows_as_a_tilde() {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap());
