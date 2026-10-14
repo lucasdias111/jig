@@ -72,3 +72,7 @@ anyhow = "1"
 #   base/kind.rs, base/element.rs).
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
+# SCSS's grammar passes GCC's -Wno-unused-parameter to every compiler, which
+# MSVC refuses, so Windows couldn't build. Here it's passed only where it's
+# taken (bindings/rust/build.rs).
+tree-sitter-scss = { path = "vendor/tree-sitter-scss" }
