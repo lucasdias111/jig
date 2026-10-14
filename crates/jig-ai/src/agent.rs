@@ -270,6 +270,22 @@ pub enum AgentEvent {
     /// Something it did that belongs in the transcript, e.g. a command it
     /// ran: "Ran `cargo test`".
     Did(String),
+    /// A subagent it started, known by the session it runs in, and what it
+    /// was given to do. Sent again as more is known; the last one counts.
+    Subagent {
+        id: String,
+        description: String,
+    },
+    /// A line of a subagent's own work, like [`AgentEvent::Did`].
+    SubagentDid {
+        id: String,
+        text: String,
+    },
+    /// A subagent finished, with what it said last: its report back.
+    SubagentDone {
+        id: String,
+        report: String,
+    },
     /// The commands and skills it offers, when it says.
     Commands(Vec<AgentCommand>),
     /// The agent finished; its closing words.

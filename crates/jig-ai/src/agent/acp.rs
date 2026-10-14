@@ -95,6 +95,12 @@ type Reply = Box<dyn FnOnce(Result<Value, RpcError>) + Send>;
 /// What the agent sends a session.
 enum Incoming {
     Update(Value),
+    /// An update from a subagent's session, handed to the conversation that
+    /// started it.
+    Subagent {
+        session: String,
+        update: Value,
+    },
     /// A request to Jig, answered later with [`Connection::respond`].
     Request {
         id: Value,
@@ -118,6 +124,9 @@ pub struct Connection {
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, Reply>>,
     sessions: Mutex<HashMap<String, Sender<Incoming>>>,
+    /// Each subagent's session, and the conversation's session it belongs
+    /// to, however deep it was started.
+    subagents: Mutex<HashMap<String, String>>,
     capabilities: Mutex<Value>,
     /// The commands it last said it has.
     commands: Mutex<Vec<AgentCommand>>,
@@ -158,6 +167,7 @@ impl Connection {
             next_id: AtomicU64::new(0),
             pending: Mutex::default(),
             sessions: Mutex::default(),
+            subagents: Mutex::default(),
             capabilities: Mutex::new(Value::Null),
             commands: Mutex::default(),
             models: Mutex::default(),
@@ -185,6 +195,9 @@ impl Connection {
                     "terminal": false,
                     // Jig opens a terminal for an agent's own login.
                     "auth": {"terminal": true},
+                    // Each subagent's work in a session of its own, shown
+                    // apart in the conversation (the ACP draft's subagents).
+                    "subagents": {},
                 },
                 "clientInfo": {"name": "jig", "title": "Jig", "version": env!("CARGO_PKG_VERSION")},
             }),
@@ -377,7 +390,13 @@ impl Connection {
             return;
         };
         let method = message["method"].as_str();
-        let session = message["params"]["sessionId"].as_str().map(str::to_string);
+        let mut session = message["params"]["sessionId"].as_str().map(str::to_string);
+        // A subagent's messages go to the conversation that started it;
+        // `subagent` keeps whose they are.
+        let subagent = session
+            .as_ref()
+            .and_then(|session| lock(&self.subagents).get(session).cloned())
+            .and_then(|conversation| session.replace(conversation));
         match (method, message.get("id")) {
             // An answer to Jig.
             (None, Some(id)) => {
@@ -407,7 +426,20 @@ impl Connection {
                 if update["sessionUpdate"] == "available_commands_update" {
                     *lock(&self.commands) = commands(&update["availableCommands"]);
                 }
-                self.route(session, Incoming::Update(update.clone()));
+                if update["sessionUpdate"] == "subagent_spawned"
+                    && let (Some(child), Some(conversation)) =
+                        (update["subagentSessionId"].as_str(), session.clone())
+                {
+                    lock(&self.subagents).insert(child.to_string(), conversation);
+                }
+                let incoming = match subagent {
+                    Some(session) => Incoming::Subagent {
+                        session,
+                        update: update.clone(),
+                    },
+                    None => Incoming::Update(update.clone()),
+                };
+                self.route(session, incoming);
             }
             // Reading is safe to answer at once, from the disk.
             (Some("fs/read_text_file"), Some(id)) => {
@@ -663,6 +695,11 @@ impl Session {
             match message {
                 Incoming::Update(update) => {
                     for event in turn.update(&update) {
+                        on_event(event);
+                    }
+                }
+                Incoming::Subagent { session, update } => {
+                    for event in turn.subagent_update(&session, &update) {
                         on_event(event);
                     }
                 }
@@ -1084,6 +1121,20 @@ impl ToolCall {
         }
     }
 
+    /// A line for any finished call, for a subagent's list of what it did.
+    fn summary(&self, directory: &str) -> String {
+        if let Some(done) = self.done(directory) {
+            return done;
+        }
+        let path = self.locations.first().map(|path| relative(path, directory));
+        match (self.kind.as_str(), path) {
+            ("read", Some(path)) => format!("Read {path}"),
+            ("edit", Some(path)) => format!("Edited {path}"),
+            _ if self.title.is_empty() => "Used a tool".into(),
+            _ => self.title.clone(),
+        }
+    }
+
     fn edited_path(&self, directory: &str) -> Option<String> {
         self.content
             .iter()
@@ -1105,6 +1156,8 @@ struct TurnState {
     written: Vec<PathBuf>,
     /// The agent's words, message by message.
     messages: Vec<(Option<String>, String)>,
+    /// Each subagent's words, by its session: the last is its report.
+    subagents: HashMap<String, Vec<(Option<String>, String)>>,
 }
 
 impl TurnState {
@@ -1116,6 +1169,7 @@ impl TurnState {
             reviewed: Vec::new(),
             written: Vec::new(),
             messages: Vec::new(),
+            subagents: HashMap::new(),
         }
     }
 
@@ -1148,33 +1202,96 @@ impl TurnState {
             "available_commands_update" => {
                 vec![AgentEvent::Commands(commands(&update["availableCommands"]))]
             }
-            "tool_call" | "tool_call_update" => {
-                let call = self.merge(update);
-                match call.status.as_str() {
-                    "completed" if call.kind == "edit" => {
-                        let asked = self.reviewed.contains(&call.id)
-                            || call.content.iter().any(|content| {
-                                content["path"].as_str().is_some_and(|path| {
-                                    self.written.iter().any(|w| w == Path::new(path))
-                                })
-                            });
-                        match call.edited_path(&self.directory) {
-                            Some(path) if !asked => {
-                                vec![AgentEvent::Did(format!("Edited {path} without asking"))]
-                            }
-                            _ => Vec::new(),
-                        }
-                    }
-                    "completed" => call
-                        .done(&self.directory)
-                        .map(AgentEvent::Did)
-                        .into_iter()
-                        .collect(),
-                    "failed" => Vec::new(),
-                    _ => vec![AgentEvent::Step(call.step(&self.directory))],
-                }
+            "tool_call" | "tool_call_update" => self.tool_call(update, None),
+            "subagent_spawned" => {
+                let text = |name: &str| update[name].as_str().unwrap_or_default().trim();
+                let description = [text("name"), text("task")]
+                    .into_iter()
+                    .find(|text| !text.is_empty())
+                    .unwrap_or("Subagent");
+                vec![AgentEvent::Subagent {
+                    id: text("subagentSessionId").to_string(),
+                    description: description.to_string(),
+                }]
+            }
+            "subagent_state_update" => {
+                let id = update["subagentSessionId"].as_str().unwrap_or_default();
+                let said = self.subagents.get(id).map(|messages| {
+                    messages
+                        .iter()
+                        .rev()
+                        .map(|(_, text)| text.trim())
+                        .find(|text| !text.is_empty())
+                        .unwrap_or_default()
+                        .to_string()
+                });
+                let report = match (said, update["state"].as_str()) {
+                    (Some(said), _) if !said.is_empty() => said,
+                    (_, Some("failed")) => "It failed.".into(),
+                    (_, Some("cancelled" | "disconnected")) => "It was stopped.".into(),
+                    _ => "Done.".into(),
+                };
+                vec![AgentEvent::SubagentDone {
+                    id: id.to_string(),
+                    report,
+                }]
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// An update from a subagent's session: its work goes under it, its
+    /// words become its report, and a subagent it starts is one more.
+    fn subagent_update(&mut self, session: &str, update: &Value) -> Vec<AgentEvent> {
+        match update["sessionUpdate"].as_str().unwrap_or_default() {
+            "agent_message_chunk" => {
+                add_chunk(
+                    self.subagents.entry(session.to_string()).or_default(),
+                    update,
+                );
+                Vec::new()
+            }
+            "tool_call" | "tool_call_update" => self.tool_call(update, Some(session)),
+            "subagent_spawned" | "subagent_state_update" => self.update(update),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A tool call of the agent's, or of one of its subagents: a step while
+    /// it runs, a line for the transcript once it's done. An edit made
+    /// without asking is always the conversation's own line, so it shows.
+    fn tool_call(&mut self, update: &Value, subagent: Option<&str>) -> Vec<AgentEvent> {
+        let call = self.merge(update);
+        match call.status.as_str() {
+            "completed" if call.kind == "edit" => {
+                let asked = self.reviewed.contains(&call.id)
+                    || call.content.iter().any(|content| {
+                        content["path"]
+                            .as_str()
+                            .is_some_and(|path| self.written.iter().any(|w| w == Path::new(path)))
+                    });
+                match call.edited_path(&self.directory) {
+                    Some(path) if !asked => {
+                        vec![AgentEvent::Did(format!("Edited {path} without asking"))]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            // A subagent's work is listed in full, reading included: it's
+            // the only way to see what it did.
+            "completed" => match subagent {
+                Some(id) => vec![AgentEvent::SubagentDid {
+                    id: id.to_string(),
+                    text: call.summary(&self.directory),
+                }],
+                None => call
+                    .done(&self.directory)
+                    .map(AgentEvent::Did)
+                    .into_iter()
+                    .collect(),
+            },
+            "failed" => Vec::new(),
+            _ => vec![AgentEvent::Step(call.step(&self.directory))],
         }
     }
 
@@ -1449,6 +1566,80 @@ read -r line
             "content": [{"type": "diff", "path": "/p/src/b.rs", "newText": "b"}],
         }));
         assert!(events.is_empty(), "it was reviewed");
+    }
+
+    #[test]
+    fn a_subagents_work_and_report_are_its_own() {
+        let mut turn = TurnState::new("/p", Permissions::default());
+        let spawned = turn.update(&json!({
+            "sessionUpdate": "subagent_spawned", "subagentSessionId": "s1",
+            "name": "Find the loader", "task": "Look for where config is read", "capabilities": {},
+        }));
+        assert_eq!(
+            spawned,
+            [AgentEvent::Subagent {
+                id: "s1".into(),
+                description: "Find the loader".into()
+            }]
+        );
+
+        // Its reads and searches are listed under it, not the conversation.
+        let read = turn.subagent_update(
+            "s1",
+            &json!({
+                "sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read", "status": "completed",
+                "title": "Read", "locations": [{"path": "/p/src/config.rs"}],
+            }),
+        );
+        assert_eq!(
+            read,
+            [AgentEvent::SubagentDid {
+                id: "s1".into(),
+                text: "Read src/config.rs".into()
+            }]
+        );
+        let ran = turn.subagent_update(
+            "s1",
+            &json!({
+                "sessionUpdate": "tool_call", "toolCallId": "x1", "kind": "execute", "status": "completed",
+                "rawInput": {"command": "rg load"},
+            }),
+        );
+        assert_eq!(
+            ran,
+            [AgentEvent::SubagentDid {
+                id: "s1".into(),
+                text: "Ran `rg load`".into()
+            }]
+        );
+
+        // Its words are its report, not the conversation's reply.
+        let chunk = json!({"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": "It's in config.rs."}});
+        turn.subagent_update("s1", &chunk);
+        assert_eq!(turn.reply(), "");
+        let done = turn.update(&json!({
+            "sessionUpdate": "subagent_state_update", "subagentSessionId": "s1", "state": "completed",
+        }));
+        assert_eq!(
+            done,
+            [AgentEvent::SubagentDone {
+                id: "s1".into(),
+                report: "It's in config.rs.".into()
+            }]
+        );
+
+        // An edit it makes without asking still shows in the conversation.
+        let edited = turn.subagent_update(
+            "s1",
+            &json!({
+                "sessionUpdate": "tool_call_update", "toolCallId": "e1", "kind": "edit", "status": "completed",
+                "content": [{"type": "diff", "path": "/p/src/a.rs", "newText": "b"}],
+            }),
+        );
+        assert_eq!(
+            edited,
+            [AgentEvent::Did("Edited src/a.rs without asking".into())]
+        );
     }
 
     #[test]

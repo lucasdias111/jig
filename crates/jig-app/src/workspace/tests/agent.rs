@@ -1183,3 +1183,65 @@ fn an_edit_in_the_conversation_opens_to_its_diff(cx: &mut TestAppContext) {
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-diff-1").is_some(), "open");
 }
+
+#[gpui_kit::test]
+fn a_subagents_work_has_a_row_of_its_own(cx: &mut TestAppContext) {
+    use jig_ai::agent::AgentEvent;
+    let (_dir, window, workspace) = three_files(cx);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            for event in [
+                AgentEvent::Did("Ran `ls`".into()),
+                AgentEvent::Subagent {
+                    id: "s1".into(),
+                    description: "Find the loader".into(),
+                },
+                AgentEvent::SubagentDid {
+                    id: "s1".into(),
+                    text: "Read src/config.rs".into(),
+                },
+                AgentEvent::SubagentDid {
+                    id: "s1".into(),
+                    text: "Ran `rg load`".into(),
+                },
+                AgentEvent::Did("Ran `cargo check`".into()),
+                AgentEvent::SubagentDone {
+                    id: "s1".into(),
+                    report: "It's in config.rs.".into(),
+                },
+            ] {
+                this.test_agent_request(event, window, cx);
+            }
+        })
+    });
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(
+        entries[1..],
+        [
+            ChatEntry::Did("Ran `ls`".into()),
+            ChatEntry::Subagent {
+                id: "s1".into(),
+                description: "Find the loader".into(),
+                calls: vec!["Read src/config.rs".into(), "Ran `rg load`".into()],
+                report: Some("It's in config.rs.".into()),
+            },
+            ChatEntry::Did("Ran `cargo check`".into()),
+        ],
+        "its work under it, the agent's own lines apart"
+    );
+
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(
+        vcx.debug_bounds("agent-subagent-work-2").is_none(),
+        "folded"
+    );
+    let row = vcx
+        .debug_bounds("agent-subagent-2")
+        .expect("the subagent's row");
+    vcx.simulate_click(row.center(), gpui_kit::Modifiers::none());
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-subagent-work-2").is_some(), "open");
+}

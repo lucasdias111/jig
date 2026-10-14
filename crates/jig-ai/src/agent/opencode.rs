@@ -467,7 +467,7 @@ impl Session {
             }
         }
 
-        let sessions = RefCell::new(HashSet::from([self.id.clone()]));
+        let sessions = RefCell::new(Sessions::new(&self.id));
         let reader = BufReader::new(events.into_body().into_reader());
         for line in reader.lines() {
             let line = line.context("lost the connection to OpenCode")?;
@@ -495,11 +495,7 @@ impl Session {
     /// Turn one server event into something the UI cares about. Events of
     /// the subagents it starts count too: their edits wait for the user
     /// like its own.
-    fn interpret(
-        &self,
-        event: &Value,
-        sessions: &RefCell<HashSet<String>>,
-    ) -> Result<Option<AgentEvent>> {
+    fn interpret(&self, event: &Value, sessions: &RefCell<Sessions>) -> Result<Option<AgentEvent>> {
         let properties = &event["properties"];
         let kind = event["type"].as_str().unwrap_or_default();
         if matches!(kind, "session.created" | "session.updated")
@@ -507,17 +503,21 @@ impl Session {
                 properties["info"]["id"].as_str(),
                 properties["info"]["parentID"].as_str(),
             )
-            && sessions.borrow().contains(parent)
+            && sessions.borrow_mut().adopt(id, parent)
         {
-            sessions.borrow_mut().insert(id.to_string());
+            return Ok(Some(AgentEvent::Subagent {
+                id: id.to_string(),
+                description: subagent_title(properties["info"]["title"].as_str().unwrap_or("")),
+            }));
         }
         let session = properties["sessionID"]
             .as_str()
             .or_else(|| properties["part"]["sessionID"].as_str());
-        if !session.is_some_and(|session| sessions.borrow().contains(session)) {
+        if !session.is_some_and(|session| sessions.borrow().follows(session)) {
             return Ok(None);
         }
         let ours = session == Some(self.id.as_str());
+        let subagent = session.filter(|_| !ours);
         Ok(match kind {
             "session.idle" if ours => Some(AgentEvent::Done(String::new())),
             "session.error" if ours => {
@@ -571,15 +571,36 @@ impl Session {
             "message.part.updated" => {
                 let part = &properties["part"];
                 let tool = part["tool"].as_str().unwrap_or_default();
-                match part["state"]["status"].as_str() {
-                    Some("running") if part["type"] == "tool" => Some(AgentEvent::Step(describe(
-                        tool,
-                        &part["state"]["input"],
-                        &self.directory,
-                    ))),
-                    Some("completed") if part["type"] == "tool" => {
-                        did(tool, &part["state"]["input"]).map(AgentEvent::Did)
+                let state = &part["state"];
+                // The `task` tool starts a subagent; its child session tells
+                // them apart, its output is what the subagent reported.
+                let child = state["metadata"]["sessionId"].as_str();
+                match (state["status"].as_str(), child) {
+                    (Some("running"), Some(child)) if tool == "task" => {
+                        Some(AgentEvent::Subagent {
+                            id: child.to_string(),
+                            description: state["input"]["description"]
+                                .as_str()
+                                .unwrap_or("Subagent")
+                                .to_string(),
+                        })
                     }
+                    (Some("completed" | "error"), Some(child)) if tool == "task" => {
+                        Some(AgentEvent::SubagentDone {
+                            id: child.to_string(),
+                            report: task_report(state),
+                        })
+                    }
+                    (Some("running"), _) if part["type"] == "tool" => Some(AgentEvent::Step(
+                        describe(tool, &state["input"], &self.directory),
+                    )),
+                    (Some("completed"), _) if part["type"] == "tool" => match subagent {
+                        Some(id) => Some(AgentEvent::SubagentDid {
+                            id: id.to_string(),
+                            text: subagent_did(tool, &state["input"], &self.directory),
+                        }),
+                        None => did(tool, &state["input"]).map(AgentEvent::Did),
+                    },
                     _ => None,
                 }
             }
@@ -794,6 +815,81 @@ fn did(tool: &str, input: &Value) -> Option<String> {
     })
 }
 
+/// The sessions a turn follows: the conversation's own, and its
+/// subagents', each started in a child session (and theirs, as deep as
+/// they go), each subagent known by its session.
+struct Sessions {
+    own: String,
+    subagents: HashSet<String>,
+}
+
+impl Sessions {
+    fn new(own: &str) -> Self {
+        Self {
+            own: own.to_string(),
+            subagents: HashSet::new(),
+        }
+    }
+
+    /// Follow `id` if it's a child of a session followed. True when it's
+    /// newly a subagent.
+    fn adopt(&mut self, id: &str, parent: &str) -> bool {
+        self.follows(parent) && id != self.own && self.subagents.insert(id.to_string())
+    }
+
+    fn follows(&self, session: &str) -> bool {
+        session == self.own || self.subagents.contains(session)
+    }
+}
+
+/// A child session's title without what OpenCode adds to it: "Find the
+/// loader (@explore subagent)" is "Find the loader".
+fn subagent_title(title: &str) -> String {
+    let title = match title.rfind(" (@") {
+        Some(at) if title.ends_with(')') => &title[..at],
+        _ => title,
+    };
+    match title.trim() {
+        "" => "Subagent".into(),
+        title => title.to_string(),
+    }
+}
+
+/// What a subagent reported: the `task` tool's output, without the session
+/// details OpenCode appends for the agent.
+fn task_report(state: &Value) -> String {
+    let output = state["output"]
+        .as_str()
+        .or_else(|| state["error"].as_str())
+        .unwrap_or_default();
+    let output = output
+        .find("<task_metadata>")
+        .map_or(output, |at| &output[..at]);
+    match output.trim() {
+        "" => "Done.".into(),
+        output => output.to_string(),
+    }
+}
+
+/// A line for any finished call of a subagent's, reading and searching
+/// included: it's the only way to see what it did.
+fn subagent_did(tool: &str, input: &Value, directory: &str) -> String {
+    if let Some(line) = did(tool, input) {
+        return line;
+    }
+    let path = || relative(&path_of(input), directory);
+    match tool {
+        "read" => format!("Read {}", path()),
+        "list" => format!("Listed {}", path()),
+        tool if is_edit(tool) => format!("Edited {}", path()),
+        "glob" | "grep" => format!(
+            "Searched for {}",
+            input["pattern"].as_str().unwrap_or("files")
+        ),
+        other => format!("Used {other}"),
+    }
+}
+
 fn path_of(input: &Value) -> String {
     input["filePath"]
         .as_str()
@@ -869,6 +965,42 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subagents_are_followed_by_their_sessions() {
+        let mut sessions = Sessions::new("ses_own");
+        assert!(sessions.adopt("ses_a", "ses_own"), "a subagent");
+        assert!(!sessions.adopt("ses_a", "ses_own"), "known already");
+        assert!(sessions.adopt("ses_b", "ses_a"), "a subagent's subagent");
+        assert!(
+            !sessions.adopt("ses_c", "ses_other"),
+            "another conversation's"
+        );
+        assert!(sessions.follows("ses_own") && sessions.follows("ses_b"));
+        assert!(!sessions.follows("ses_c"));
+    }
+
+    #[test]
+    fn a_subagent_is_shown_by_its_task_and_report() {
+        assert_eq!(
+            subagent_title("Find the loader (@explore subagent)"),
+            "Find the loader"
+        );
+        assert_eq!(subagent_title(""), "Subagent");
+        let state = json!({
+            "status": "completed",
+            "output": "It's in config.rs.\n\n<task_metadata>\nsession_id: ses_a\n</task_metadata>",
+        });
+        assert_eq!(task_report(&state), "It's in config.rs.");
+        assert_eq!(
+            subagent_did("read", &json!({"filePath": "/p/src/a.rs"}), "/p"),
+            "Read src/a.rs"
+        );
+        assert_eq!(
+            subagent_did("bash", &json!({"command": "cargo test"}), "/p"),
+            "Ran `cargo test`"
+        );
+    }
 
     #[test]
     fn describes_tool_calls_relative_to_the_project() {

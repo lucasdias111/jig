@@ -174,6 +174,35 @@ struct PendingEdit {
     before: String,
 }
 
+impl AgentRun {
+    /// The transcript's row for subagent `id`: its description, what it
+    /// did and its report, added when it's first heard of.
+    fn subagent(&mut self, id: &str) -> (&mut String, &mut Vec<String>, &mut Option<String>) {
+        let found = self.entries.iter().position(
+            |entry| matches!(entry, ChatEntry::Subagent { id: known, .. } if known == id),
+        );
+        let at = found.unwrap_or_else(|| {
+            self.entries.push(ChatEntry::Subagent {
+                id: id.to_string(),
+                description: "Subagent".into(),
+                calls: Vec::new(),
+                report: None,
+            });
+            self.scroll.scroll_to_bottom();
+            self.entries.len() - 1
+        });
+        match &mut self.entries[at] {
+            ChatEntry::Subagent {
+                description,
+                calls,
+                report,
+                ..
+            } => (description, calls, report),
+            _ => unreachable!("found as a subagent"),
+        }
+    }
+}
+
 impl Drop for AgentRun {
     /// Cancelled (Esc, another command, switching tabs): stop the agent.
     fn drop(&mut self) {
@@ -1697,6 +1726,20 @@ impl Workspace {
                     ChatEntry::Did(text)
                 });
                 agent.scroll.scroll_to_bottom();
+                cx.notify();
+            }
+            Message::Event(AgentEvent::Subagent { id, description }) => {
+                let (named, _, _) = agent.subagent(&id);
+                *named = description;
+                agent.step.set("Working with a subagent".into());
+                cx.notify();
+            }
+            Message::Event(AgentEvent::SubagentDid { id, text }) => {
+                agent.subagent(&id).1.push(text);
+                cx.notify();
+            }
+            Message::Event(AgentEvent::SubagentDone { id, report }) => {
+                *agent.subagent(&id).2 = Some(report);
                 cx.notify();
             }
             Message::Event(AgentEvent::Done(text)) => {

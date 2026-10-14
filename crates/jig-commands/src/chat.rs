@@ -13,7 +13,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -45,6 +45,14 @@ pub enum ChatEntry {
     },
     /// Something the agent did besides editing, e.g. "Ran `cargo test`".
     Did(String),
+    /// A subagent it started: what it was given to do, each thing it did,
+    /// and once it's done, its report back. Opened from its row.
+    Subagent {
+        id: String,
+        description: String,
+        calls: Vec<String>,
+        report: Option<String>,
+    },
     /// Something that happened to the run, e.g. "Stopped."
     Note(String),
     Error(String),
@@ -833,6 +841,15 @@ fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -
                 rows.push(edit_with_diff(index, path, accepted, diff, window, cx));
                 continue;
             }
+            ChatEntry::Subagent {
+                description,
+                calls,
+                report,
+                ..
+            } => {
+                rows.push(subagent(index, description, calls, report, window, cx));
+                continue;
+            }
             entry => {
                 rows.push(render_entry(index, entry, cx));
                 continue;
@@ -955,6 +972,98 @@ fn edit_with_diff(
         .into_any_element()
 }
 
+/// Tallest a subagent's work grows, opened, before it scrolls.
+const SUBAGENT_HEIGHT: f32 = 260.;
+
+/// A subagent's row: what it was given, how much it did, and a spinner
+/// while it works; a click opens what it did and its report.
+fn subagent(
+    index: usize,
+    description: String,
+    calls: Vec<String>,
+    report: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let open = window.use_keyed_state(("jig-agent-subagent-open", index), cx, |_, _| false);
+    let is_open = *open.read(cx);
+    let theme = cx.theme();
+    let muted = theme.muted_foreground;
+    let accent = crate::surface::lane_accent(true, cx);
+    let working = report.is_none();
+    let count = match calls.len() {
+        0 => String::new(),
+        1 => "· 1 tool".into(),
+        n => format!("· {n} tools"),
+    };
+    let row = h_flex()
+        .id(("jig-agent-subagent", index))
+        .debug_selector(move || format!("agent-subagent-{index}"))
+        .gap_1p5()
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(|this| this.text_color(theme.foreground))
+        .on_click(move |_, _, cx| {
+            open.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })
+        })
+        .child(
+            gpui_kit::component::Icon::default()
+                .data(if is_open { CHEVRON_DOWN } else { CHEVRON })
+                .size(px(11.))
+                .text_color(muted),
+        )
+        .child(div().flex_none().text_color(accent).child("Subagent"))
+        .child(div().min_w_0().truncate().child(description))
+        .child(div().flex_none().child(count))
+        .when(working, |this| {
+            this.child(Spinner::new().color(accent).xsmall())
+        });
+    let body = is_open.then(|| {
+        v_flex()
+            .id(("jig-agent-subagent-work", index))
+            .debug_selector(move || format!("agent-subagent-work-{index}"))
+            .max_h(px(SUBAGENT_HEIGHT))
+            .overflow_y_scroll()
+            .ml(px(5.))
+            .pl(px(10.))
+            .gap_1()
+            .border_l_1()
+            .border_color(theme.border)
+            .children(
+                calls
+                    .into_iter()
+                    .map(|call| div().text_xs().text_color(muted).child(call)),
+            )
+            .when(working, |this| {
+                this.child(div().text_xs().text_color(muted).child("Working…"))
+            })
+            .when_some(report, |this, report| {
+                this.child(
+                    v_flex()
+                        .pt_1()
+                        .gap_0p5()
+                        .child(div().text_xs().text_color(muted).child("Reported"))
+                        .child(
+                            div().text_sm().child(
+                                TextView::markdown(("jig-agent-subagent-report", index), report)
+                                    .style(TextViewStyle::default().paragraph_gap(rems(0.4)))
+                                    .selectable(true),
+                            ),
+                        ),
+                )
+            })
+    });
+    v_flex()
+        .gap_1()
+        .child(row)
+        .children(body)
+        .into_any_element()
+}
+
 /// Tallest an edit's diff grows before it scrolls.
 const DIFF_HEIGHT: f32 = 220.;
 
@@ -1036,6 +1145,12 @@ fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
                 .selectable(true)
                 .into_any_element()
         }
+        // Drawn by `subagent`, which keeps whether it's open.
+        ChatEntry::Subagent { description, .. } => div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("Subagent: {description}"))
+            .into_any_element(),
         ChatEntry::Did(text) => div()
             .text_xs()
             .text_color(theme.muted_foreground)

@@ -66,6 +66,9 @@ fn main() -> anyhow::Result<()> {
             replier.answer(&request.id, None).unwrap();
         }
         AgentEvent::Did(text) => println!("{text}"),
+        AgentEvent::Subagent { id, description } => println!("subagent {id}: {description}"),
+        AgentEvent::SubagentDid { id, text } => println!("  [{id}] {text}"),
+        AgentEvent::SubagentDone { id, report } => println!("subagent {id} done: {report}"),
         AgentEvent::Commands(_) => {}
         AgentEvent::Done(text) => println!("done: {text}"),
     })
