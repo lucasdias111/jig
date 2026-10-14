@@ -338,6 +338,8 @@ impl Workspace {
         .detach();
         cx.observe_global::<crate::lsp::diagnostics::Diagnostics>(Self::problems_reported)
             .detach();
+        cx.observe_global::<crate::lsp::Failures>(Self::server_failed)
+            .detach();
         // A downloaded update shows in the status bar.
         cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify())
             .detach();

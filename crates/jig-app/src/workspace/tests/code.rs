@@ -168,6 +168,53 @@ fn var_after_an_expression_names_it(cx: &mut TestAppContext) {
     cx.update(|cx| assert!(workspace.read(cx).tab().snippet.is_none()));
 }
 
+/// A rustup proxy with no rust-analyzer for the toolchain exits at once:
+/// the status bar says so, rather than hover and the rest quietly not
+/// working.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_server_that_cant_start_says_why(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let server = crate::lsp::server_for("rust").unwrap();
+    let root = crate::lsp::root_for(server, &path);
+    let client = crate::lsp::Client::start(
+        "rust-analyzer",
+        root.clone(),
+        serde_json::Value::Null,
+        || {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "echo \"error: Unknown binary 'rust-analyzer'\" >&2"]);
+            Some(command)
+        },
+    );
+    let (window, workspace) = open(cx, dir.path());
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    open_file(cx, window, &workspace, &path);
+    let note = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let workspace = workspace.read(cx);
+            workspace
+                .status_note
+                .as_ref()
+                .map(|note| note.message.to_string())
+        })
+    };
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if note(cx).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        note(cx).as_deref(),
+        Some("rust-analyzer didn't start: Unknown binary 'rust-analyzer'")
+    );
+}
+
 #[gpui_kit::test]
 fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
     use serde_json::json;

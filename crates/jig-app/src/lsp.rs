@@ -125,14 +125,25 @@ pub struct Registry {
     /// Where every server's problems go, on their way to
     /// [`diagnostics::Diagnostics`].
     diagnostics: Option<futures::channel::mpsc::UnboundedSender<diagnostics::Published>>,
+    /// Where servers say they stopped before they started, on their way to
+    /// [`Failures`].
+    failures: Option<futures::channel::mpsc::UnboundedSender<()>>,
 }
 
 impl Global for Registry {}
+
+/// Bumped when a server stops before it has started, for workspaces to say
+/// why ([`Client::failure`]) rather than quietly go without it.
+#[derive(Default)]
+pub struct Failures(pub u64);
+
+impl Global for Failures {}
 
 /// Use `client` for `server`'s files under `root`, for tests.
 #[cfg(test)]
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
     client.on_diagnostics(diagnostics_sink(cx));
+    client.on_failure(failures_sink(cx));
     cx.default_global::<Registry>()
         .clients
         .insert((server, root), client);
@@ -155,6 +166,24 @@ fn diagnostics_sink(
     })
     .detach();
     cx.default_global::<Registry>().diagnostics = Some(sink.clone());
+    sink
+}
+
+/// The channel servers' threads say they failed down, read on the main
+/// thread into [`Failures`].
+fn failures_sink(cx: &mut App) -> futures::channel::mpsc::UnboundedSender<()> {
+    if let Some(sink) = &cx.default_global::<Registry>().failures {
+        return sink.clone();
+    }
+    let (sink, mut failures) = futures::channel::mpsc::unbounded();
+    cx.spawn(async move |cx| {
+        use futures::StreamExt as _;
+        while failures.next().await.is_some() {
+            cx.update(|cx| cx.default_global::<Failures>().0 += 1);
+        }
+    })
+    .detach();
+    cx.default_global::<Registry>().failures = Some(sink.clone());
     sink
 }
 
@@ -183,7 +212,18 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     });
     registry.clients.insert(key, client.clone());
     client.on_diagnostics(diagnostics_sink(cx));
+    client.on_failure(failures_sink(cx));
     (!client.is_dead()).then_some(client)
+}
+
+/// Why `file`'s server stopped before it started, if it did.
+pub fn failure_for(file: &Path, language: &str, cx: &App) -> Option<String> {
+    let server = server_for(language)?;
+    let root = root_for(server, &std::path::absolute(file).ok()?);
+    cx.try_global::<Registry>()?
+        .clients
+        .get(&(server.name.as_str(), root))?
+        .failure()
 }
 
 /// Whether `server`, by name, is installed.

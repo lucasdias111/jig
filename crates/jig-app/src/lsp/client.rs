@@ -4,7 +4,7 @@
 //! queue, so callers never have to. A reader thread routes responses to
 //! whoever asked and answers the few requests servers send back.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -43,6 +43,12 @@ struct State {
     formatting: Formatting,
     /// Where the problems it reports go.
     diagnostics: Option<channel::UnboundedSender<Published>>,
+    /// It answered `initialize`, so exiting later isn't failing to start.
+    started: bool,
+    /// Why it stopped before it started, in its own words.
+    failure: Option<String>,
+    /// Told once it fails to start.
+    on_failure: Option<channel::UnboundedSender<()>>,
 }
 
 struct Document {
@@ -84,6 +90,9 @@ enum Phase {
 }
 
 const INITIALIZE_ID: i64 = 0;
+/// How much of what a server writes to stderr is kept, to say why it
+/// stopped.
+const STDERR_LINES: usize = 5;
 
 impl Client {
     /// Start a server in `root` with the command `command` makes, on a
@@ -106,16 +115,22 @@ impl Client {
                 .current_dir(&root)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null());
+                .stderr(Stdio::piped());
             match command.spawn() {
                 Ok(mut child) => {
                     let stdin = child.stdin.take().expect("piped");
                     let stdout = child.stdout.take().expect("piped");
+                    let stderr = keep_last_lines(child.stderr.take().expect("piped"));
                     connect(&state, &root, stdout, stdin);
                     let _ = child.wait();
+                    if !state.lock().unwrap().started {
+                        // It has exited, so its stderr has ended too.
+                        let lines = stderr.join().unwrap_or_default();
+                        fail(&state, failure(name, &lines));
+                    }
                 }
                 Err(error) => {
-                    eprintln!("jig: couldn't start {name}: {error}");
+                    fail(&state, format!("{name} couldn't start: {error}"));
                     die(&state);
                 }
             }
@@ -148,6 +163,9 @@ impl Client {
                 service_ready: false,
                 formatting: Formatting::default(),
                 diagnostics: None,
+                started: false,
+                failure: None,
+                on_failure: None,
             })),
             // 0 is `initialize`.
             next_id: AtomicI64::new(1),
@@ -167,6 +185,21 @@ impl Client {
     /// Send the problems the server reports to `sink`.
     pub fn on_diagnostics(&self, sink: channel::UnboundedSender<Published>) {
         self.state.lock().unwrap().diagnostics = Some(sink);
+    }
+
+    /// Tell `sink` if the server stops before it has started, as when a
+    /// rustup proxy has no rust-analyzer for the project's toolchain.
+    pub fn on_failure(&self, sink: channel::UnboundedSender<()>) {
+        let mut state = self.state.lock().unwrap();
+        if state.failure.is_some() {
+            let _ = sink.unbounded_send(());
+        }
+        state.on_failure = Some(sink);
+    }
+
+    /// Why the server stopped before it started, if it did.
+    pub fn failure(&self) -> Option<String> {
+        self.state.lock().unwrap().failure.clone()
     }
 
     pub fn is_dead(&self) -> bool {
@@ -315,6 +348,47 @@ fn send(state: &mut State, message: Value) {
     }
 }
 
+/// Read `stderr` to its end on a thread, keeping its last few lines.
+fn keep_last_lines(stderr: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut lines = VecDeque::with_capacity(STDERR_LINES);
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if lines.len() == STDERR_LINES {
+                lines.pop_front();
+            }
+            lines.push_back(line);
+        }
+        lines.into()
+    })
+}
+
+/// What to say about `name` stopping before it started, having last
+/// written `stderr`.
+fn failure(name: &str, stderr: &[String]) -> String {
+    let said = stderr.last().map(|line| {
+        let line = line.trim();
+        line.strip_prefix("error:")
+            .unwrap_or(line)
+            .trim()
+            .to_string()
+    });
+    match said {
+        Some(said) => format!("{name} didn't start: {said}"),
+        None => format!("{name} stopped as it started."),
+    }
+}
+
+fn fail(state: &Mutex<State>, why: String) {
+    let mut state = state.lock().unwrap();
+    state.failure = Some(why);
+    if let Some(sink) = &state.on_failure {
+        let _ = sink.unbounded_send(());
+    }
+}
+
 fn die(state: &Mutex<State>) {
     let mut state = state.lock().unwrap();
     state.phase = Phase::Dead;
@@ -444,6 +518,7 @@ fn connect(
                     state.encoding = encoding;
                     state.completion_triggers = triggers;
                     state.formatting = Formatting::from_capabilities(&result["capabilities"]);
+                    state.started = true;
                     let initialized =
                         json!({"jsonrpc": "2.0", "method": "initialized", "params": {}})
                             .to_string();
@@ -731,5 +806,31 @@ pub mod tests {
         let response = futures::executor::block_on(client.request("x", json!({})));
         assert!(matches!(response, Ok(Err(_))));
         assert!(client.is_dead());
+        let failure = client.failure().unwrap();
+        assert!(failure.starts_with("nothing couldn't start:"), "{failure}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_exits_as_it_starts_says_why() {
+        let client = Client::start("rust-analyzer", PathBuf::from("/"), Value::Null, || {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                "echo \"error: Unknown binary 'rust-analyzer'\" >&2; exit 1",
+            ]);
+            Some(command)
+        });
+        let (sink, mut told) = channel::unbounded();
+        client.on_failure(sink);
+        let started = std::time::Instant::now();
+        while told.try_recv().is_err() {
+            assert!(started.elapsed().as_secs() < 5, "never told");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            client.failure().as_deref(),
+            Some("rust-analyzer didn't start: Unknown binary 'rust-analyzer'")
+        );
     }
 }

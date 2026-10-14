@@ -429,7 +429,7 @@ commands = [["rust-analyzer"]]
 root_markers = ["Cargo.toml"]
 outermost = true
 install = "rustup component add rust-analyzer"
-help = "Install it with rustup component add rust-analyzer."
+help = "Install it with rustup component add rust-analyzer. A project that pins a toolchain needs it there too: run that in the project's folder."
 
 [[server]]
 name = "typescript-language-server"

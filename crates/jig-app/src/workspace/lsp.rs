@@ -53,6 +53,22 @@ impl Workspace {
         }
     }
 
+    /// A server stopped before it started: say why, if it was one of this
+    /// window's, since hover, go to definition and problems quietly go
+    /// without it.
+    pub(super) fn server_failed(&mut self, cx: &mut Context<Self>) {
+        // Not by the tabs' clients: a tab opened after its server stopped
+        // has none.
+        let failure = self.tabs.iter().find_map(|tab| {
+            let path = tab.document.path.as_deref()?;
+            let language = tab.document.language(&self.settings.languages);
+            lsp::failure_for(path, language, cx)
+        });
+        if let Some(failure) = failure {
+            self.show_status(failure.into(), cx);
+        }
+    }
+
     /// The tab at `ix` was edited.
     pub(super) fn lsp_changed(&self, ix: usize, cx: &App) {
         let tab = &self.tabs[ix];
