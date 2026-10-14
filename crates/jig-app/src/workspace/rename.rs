@@ -10,7 +10,6 @@ use std::time::Duration;
 use futures::future::{Either, select};
 use gpui_kit::*;
 use jig_editor::EditorHandle;
-use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{RenameSymbol, Workspace};
@@ -239,12 +238,9 @@ fn apply(
 
 /// Every whole-word `old` in `text`, to become `new`.
 fn word_edits(text: &str, old: &str, new: &str) -> Edits {
-    let Ok(pattern) = Regex::new(&format!(r"\b{}\b", regex::escape(old))) else {
-        return Vec::new();
-    };
-    pattern
-        .find_iter(text)
-        .map(|m| (m.range(), new.to_string()))
+    super::occurrences::whole_words(text, old)
+        .into_iter()
+        .map(|range| (range, new.to_string()))
         .collect()
 }
 

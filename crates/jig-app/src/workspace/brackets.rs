@@ -62,8 +62,9 @@ impl Workspace {
         }
     }
 
-    /// Box the brackets at the cursor and mark its block's guide in tab
-    /// `ix`; `again` after edits that may leave cursor and length the same.
+    /// Box the brackets at the cursor, mark its block's guide and highlight
+    /// its name's uses in tab `ix`; `again` after edits that may leave
+    /// cursor and length the same.
     pub(super) fn show_structure(&mut self, ix: usize, again: bool, cx: &mut Context<Self>) {
         let tab = &self.tabs[ix];
         let state = tab.editor.state().clone();
@@ -113,5 +114,6 @@ impl Workspace {
         tab.structure.seen = Some(seen);
         tab.structure.boxes.set(boxes, cx);
         state.update(cx, |state, cx| state.set_active_indent_guide(guide, cx));
+        self.show_occurrences(ix, again, cx);
     }
 }

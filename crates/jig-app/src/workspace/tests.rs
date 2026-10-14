@@ -12,6 +12,7 @@ mod format;
 mod git;
 mod home;
 mod jigs;
+mod occurrences;
 mod quick;
 mod session;
 mod tabs;

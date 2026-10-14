@@ -447,6 +447,7 @@ fn connect(
                         "contextSupport": true,
                     },
                     "references": {},
+                    "documentHighlight": {},
                     "formatting": {},
                     "rangeFormatting": {},
                     "hover": {"contentFormat": ["markdown", "plaintext"]},

@@ -22,6 +22,7 @@ mod hover;
 mod line_edits;
 mod lsp;
 mod navigation;
+mod occurrences;
 mod planner;
 mod preferences;
 mod rename;

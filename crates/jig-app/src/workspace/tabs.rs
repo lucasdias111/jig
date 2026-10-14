@@ -45,6 +45,8 @@ pub(super) struct Tab {
     pub(super) hover: Entity<super::hover::CodeHover>,
     /// The brackets at the cursor and the guide of its block.
     pub(super) structure: super::brackets::Structure,
+    /// The other uses of the name at the cursor.
+    pub(super) occurrences: super::occurrences::Occurrences,
     _events: Subscription,
 }
 
@@ -140,6 +142,7 @@ impl Workspace {
         let problems = super::diagnostics::Problems::new(&state, document.path.as_deref(), cx);
         let hover = super::hover::install(&state, &problems.hover, cx);
         let structure = self.install_structure(&state, cx);
+        let occurrences = super::occurrences::Occurrences::new(&state, cx);
         let lsp = document.path.as_deref().and_then(|path| {
             let language = document.language(&self.settings.languages);
             super::lsp::TabLsp::open(path, language, &document.saved_text, cx)
@@ -157,6 +160,7 @@ impl Workspace {
             problems,
             hover,
             structure,
+            occurrences,
             _events: events,
         }
     }
