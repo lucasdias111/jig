@@ -7,6 +7,7 @@
 
 pub mod form;
 pub mod links;
+pub mod symbols;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

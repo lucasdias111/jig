@@ -361,3 +361,50 @@ fn hovering_a_task_shows_its_actions(cx: &mut TestAppContext) {
         }
     }
 }
+
+#[gpui_kit::test]
+fn typing_at_in_the_task_form_links_to_code(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = project(cx);
+    step(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::NewTask), cx)
+    });
+    let form = cx.update(|cx| workspace.read(cx).task_form().expect("the form"));
+    assert!(
+        cx.update(|cx| form.read(cx).index_ready()),
+        "the project was read"
+    );
+    let view = form.clone();
+    step(cx, window, move |window, cx| {
+        view.update(cx, |form, cx| form.focus_description(window, cx));
+        window.render_frame(cx);
+    });
+    step(cx, window, |window, cx| window.input("Starts in @ru", cx));
+    let items = cx
+        .update(|cx| form.read(cx).mention_items())
+        .expect("the list");
+    assert_eq!(
+        items.first().map(String::as_str),
+        Some("[`run`](src/a.rs#L3)")
+    );
+
+    // ↩ picks it; the form stays open and the text has the link.
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    });
+    assert_eq!(
+        cx.update(|cx| form.read(cx).description(cx)),
+        "Starts in [`run`](src/a.rs#L3)"
+    );
+    assert_eq!(cx.update(|cx| form.read(cx).mention_items()), None);
+
+    // Esc closes a list before it closes the form.
+    step(cx, window, |window, cx| window.input(" and @", cx));
+    assert!(cx.update(|cx| form.read(cx).mention_items()).is_some());
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(cx.update(|cx| form.read(cx).mention_items()), None);
+    assert!(
+        cx.update(|cx| workspace.read(cx).task_form().is_some()),
+        "still open"
+    );
+}

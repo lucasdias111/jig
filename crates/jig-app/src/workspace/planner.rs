@@ -231,7 +231,16 @@ impl Workspace {
         };
         self.palette = None;
         self.new_command = None;
-        let view = cx.new(|cx| TaskForm::new(&project, task, window, cx));
+        // `@` with nothing typed lists the names in the file on screen.
+        let current = (!self.home)
+            .then(|| self.document().path.clone())
+            .flatten()
+            .and_then(|path| {
+                path.strip_prefix(&project)
+                    .ok()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+            });
+        let view = cx.new(|cx| TaskForm::new(&project, current, task, window, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             TaskFormEvent::Saved(id) => {
                 let id = id.clone();
