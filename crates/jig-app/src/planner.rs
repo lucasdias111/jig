@@ -52,6 +52,8 @@ pub enum TaskPlannerEvent {
         todo: usize,
         agent: bool,
     },
+    /// Hand all of `task` to the agent, to work through its todos.
+    Implement(Task),
     Dismissed,
 }
 
@@ -195,6 +197,17 @@ impl TaskPlanner {
         cx.emit(TaskPlannerEvent::Edit(Some(id.to_string())));
     }
 
+    /// Hand task `id`, as it is on disk now, to the agent.
+    fn implement(&mut self, id: &str, cx: &mut Context<Self>) {
+        match tasks::load(&self.project, id) {
+            Ok(task) => cx.emit(TaskPlannerEvent::Implement(task)),
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
+                cx.notify();
+            }
+        }
+    }
+
     /// Hand todo `todo` of task `id`, as it is on disk now, to Jig mode or
     /// the agent.
     fn delegate(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
@@ -300,6 +313,11 @@ impl TaskPlanner {
     }
 
     #[cfg(test)]
+    pub fn implement_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.implement(id, cx);
+    }
+
+    #[cfg(test)]
     pub fn delegate_todo(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
         self.delegate(id, todo, agent, cx);
     }
@@ -396,10 +414,34 @@ impl TaskPlanner {
         // hidden by visibility, not display: GPUI works the hover style out
         // again between prepaint and paint, and a child shown in between is
         // painted without having been prepainted, which panics.
+        // A finished task has nothing left to implement.
+        let implement = (!finished).then(|| {
+            let id = id.clone();
+            let accent = jig_commands::surface::lane_accent(true, cx);
+            div()
+                .id(("task-implement", ix))
+                .flex_none()
+                .size(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.))
+                .text_color(accent)
+                .hover(move |s| s.bg(accent.opacity(0.15)))
+                .child(jig_commands::surface::lane_icon(true).size(px(12.)))
+                .tooltip(|window, cx| {
+                    Tooltip::new("Implement the task with the agent").build(window, cx)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.implement(&id, cx)
+                }))
+        });
         let actions = h_flex()
             .flex_none()
             .invisible()
             .group_hover(group.clone(), |s| s.visible())
+            .children(implement)
             .child(
                 small_button(("task-edit", ix), PENCIL, "Edit", cx).on_click({
                     let id = id.clone();

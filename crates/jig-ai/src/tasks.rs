@@ -122,12 +122,17 @@ impl Task {
             step.text = format!("{} ← this step", step.text);
         }
         format!(
-            "{}\nTask id: {}. This step is todo {} of {}.",
+            "{}\nTask id: {}. This step is todo {} of {}; do only this step.",
             marked.to_markdown().trim_end(),
             self.id,
             todo + 1,
             self.todos.len()
         )
+    }
+
+    /// The task as context for implementing all of it.
+    pub fn context(&self) -> String {
+        format!("{}\nTask id: {}.", self.to_markdown().trim_end(), self.id)
     }
 
     pub fn done(&self) -> usize {
@@ -357,6 +362,12 @@ mod tests {
         assert!(context.starts_with("# Add a planner\n"));
         assert!(context.contains("- [x] Store tasks\n"));
         assert!(context.contains("- [ ] Show them in the sidebar ← this step\n"));
-        assert!(context.ends_with("Task id: add-a-planner. This step is todo 2 of 3."));
+        assert!(
+            context
+                .ends_with("Task id: add-a-planner. This step is todo 2 of 3; do only this step.")
+        );
+        let whole = task.context();
+        assert!(!whole.contains("← this step"));
+        assert!(whole.ends_with("- [ ] Show them in the sidebar\n- [ ] Link [`open_at`](src/a.rs)\nTask id: add-a-planner."));
     }
 }

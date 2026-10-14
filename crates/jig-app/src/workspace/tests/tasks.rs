@@ -408,3 +408,29 @@ fn typing_at_in_the_task_form_links_to_code(cx: &mut TestAppContext) {
         "still open"
     );
 }
+
+#[gpui_kit::test]
+fn a_whole_task_goes_to_the_agent(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = project(cx);
+    jig_ai::tasks::create(
+        dir.path(),
+        "Tidy up",
+        "Keep it small.",
+        vec![
+            jig_ai::tasks::Todo::new("Rename things"),
+            jig_ai::tasks::Todo::new("Comment [`run`](src/a.rs#L3)"),
+        ],
+    )
+    .unwrap();
+    let planner = planner(cx, &workspace);
+    step(cx, window, |window, cx| {
+        workspace.update(cx, |this, cx| this.tasks_changed(window, cx))
+    });
+    let view = planner.clone();
+    step(cx, window, move |_, cx| {
+        view.update(cx, |planner, cx| planner.implement_task("tidy-up", cx))
+    });
+    // A conversation about the whole task, named after it.
+    let entries = cx.update(|cx| workspace.read(cx).agent_entries());
+    assert_eq!(entries.first(), Some(&ChatEntry::User("Tidy up".into())));
+}

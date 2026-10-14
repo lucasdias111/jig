@@ -125,6 +125,10 @@ impl Workspace {
                 let (task, todo, agent) = (task.clone(), *todo, *agent);
                 this.delegate_todo(&task, todo, agent, window, cx);
             }
+            TaskPlannerEvent::Implement(task) => {
+                let task = task.clone();
+                this.implement_task(&task, window, cx);
+            }
             TaskPlannerEvent::Dismissed => this.leave_sidebar(window, cx),
         });
         self.planner = PlannerState {
@@ -301,6 +305,41 @@ impl Workspace {
     /// as context. Jig works on the code the step links to, in another
     /// file, else on the selection or the whole file; the agent starts a
     /// conversation about it.
+    /// Hand all of `task` to the agent: a conversation that works through
+    /// its open todos in order, checking each off as it's done.
+    pub(super) fn implement_task(
+        &mut self,
+        task: &jig_ai::tasks::Task,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.previewing() {
+            return self.show_error(
+                "Accept or reject the change under review first.",
+                window,
+                cx,
+            );
+        }
+        let instruction = if task.todos.is_empty() {
+            format!("Implement the task “{}”.", task.title)
+        } else {
+            format!(
+                "Implement the task “{}”: work through its open todos in order.",
+                task.title
+            )
+        };
+        let invocation = Invocation {
+            name: Some(task.title.clone()),
+            instruction,
+            scope: Scope::Selection,
+            comment: None,
+            agent: true,
+            diagnostics: false,
+            task: Some(task.context()),
+        };
+        self.run_command(invocation, window, cx);
+    }
+
     pub(super) fn delegate_todo(
         &mut self,
         task: &jig_ai::tasks::Task,

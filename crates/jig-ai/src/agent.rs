@@ -125,7 +125,7 @@ pub fn prompt(request: &PromptRequest) -> String {
     }
     if let Some(task) = &request.task {
         out.push_str(&format!(
-            "\n\nThis is one step of a planned task in Jig's task planner. Do only this step, and when it's done, check it off with the task tool's update_task.\n\n<task>\n{}\n</task>",
+            "\n\nThis is from a planned task in Jig's task planner, below. As you finish each of its todos, check it off with the task tool's update_task.\n\n<task>\n{}\n</task>",
             task.trim()
         ));
     }
@@ -458,7 +458,7 @@ mod tests {
             ..with_problems
         };
         let asked = prompt(&step);
-        assert!(asked.starts_with("Add docs\n\nThis is one step of a planned task"));
+        assert!(asked.starts_with("Add docs\n\nThis is from a planned task"));
         assert!(asked.contains("update_task"));
         assert!(asked.contains("<task>\n# Plan"));
     }
