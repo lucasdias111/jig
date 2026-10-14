@@ -1,0 +1,74 @@
+# What `cargo deny check` (CI's deny job) holds the dependencies to: known
+# vulnerabilities, licences, and where crates come from. The licences are
+# the ones script/licenses/about.toml accepts for a release, so a dependency
+# that would fail the release fails here first, on its pull request.
+
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+# Unmaintained crates deep in GPUI's tree aren't Jig's to replace; only
+# Jig's own direct dependencies are held to it.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "NCSA",
+    "CDLA-Permissive-2.0",
+    "bzip2-1.0.6",
+]
+confidence-threshold = 0.9
+# The list is about.toml's, which some targets need and others don't.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Jig's own crates aren't published.
+ignore = true
+
+# As in about.toml: GPUI Kit's assets bundle Lucide's icons under ISC.
+[[licenses.clarify]]
+crate = "gpui-kit-assets"
+expression = "Apache-2.0 AND ISC"
+license-files = [
+    { path = "LICENSE-LUCIDE", hash = 0xb739b6e3 },
+]
+
+# Its manifest names a licence file instead of an SPDX id; the file is MIT.
+[[licenses.clarify]]
+crate = "tree-sitter-graphql"
+expression = "MIT"
+license-files = [
+    { path = "LICENSE", hash = 0xda88ff2a },
+]
+
+[bans]
+# GPUI's tree has several versions of dozens of crates, none of them Jig's
+# to unify, so listing them would only bury what matters.
+multiple-versions = "allow"
+wildcards = "deny"
+# Jig's own crates and the vendored ones are path dependencies.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

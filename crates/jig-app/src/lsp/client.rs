@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use futures::channel::{mpsc as channel, oneshot};
 use serde_json::{Value, json};
@@ -123,7 +123,7 @@ impl Client {
                     let stderr = keep_last_lines(child.stderr.take().expect("piped"));
                     connect(&state, &root, stdout, stdin);
                     let _ = child.wait();
-                    if !state.lock().unwrap().started {
+                    if !lock(&state).started {
                         // It has exited, so its stderr has ended too.
                         let lines = stderr.join().unwrap_or_default();
                         fail(&state, failure(name, &lines));
@@ -174,23 +174,23 @@ impl Client {
 
     /// What it was started with, in `initialize`.
     pub fn init_options(&self) -> Value {
-        self.state.lock().unwrap().init_options.clone()
+        lock(&self.state).init_options.clone()
     }
 
     /// Whether the server has said it loaded the project. Only some say so.
     pub fn is_service_ready(&self) -> bool {
-        self.state.lock().unwrap().service_ready
+        lock(&self.state).service_ready
     }
 
     /// Send the problems the server reports to `sink`.
     pub fn on_diagnostics(&self, sink: channel::UnboundedSender<Published>) {
-        self.state.lock().unwrap().diagnostics = Some(sink);
+        lock(&self.state).diagnostics = Some(sink);
     }
 
     /// Tell `sink` if the server stops before it has started, as when a
     /// rustup proxy has no rust-analyzer for the project's toolchain.
     pub fn on_failure(&self, sink: channel::UnboundedSender<()>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock(&self.state);
         if state.failure.is_some() {
             let _ = sink.unbounded_send(());
         }
@@ -199,32 +199,32 @@ impl Client {
 
     /// Why the server stopped before it started, if it did.
     pub fn failure(&self) -> Option<String> {
-        self.state.lock().unwrap().failure.clone()
+        lock(&self.state).failure.clone()
     }
 
     pub fn is_dead(&self) -> bool {
-        matches!(self.state.lock().unwrap().phase, Phase::Dead)
+        matches!(lock(&self.state).phase, Phase::Dead)
     }
 
     /// How the server counts columns. UTF-16 until it says otherwise.
     pub fn encoding(&self) -> Encoding {
-        self.state.lock().unwrap().encoding
+        lock(&self.state).encoding
     }
 
     /// What the server formats. Nothing until it has started.
     pub fn formatting(&self) -> Formatting {
-        self.state.lock().unwrap().formatting
+        lock(&self.state).formatting
     }
 
     /// What typed after a name asks for completions, such as `.`.
     pub fn completion_triggers(&self) -> Vec<String> {
-        self.state.lock().unwrap().completion_triggers.clone()
+        lock(&self.state).completion_triggers.clone()
     }
 
     pub fn request(&self, method: &str, params: Value) -> oneshot::Receiver<Response> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock(&self.state);
         if matches!(state.phase, Phase::Dead) {
             let _ = tx.send(Err("the language server isn't running".into()));
             return rx;
@@ -238,7 +238,7 @@ impl Client {
     }
 
     pub fn notify(&self, method: &str, params: Value) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock(&self.state);
         send(
             &mut state,
             json!({"jsonrpc": "2.0", "method": method, "params": params}),
@@ -248,7 +248,7 @@ impl Client {
     /// An editor opened `uri`. Only the first to open it tells the server.
     pub fn open(&self, uri: &str, language_id: &str, text: &str) {
         let first = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = lock(&self.state);
             let document = state.documents.entry(uri.to_string()).or_insert(Document {
                 editors: 0,
                 version: 0,
@@ -271,7 +271,7 @@ impl Client {
     pub fn change(&self, uri: &str, text: &str) {
         let sent = hash(text);
         let version = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = lock(&self.state);
             let Some(document) = state.documents.get_mut(uri) else {
                 return;
             };
@@ -301,7 +301,7 @@ impl Client {
     /// An editor closed `uri`. The last to close it tells the server.
     pub fn close(&self, uri: &str) {
         let last = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = lock(&self.state);
             match state.documents.get_mut(uri) {
                 Some(document) if document.editors > 1 => {
                     document.editors -= 1;
@@ -326,7 +326,7 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         // Polite, then final; the server exits when its stdin closes anyway.
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock(&self.state);
         send(
             &mut state,
             json!({"jsonrpc": "2.0", "id": i64::MAX, "method": "shutdown"}),
@@ -381,8 +381,15 @@ fn failure(name: &str, stderr: &[String]) -> String {
     }
 }
 
+/// The client's state, even after a thread panicked holding it: what it
+/// guards stays usable, and panicking again would take the editor down
+/// with one language server.
+fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+    state.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 fn fail(state: &Mutex<State>, why: String) {
-    let mut state = state.lock().unwrap();
+    let mut state = lock(state);
     state.failure = Some(why);
     if let Some(sink) = &state.on_failure {
         let _ = sink.unbounded_send(());
@@ -390,7 +397,7 @@ fn fail(state: &Mutex<State>, why: String) {
 }
 
 fn die(state: &Mutex<State>) {
-    let mut state = state.lock().unwrap();
+    let mut state = lock(state);
     state.phase = Phase::Dead;
     for (_, pending) in state.pending.drain() {
         let _ = pending.send(Err("the language server exited".into()));
@@ -417,7 +424,7 @@ fn connect(
         }
     });
 
-    let init_options = state.lock().unwrap().init_options.clone();
+    let init_options = lock(state).init_options.clone();
     let root_uri = super::file_uri(root);
     let name = root
         .file_name()
@@ -515,7 +522,7 @@ fn connect(
                                     .collect()
                             })
                             .unwrap_or_default();
-                    let mut state = state.lock().unwrap();
+                    let mut state = lock(state);
                     state.encoding = encoding;
                     state.completion_triggers = triggers;
                     state.formatting = Formatting::from_capabilities(&result["capabilities"]);
@@ -534,9 +541,8 @@ fn connect(
                             let _ = tx.send(bytes);
                         }
                     }
-                } else if let Some(pending) = id
-                    .as_i64()
-                    .and_then(|id| state.lock().unwrap().pending.remove(&id))
+                } else if let Some(pending) =
+                    id.as_i64().and_then(|id| lock(state).pending.remove(&id))
                 {
                     let _ = pending.send(response);
                 }
@@ -544,10 +550,10 @@ fn connect(
             // jdtls says when it has loaded the project, which its
             // commands need first.
             (None, Some("language/status")) if message["params"]["type"] == "ServiceReady" => {
-                state.lock().unwrap().service_ready = true;
+                lock(state).service_ready = true;
             }
             (None, Some("textDocument/publishDiagnostics")) => {
-                let state = state.lock().unwrap();
+                let state = lock(state);
                 if let Some(published) =
                     super::diagnostics::parse(&message["params"], state.encoding)
                     && let Some(sink) = &state.diagnostics

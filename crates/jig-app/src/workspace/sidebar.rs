@@ -39,6 +39,28 @@ pub(super) struct SidebarMotion {
     from: f32,
 }
 
+/// The sidebar's state: whether it's open, on which view, and how wide.
+pub(super) struct SidebarState {
+    pub(super) open: bool,
+    pub(super) view: SidebarView,
+    pub(super) motion: Option<SidebarMotion>,
+    width: Pixels,
+    /// Set while the sidebar's edge is being dragged.
+    resizing: bool,
+}
+
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            view: SidebarView::default(),
+            motion: None,
+            width: px(240.),
+            resizing: false,
+        }
+    }
+}
+
 /// What the sidebar shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SidebarView {
@@ -134,10 +156,10 @@ impl Workspace {
         if self.tree.is_none() {
             return;
         }
-        if self.sidebar_open && self.tree_focused(window, cx) {
+        if self.sidebar.open && self.tree_focused(window, cx) {
             self.focus_main(window, cx);
         }
-        self.set_sidebar_open(!self.sidebar_open);
+        self.set_sidebar_open(!self.sidebar.open);
         self.sync_git_watch(window, cx);
         cx.notify();
     }
@@ -157,7 +179,7 @@ impl Workspace {
             self.focus_main(window, cx);
         } else {
             self.set_sidebar_open(true);
-            self.sidebar_view = SidebarView::Files;
+            self.sidebar.view = SidebarView::Files;
             self.focus_tree(window, cx);
         }
         self.sync_git_watch(window, cx);
@@ -172,12 +194,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.sidebar_shown() && self.sidebar_view == view {
+        if self.sidebar_shown() && self.sidebar.view == view {
             self.set_sidebar_open(false);
             self.focus_main(window, cx);
         } else {
             self.set_sidebar_open(true);
-            self.sidebar_view = view;
+            self.sidebar.view = view;
             match view {
                 SidebarView::Files => self.focus_tree(window, cx),
                 SidebarView::Git => self.show_git_view(window, cx),
@@ -190,20 +212,20 @@ impl Workspace {
 
     /// Open or collapse the sidebar, animating from wherever it is now.
     fn set_sidebar_open(&mut self, open: bool) {
-        if open == self.sidebar_open {
+        if open == self.sidebar.open {
             return;
         }
-        self.sidebar_motion = Some(SidebarMotion {
+        self.sidebar.motion = Some(SidebarMotion {
             started: Instant::now(),
             from: self.sidebar_openness(),
         });
-        self.sidebar_open = open;
+        self.sidebar.open = open;
     }
 
     /// How far the sidebar is folded out, from 0 (collapsed) to 1 (open).
     fn sidebar_openness(&self) -> f32 {
-        let target = if self.sidebar_open { 1. } else { 0. };
-        let Some(motion) = &self.sidebar_motion else {
+        let target = if self.sidebar.open { 1. } else { 0. };
+        let Some(motion) = &self.sidebar.motion else {
             return target;
         };
         let t = (motion.started.elapsed().as_secs_f32() / MOTION.as_secs_f32()).min(1.);
@@ -213,9 +235,9 @@ impl Workspace {
 
     /// Call each frame: ends a finished motion, or asks for the next frame.
     pub(super) fn step_sidebar_motion(&mut self, window: &Window) {
-        if let Some(motion) = &self.sidebar_motion {
+        if let Some(motion) = &self.sidebar.motion {
             if motion.started.elapsed() >= MOTION {
-                self.sidebar_motion = None;
+                self.sidebar.motion = None;
             } else {
                 window.request_animation_frame();
             }
@@ -235,14 +257,14 @@ impl Workspace {
             px(0.)
         };
         if self.sidebar_shown() {
-            bar + self.sidebar_width
+            bar + self.sidebar.width
         } else {
             bar
         }
     }
 
     pub(super) fn sidebar_shown(&self) -> bool {
-        self.sidebar_open && self.tree.is_some()
+        self.sidebar.open && self.tree.is_some()
     }
 
     /// The sidebar below the title bar: the project's files, or Git. While
@@ -254,7 +276,7 @@ impl Workspace {
         if openness <= 0. {
             return None;
         }
-        let content = match self.sidebar_view {
+        let content = match self.sidebar.view {
             SidebarView::Files => tree.view.clone().into_any_element(),
             SidebarView::Git => self.render_git_view(cx),
             SidebarView::Tasks => self.render_planner_view(),
@@ -263,10 +285,10 @@ impl Workspace {
             div()
                 .flex_none()
                 .h_full()
-                .w(self.sidebar_width * openness)
+                .w(self.sidebar.width * openness)
                 .overflow_hidden()
                 .child(
-                    sidebar_panel(self.sidebar_width, cx)
+                    sidebar_panel(self.sidebar.width, cx)
                         .h_full()
                         .child(content),
                 )
@@ -280,7 +302,7 @@ impl Workspace {
             return None;
         }
         let button = |id: &'static str, icon: &'static [u8], tooltip: &'static str, view| {
-            let active = self.sidebar_shown() && self.sidebar_view == view;
+            let active = self.sidebar_shown() && self.sidebar.view == view;
             activity_button(id, icon, tooltip, active, cx).on_click(
                 cx.listener(move |this, _, window, cx| this.toggle_sidebar_view(view, window, cx)),
             )
@@ -355,7 +377,7 @@ impl Workspace {
     /// The sidebar's draggable edge, from the title bar down. Not there
     /// while the sidebar is moving.
     pub(super) fn render_sidebar_handle(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        (self.sidebar_shown() && self.sidebar_motion.is_none()).then(|| {
+        (self.sidebar_shown() && self.sidebar.motion.is_none()).then(|| {
             div()
                 .id("sidebar-resize")
                 .absolute()
@@ -367,7 +389,7 @@ impl Workspace {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.resizing_sidebar = true;
+                        this.sidebar.resizing = true;
                         cx.stop_propagation();
                     }),
                 )
@@ -378,14 +400,14 @@ impl Workspace {
     /// Mouse handlers for the whole window, active while the sidebar's
     /// edge is being dragged.
     pub(super) fn sidebar_drag_handlers(&self, root: Div, cx: &Context<Self>) -> Div {
-        root.when(self.resizing_sidebar, |root| {
+        root.when(self.sidebar.resizing, |root| {
             root.cursor_col_resize()
                 .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                     if !event.dragging() {
-                        this.resizing_sidebar = false;
+                        this.sidebar.resizing = false;
                     } else {
-                        let bar = this.sidebar_right_edge() - this.sidebar_width;
-                        this.sidebar_width = (event.position.x - bar)
+                        let bar = this.sidebar_right_edge() - this.sidebar.width;
+                        this.sidebar.width = (event.position.x - bar)
                             .clamp(px(MIN_SIDEBAR_WIDTH), px(MAX_SIDEBAR_WIDTH));
                     }
                     cx.notify();
@@ -393,7 +415,7 @@ impl Workspace {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.resizing_sidebar = false;
+                        this.sidebar.resizing = false;
                         cx.notify();
                     }),
                 )

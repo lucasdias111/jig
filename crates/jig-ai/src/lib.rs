@@ -10,7 +10,6 @@ mod http;
 pub mod keys;
 mod models;
 mod openai_compat;
-pub mod process;
 pub mod prompt;
 pub mod response;
 pub mod tasks;
@@ -31,6 +30,7 @@ pub trait Provider: Send + Sync {
 
 /// Build the prompt, call the provider and parse the reply.
 pub fn run(provider: &dyn Provider, request: &PromptRequest) -> anyhow::Result<Reply> {
+    request.check_target()?;
     let (system, user) = prompt::build(request);
     let raw = provider.complete(&system, &user)?;
     response::parse(&raw, request.target_text())

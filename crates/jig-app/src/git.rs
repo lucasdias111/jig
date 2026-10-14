@@ -11,7 +11,11 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
+
+/// How long fetch, pull and push get. A remote that stops answering would
+/// otherwise leave the Git view spinning for good.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Untracked folders with more files than this aren't staged.
 pub const MAX_NEW_FOLDER_FILES: usize = 1000;
@@ -207,20 +211,20 @@ impl Repo {
     }
 
     pub fn fetch(&self) -> Result<()> {
-        self.git(&["fetch", "--quiet"]).map(drop)
+        self.over_network(&["fetch", "--quiet"]).map(drop)
     }
 
     pub fn pull(&self) -> Result<()> {
         if self.upstream().is_none() {
             bail!("This branch has no upstream to pull from. Push it first.");
         }
-        self.git(&["pull", "--quiet"]).map(drop)
+        self.over_network(&["pull", "--quiet"]).map(drop)
     }
 
     /// Push the branch, giving it an upstream on the first push.
     pub fn push(&self) -> Result<()> {
         if self.upstream().is_some() {
-            return self.git(&["push", "--quiet"]).map(drop);
+            return self.over_network(&["push", "--quiet"]).map(drop);
         }
         let remotes = self.git(&["remote"])?;
         let remotes = String::from_utf8_lossy(&remotes.stdout);
@@ -229,7 +233,7 @@ impl Repo {
             .find(|remote| *remote == "origin")
             .or_else(|| remotes.lines().next())
             .ok_or_else(|| anyhow!("This repository has no remote to push to."))?;
-        self.git(&["push", "--quiet", "--set-upstream", remote, "HEAD"])
+        self.over_network(&["push", "--quiet", "--set-upstream", remote, "HEAD"])
             .map(drop)
     }
 
@@ -284,6 +288,22 @@ impl Repo {
                 .args(args)
                 .output()
                 .context("Couldn't run git. Is it installed?")
+        })
+    }
+
+    /// Run a git command that talks to a remote, stopped after
+    /// [`NETWORK_TIMEOUT`]. Git runs in a session of its own, so its `ssh`
+    /// stops with it.
+    fn over_network(&self, args: &[&str]) -> Result<Output> {
+        patiently(|| {
+            match jig_process::output_within(command(&self.root).args(args), NETWORK_TIMEOUT) {
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => bail!(
+                    "git {} got no answer from the remote in {}, so it was stopped.",
+                    args[0],
+                    jig_process::describe(NETWORK_TIMEOUT)
+                ),
+                result => result.context("Couldn't run git. Is it installed?"),
+            }
         })
     }
 
@@ -345,6 +365,8 @@ fn command(dir: &Path) -> Command {
     // A session of its own has no terminal, so SSH can't stop to ask for a
     // passphrase there either.
     #[cfg(unix)]
+    // SAFETY: `setsid` is async-signal-safe, so it may run between fork and
+    // exec; it touches nothing of the parent's.
     unsafe {
         use std::os::unix::process::CommandExt as _;
         command.pre_exec(|| {

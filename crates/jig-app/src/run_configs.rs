@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 
 /// The project's own configurations, relative to its root.

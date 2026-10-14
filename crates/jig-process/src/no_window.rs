@@ -1,4 +1,4 @@
-//! Starting other programs from a windowed app.
+//! Keeping console programs from opening windows of their own.
 
 use std::process::Command;
 

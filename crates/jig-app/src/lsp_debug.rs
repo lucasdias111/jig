@@ -92,12 +92,27 @@ fn java_values(
         "vscode.java.resolveClasspath",
         json!([class, project]),
     )?;
+    let (module_paths, class_paths) = classpaths(&paths)
+        .ok_or_else(|| format!("jdtls didn't give the classpath for {class}."))?;
     Ok(vec![
         ("java_main_class".into(), json!(class)),
         ("java_project".into(), json!(project)),
-        ("java_module_paths".into(), paths[0].clone()),
-        ("java_class_paths".into(), paths[1].clone()),
+        ("java_module_paths".into(), module_paths),
+        ("java_class_paths".into(), class_paths),
     ])
+}
+
+/// The module and class paths from `vscode.java.resolveClasspath`'s
+/// answer, `[[modules…], [classes…]]`, or `None` when it's some other
+/// shape, which would otherwise launch with null paths and fail somewhere
+/// less clear.
+fn classpaths(answer: &Value) -> Option<(Value, Value)> {
+    match answer.as_array()?.as_slice() {
+        [modules, classes, ..] if modules.is_array() && classes.is_array() => {
+            Some((modules.clone(), classes.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// Run `workspace/executeCommand` and wait for its result.
@@ -117,5 +132,22 @@ fn call(client: &Client, command: &str, arguments: Value) -> Result<Value, Strin
             Err(format!("The language server stopped answering {command}."))
         }
         Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("{command} took too long.")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classpaths_need_both_lists() {
+        let answer = json!([["/m.jar"], ["/c.jar", "/d.jar"]]);
+        assert_eq!(
+            classpaths(&answer),
+            Some((json!(["/m.jar"]), json!(["/c.jar", "/d.jar"])))
+        );
+        assert_eq!(classpaths(&json!([["/m.jar"]])), None);
+        assert_eq!(classpaths(&json!(null)), None);
+        assert_eq!(classpaths(&json!(["/m.jar", "/c.jar"])), None);
     }
 }

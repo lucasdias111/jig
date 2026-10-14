@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
 use gpui_kit::SharedString;
 #[cfg(windows)]
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use regex::Regex;
 
 use crate::run_configs::RunConfig;

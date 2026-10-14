@@ -7,6 +7,19 @@ exclude = ["vendor"]
 version = "0.3.1"
 edition = "2024"
 license = "Apache-2.0"
+# The toolchain rust-toolchain.toml pins, the only one CI builds with.
+rust-version = "1.98"
+
+# Every crate takes these with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+# Each `unsafe` is a syscall or an environment change in a test, with a
+# `SAFETY:` comment saying why it's sound.
+undocumented_unsafe_blocks = "warn"
+dbg_macro = "warn"
+todo = "warn"
 
 [workspace.dependencies]
 # The only GPUI dependency. Pinned exactly: GPUI distributions cannot be mixed.
@@ -51,7 +64,15 @@ gpui-kit = { version = "=0.7.0", features = [
 jig-editor = { path = "crates/jig-editor" }
 jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }
+jig-process = { path = "crates/jig-process" }
+# Shared by more than one crate, so they stay on one version.
 anyhow = "1"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+toml = "0.9"
+ureq = "3"
 
 # A patched copy of gpui-base 0.7.0; every change is marked "Jig patch".
 # - GPUI Kit's editor stops seeing the mouse once it has scrolled more than a

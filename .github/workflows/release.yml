@@ -35,7 +35,7 @@ jobs:
             asset: Jig-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the tag matches Cargo.toml
         shell: bash
         run: |
@@ -51,10 +51,10 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev \
             libfontconfig1-dev libfreetype-dev libssl-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Writes THIRD-PARTY-NOTICES.txt, the dependencies' licences, which
       # every archive carries beside Jig's own LICENSE.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-about@0.9.2
       - name: Build Jig.app
@@ -66,7 +66,7 @@ jobs:
       - name: Build Jig
         if: runner.os == 'Linux'
         run: |
-          cargo build --release -p jig-app
+          cargo build --locked --release -p jig-app
           script/third-party-notices.sh
           mkdir dist
           cp target/release/Jig LICENSE target/THIRD-PARTY-NOTICES.txt dist/
@@ -75,10 +75,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release -p jig-app
+          cargo build --locked --release -p jig-app
           bash script/third-party-notices.sh
           Compress-Archive -Path target/release/Jig.exe, LICENSE, target/THIRD-PARTY-NOTICES.txt -DestinationPath ${{ matrix.asset }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -88,7 +88,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
@@ -113,7 +113,7 @@ jobs:
           done
           rm -f "$key"
           ls -l
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
           generate_release_notes: true

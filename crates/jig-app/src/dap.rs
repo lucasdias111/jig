@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
 use crate::debuggers::AdapterCommand;

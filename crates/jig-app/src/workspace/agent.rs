@@ -82,6 +82,21 @@ enum Request {
     Question(QuestionRequest),
 }
 
+/// What the window keeps for Agent mode from one conversation to the next.
+#[derive(Default)]
+pub(super) struct AgentState {
+    /// The agent and model picked in ⌘K for new conversations; `None`
+    /// follows the settings.
+    pub(super) pick: Option<crate::agent::Pick>,
+    /// What the palette's Agent mode lists, from the last time it asked.
+    catalog: Option<AgentCatalog>,
+    /// The docked conversation's width, when the last one was left docked:
+    /// the next opens the same way.
+    pub(super) dock: Option<Pixels>,
+    /// The docked conversation's edge is being dragged.
+    resizing_dock: bool,
+}
+
 /// The earlier conversations and OpenCode's commands for one project, kept
 /// so the palette can list them at once the next time.
 pub(super) struct AgentCatalog {
@@ -281,7 +296,8 @@ impl Workspace {
             return;
         };
         let title = self
-            .agent_catalog
+            .agent
+            .catalog
             .as_ref()
             .and_then(|catalog| {
                 catalog
@@ -438,7 +454,8 @@ impl Workspace {
         // providers, the others' as they last said.
         let picked = self.picked_agent(cx);
         let pick = self
-            .agent_pick
+            .agent
+            .pick
             .clone()
             .unwrap_or_else(|| crate::agent::Pick::from_settings(cx));
         let mut agent = ModelMenu::default();
@@ -511,7 +528,7 @@ impl Workspace {
                     model: choice.model,
                 };
                 // The settings' own choice needs no pick.
-                self.agent_pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
+                self.agent.pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
                 // Its conversations and commands, in place of the last agent's.
                 self.load_agent_catalog(Some(palette), window, cx);
             }
@@ -612,7 +629,7 @@ impl Workspace {
 
     /// The agent new conversations run: picked in ⌘K, else in Settings.
     pub(super) fn picked_agent(&self, cx: &App) -> std::sync::Arc<crate::agents::Agent> {
-        match &self.agent_pick {
+        match &self.agent.pick {
             Some(pick) => crate::agents::named(&pick.agent),
             None => crate::agents::chosen(cx),
         }
@@ -659,14 +676,15 @@ impl Workspace {
         };
         let agent = self.picked_agent(cx).key.clone();
         if let Some(catalog) = self
-            .agent_catalog
+            .agent
+            .catalog
             .as_ref()
             .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
             && let Some(palette) = &palette
         {
             show_catalog(catalog, palette, cx);
         }
-        let choice = crate::agent::choice_for(self.agent_pick.as_ref(), cx);
+        let choice = crate::agent::choice_for(self.agent.pick.as_ref(), cx);
         let task = cx.background_executor().spawn({
             let directory = directory.clone();
             async move {
@@ -700,7 +718,7 @@ impl Workspace {
                 if let Some(palette) = &palette {
                     show_catalog(&catalog, palette, cx);
                 }
-                this.agent_catalog = Some(catalog);
+                this.agent.catalog = Some(catalog);
             })
             .ok();
         })
@@ -738,7 +756,8 @@ impl Workspace {
             loading: false,
             last_input: None,
             pick: Some(
-                self.agent_pick
+                self.agent
+                    .pick
                     .clone()
                     .unwrap_or_else(|| crate::agent::Pick::from_settings(cx)),
             ),
@@ -758,7 +777,7 @@ impl Workspace {
             entries: vec![ChatEntry::User(asked)],
             input,
             scroll: ScrollHandle::new(),
-            frame: match self.agent_dock {
+            frame: match self.agent.dock {
                 Some(width) => ChatFrame {
                     width,
                     pinned: true,
@@ -858,7 +877,7 @@ impl Workspace {
             self.save_to(&path, window, cx);
         }
         // Learn the commands, so a reply can run one.
-        if self.agent_catalog.is_none() {
+        if self.agent.catalog.is_none() {
             self.load_agent_catalog(None, window, cx);
         }
         // Read on this thread: the keys and settings live in the app.
@@ -1052,7 +1071,8 @@ impl Workspace {
     fn slash_command(&self, text: &str) -> Option<TurnInput> {
         let typed = text.strip_prefix('/')?;
         let (name, arguments) = typed.split_once(' ').unwrap_or((typed, ""));
-        self.agent_catalog
+        self.agent
+            .catalog
             .as_ref()?
             .commands
             .iter()
@@ -1337,7 +1357,7 @@ impl Workspace {
     fn toggle_agent_chat_pin(&mut self, cx: &mut Context<Self>) {
         if let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) {
             agent.frame.pinned = !agent.frame.pinned;
-            self.agent_dock = agent.frame.pinned.then_some(agent.frame.width);
+            self.agent.dock = agent.frame.pinned.then_some(agent.frame.width);
             cx.notify();
         }
     }
@@ -1347,11 +1367,11 @@ impl Workspace {
     /// what's left of the mouse.
     pub(super) fn agent_dock_drag_handlers(&self, root: Div, cx: &Context<Self>) -> Div {
         const MIN: f32 = 320.;
-        root.when(self.resizing_agent_dock, |root| {
+        root.when(self.agent.resizing_dock, |root| {
             root.cursor_col_resize()
                 .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                     if !event.dragging() {
-                        this.resizing_agent_dock = false;
+                        this.agent.resizing_dock = false;
                     } else {
                         let viewport = window.viewport_size().width;
                         // The column's padding on both sides.
@@ -1359,7 +1379,7 @@ impl Workspace {
                         let width = width.clamp(px(MIN), (viewport * 0.7).max(px(MIN)));
                         if let Some(agent) = this.chat.as_mut().and_then(|run| run.agent.as_mut()) {
                             agent.frame.width = width;
-                            this.agent_dock = Some(width);
+                            this.agent.dock = Some(width);
                         }
                     }
                     cx.notify();
@@ -1367,7 +1387,7 @@ impl Workspace {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.resizing_agent_dock = false;
+                        this.agent.resizing_dock = false;
                         cx.notify();
                     }),
                 )
@@ -1394,7 +1414,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.resizing_agent_dock = true;
+                    this.agent.resizing_dock = true;
                     cx.stop_propagation();
                 }),
             );
@@ -1789,13 +1809,14 @@ impl Workspace {
             })
             .collect();
         match self
-            .agent_catalog
+            .agent
+            .catalog
             .as_mut()
             .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
         {
             Some(catalog) => catalog.commands = commands,
             None => {
-                self.agent_catalog = Some(AgentCatalog {
+                self.agent.catalog = Some(AgentCatalog {
                     agent,
                     directory,
                     conversations: Vec::new(),

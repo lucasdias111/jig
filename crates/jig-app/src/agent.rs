@@ -9,7 +9,7 @@ use gpui_kit::App;
 use jig_ai::agent::acp::{AgentCommandLine, Connection};
 use jig_ai::agent::harness::Backend;
 use jig_ai::agent::opencode;
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde_json::Value;
 
 use crate::agents::Kind;

@@ -1,0 +1,25 @@
+# Pull requests for dependency updates, once a week. The workflows' actions
+# are pinned to commits, so this is what moves them on; each update is
+# grouped into one pull request per ecosystem so they don't pile up.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # GPUI Kit is pinned exactly and moves by hand, with the vendored
+    # gpui-base patch beside it.
+    ignore:
+      - dependency-name: gpui-kit
+      - dependency-name: gpui-base
+    groups:
+      cargo:
+        update-types: [minor, patch]

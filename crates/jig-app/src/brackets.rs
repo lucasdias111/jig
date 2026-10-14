@@ -17,9 +17,11 @@ pub fn matching(text: &str, cursor: usize, line_comment: Option<&str>) -> Option
         .flatten()
         .find(|&at| bytes.get(at).is_some_and(|&b| is_bracket(b)))?;
     // Start scanning at a line start, where code is most likely outside a
-    // string or comment.
-    let from = text[..at.saturating_sub(REACH)]
-        .rfind('\n')
+    // string or comment. The reach can end inside a multibyte character, so
+    // the newline is looked for in the bytes.
+    let from = bytes[..at.saturating_sub(REACH)]
+        .iter()
+        .rposition(|&byte| byte == b'\n')
         .map_or(0, |newline| newline + 1);
     let to = (at + REACH).min(text.len());
     let mut open: Vec<usize> = Vec::new();
@@ -161,6 +163,25 @@ mod tests {
         assert_eq!(matching(text, 5, Some("#")), Some((4, 6)));
         let text = "#[derive(Debug)]";
         assert_eq!(matching(text, 2, Some("//")), Some((1, 15)));
+    }
+
+    #[test]
+    fn a_long_file_of_multibyte_text_doesnt_split_a_character() {
+        // Lines of three-byte characters, so the reach back from the
+        // bracket lands inside one at some offset.
+        let line = "let s = \"€€€€€€€€€€\";\n";
+        for pad in 0..3 {
+            let text = format!(
+                "{}{}f(x)",
+                "é".repeat(pad),
+                line.repeat(REACH / line.len() + 10)
+            );
+            let open = text.rfind('(').unwrap();
+            assert_eq!(
+                matching(&text, open + 1, Some("//")),
+                Some((open, open + 2))
+            );
+        }
     }
 
     #[test]

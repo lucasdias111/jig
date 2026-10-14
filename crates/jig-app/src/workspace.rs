@@ -146,12 +146,7 @@ pub struct Workspace {
     tab_scroll: ScrollHandle,
     /// The project's files. `None` until a file or folder is open.
     tree: Option<ProjectTree>,
-    sidebar_open: bool,
-    sidebar_view: sidebar::SidebarView,
-    sidebar_motion: Option<sidebar::SidebarMotion>,
-    sidebar_width: Pixels,
-    /// Set while the sidebar's edge is being dragged.
-    resizing_sidebar: bool,
+    sidebar: sidebar::SidebarState,
     /// A start page is showing in place of the editor, because no file is
     /// open: the home page, or with a project open, the project's. The one
     /// tab behind it is blank.
@@ -162,21 +157,13 @@ pub struct Workspace {
     /// Jig mode's model picked in ⌘K for this window, as `provider/model`;
     /// `None` follows the settings.
     jig_pick: Option<String>,
-    /// The agent and model picked in ⌘K for this window's new
-    /// conversations; `None` follows the settings.
-    agent_pick: Option<crate::agent::Pick>,
     /// Jig mode's and the agent's default models when last seen, to tell
     /// when Settings changes them.
     model_defaults: Option<Option<(Option<String>, Option<String>)>>,
     /// How many times the palette has opened, for the Jig button's glow.
     palette_openings: usize,
-    /// What the palette's Agent mode lists, from the last time it asked.
-    agent_catalog: Option<agent::AgentCatalog>,
-    /// The docked conversation's width, when the last one was left docked:
-    /// the next opens the same way.
-    agent_dock: Option<Pixels>,
-    /// The docked conversation's edge is being dragged.
-    resizing_agent_dock: bool,
+    /// What the window keeps for Agent mode between conversations.
+    agent: agent::AgentState,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
     /// Rename Symbol's field, while it's open.
@@ -268,22 +255,15 @@ impl Workspace {
             active: 0,
             tab_scroll: ScrollHandle::new(),
             tree: None,
-            sidebar_open: false,
-            sidebar_view: Default::default(),
-            sidebar_motion: None,
-            sidebar_width: px(240.),
-            resizing_sidebar: false,
+            sidebar: sidebar::SidebarState::default(),
             home: path.is_none() || folder.is_some(),
             home_focus: cx.focus_handle(),
             presets: Rc::new(presets),
             palette: None,
             palette_openings: 0,
             jig_pick: None,
-            agent_pick: None,
             model_defaults: None,
-            agent_catalog: None,
-            agent_dock: None,
-            resizing_agent_dock: false,
+            agent: agent::AgentState::default(),
             quick_open: None,
             find_in_files: None,
             rename: None,

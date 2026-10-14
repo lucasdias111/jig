@@ -157,7 +157,7 @@ fn the_activity_bar_switches_and_collapses_the_sidebar(cx: &mut TestAppContext) 
         // Skip to the end of the sidebar's motion, so nothing moves
         // between finding the button and clicking it.
         vcx.update(|window, cx| {
-            ws.update(cx, |this, _| this.sidebar_motion = None);
+            ws.update(cx, |this, _| this.sidebar.motion = None);
             window.render_frame(cx)
         });
         let bounds = vcx.debug_bounds(selector).expect(selector);
@@ -167,7 +167,7 @@ fn the_activity_bar_switches_and_collapses_the_sidebar(cx: &mut TestAppContext) 
     let shown = |vcx: &mut gpui_kit::VisualTestContext| {
         vcx.update(|_, cx| {
             let this = workspace.read(cx);
-            this.sidebar_shown().then_some(this.sidebar_view)
+            this.sidebar_shown().then_some(this.sidebar.view)
         })
     };
     assert_eq!(shown(&mut vcx), None, "a single file opens without it");

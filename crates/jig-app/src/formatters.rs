@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result, bail};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 
 use crate::tools::{self, Help};

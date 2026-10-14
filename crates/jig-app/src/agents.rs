@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use anyhow::{Context as _, Result, bail};
 use gpui_kit::App;
 use jig_ai::agent::acp::{AgentCommandLine, AgentModels};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 
 const BUILT_IN: &str = include_str!("../../../assets/default-agents.toml");

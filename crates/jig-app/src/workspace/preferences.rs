@@ -58,7 +58,7 @@ impl Workspace {
         }
         // New defaults in Settings take over from ⌘K's pick.
         if new.agent.using != old.agent.using || new.agent.models != old.agent.models {
-            self.agent_pick = None;
+            self.agent.pick = None;
         }
         if new.debugging != old.debugging || new.languages != old.languages {
             self.refresh_breakpoint_gutters(cx);
@@ -76,7 +76,7 @@ impl Workspace {
         if self.model_defaults.as_ref() != Some(&defaults) {
             if self.model_defaults.is_some() {
                 self.jig_pick = None;
-                self.agent_pick = None;
+                self.agent.pick = None;
             }
             self.model_defaults = Some(defaults);
         }

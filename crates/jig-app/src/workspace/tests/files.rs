@@ -112,7 +112,7 @@ fn opening_a_folder_browses_and_opens_files(cx: &mut TestAppContext) {
     std::fs::write(dir.path().join("README.md"), "# hi\n").unwrap();
     let (window, workspace) = open(cx, dir.path());
 
-    assert!(cx.update(|cx| workspace.read(cx).sidebar_open));
+    assert!(cx.update(|cx| workspace.read(cx).sidebar.open));
     assert!(tree_focused(cx, window, &workspace), "starts in the tree");
     assert_eq!(tree_rows(cx, &workspace), ["src", "README.md"]);
 
@@ -469,7 +469,7 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx, &path);
 
     assert!(
-        !cx.update(|cx| workspace.read(cx).sidebar_open),
+        !cx.update(|cx| workspace.read(cx).sidebar.open),
         "a single file opens without the sidebar"
     );
     assert_eq!(
@@ -482,7 +482,7 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.press("secondary-b", cx);
     });
-    assert!(cx.update(|cx| workspace.read(cx).sidebar_open));
+    assert!(cx.update(|cx| workspace.read(cx).sidebar.open));
     assert!(
         !tree_focused(cx, window, &workspace),
         "Cmd+B keeps focus in the editor"
@@ -511,7 +511,7 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.press("secondary-b", cx);
     });
-    assert!(!cx.update(|cx| workspace.read(cx).sidebar_open));
+    assert!(!cx.update(|cx| workspace.read(cx).sidebar.open));
 }
 
 fn tree_selection(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {

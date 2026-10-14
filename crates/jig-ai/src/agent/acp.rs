@@ -12,13 +12,13 @@ use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use crate::process::NoWindow as _;
 use anyhow::{Context as _, Result, anyhow, bail};
+use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
 use super::{
@@ -562,6 +562,19 @@ pub struct Session {
     /// to write without asking again.
     allowed: Arc<Mutex<Vec<PathBuf>>>,
     next: Arc<AtomicU64>,
+    /// Whether a turn or a load is under way. The connection hands a
+    /// session's messages to one listener, so a second would take them
+    /// from the first and leave both turns muddled.
+    busy: Arc<AtomicBool>,
+}
+
+/// A claim on a [`Session`] for one turn or load, given up when dropped.
+struct Busy(Arc<AtomicBool>);
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Session {
@@ -619,7 +632,19 @@ impl Session {
             waiting: Arc::default(),
             allowed: Arc::default(),
             next: Arc::default(),
+            busy: Arc::default(),
         }
+    }
+
+    /// The session for one turn or load, unless one is already under way.
+    fn claim(&self) -> Result<Busy> {
+        if self.busy.swap(true, Ordering::SeqCst) {
+            bail!(
+                "{} is still working on this conversation.",
+                self.connection.name
+            );
+        }
+        Ok(Busy(self.busy.clone()))
     }
 
     pub fn id(&self) -> &str {
@@ -635,6 +660,7 @@ impl Session {
                 self.connection.name
             );
         }
+        let _busy = self.claim()?;
         let updates = self.connection.listen(&self.id);
         let (sender, done) = channel();
         self.connection.request_then(
@@ -674,7 +700,9 @@ impl Session {
 
     /// Send `request` and report what happens until the agent is done.
     /// Blocks; edits and other requests wait until [`Session::reply`].
+    /// A second turn while one is under way is refused.
     pub fn run(&self, request: &AgentRequest, on_event: &dyn Fn(AgentEvent)) -> Result<()> {
+        let _busy = self.claim()?;
         let incoming = self.connection.listen(&self.id);
         let text = match &request.command {
             Some(command) => format!("/{command} {}", request.prompt).trim().to_string(),
@@ -1448,6 +1476,50 @@ read -r line
             env: Vec::new(),
             path: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_second_turn_is_refused_while_the_first_runs() {
+        // Answers `initialize` and `session/new`, then never finishes a turn.
+        let script = r#"
+read -r line
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+read -r line
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"s"}}'
+read -r line
+sleep 30
+"#;
+        let command = AgentCommandLine {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into(), "agent".into()],
+            env: Vec::new(),
+            path: None,
+        };
+        let connection = Connection::start("Fake", &command).unwrap();
+        let session = Session::create(connection.clone(), Path::new("/"), None).unwrap();
+        let request = AgentRequest {
+            directory: "/".into(),
+            prompt: "Hi".into(),
+            model: String::new(),
+            command: None,
+            permissions: Permissions::default(),
+        };
+        let first = {
+            let (session, request) = (session.clone(), request.clone());
+            std::thread::spawn(move || session.run(&request, &|_| {}))
+        };
+        while !session.busy.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let error = session.run(&request, &|_| {}).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Fake is still working on this conversation."
+        );
+        connection.stop();
+        assert!(first.join().unwrap().is_err(), "the agent stopped");
+        assert!(!session.busy.load(Ordering::SeqCst), "free once it ends");
     }
 
     #[cfg(unix)]

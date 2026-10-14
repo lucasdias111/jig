@@ -18,7 +18,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::{App, Global};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 
 pub use client::{Client, Response};

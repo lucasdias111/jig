@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 

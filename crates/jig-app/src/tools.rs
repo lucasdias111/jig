@@ -6,9 +6,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 use serde::Deserialize;
 
 /// How to get a tool: one text, or one per system.
@@ -72,24 +73,39 @@ pub fn expand_platform(script: &str) -> String {
         .replace("${arch}", std::env::consts::ARCH)
 }
 
+/// How long an installer gets. The biggest (jdtls, an LLVM build) are a few
+/// hundred megabytes; past this, a download has stalled.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// Run an installer, a shell script with Jig's variables already filled
 /// in, in `dir`. Blocks, so run it off the main thread.
 pub fn run_installer(script: &str, dir: &Path) -> Result<()> {
+    run_installer_within(script, dir, INSTALL_TIMEOUT)
+}
+
+fn run_installer_within(script: &str, dir: &Path, limit: Duration) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("Couldn't create {}", dir.display()))?;
     let script = expand_platform(script);
     // Installers are sh scripts everywhere; on Windows, Git's sh runs them.
     let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
-    let output = Command::new(sh)
+    let mut command = Command::new(sh);
+    command
         .no_window()
         .arg("-c")
         .arg(&script)
         .current_dir(dir)
         .env("PATH", crate::lsp::search_path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Couldn't run the installer")?;
+        .stdin(Stdio::null());
+    // A group of its own, so a stalled one stops with what it started.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let output = match jig_process::output_within(&mut command, limit) {
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => bail!(
+            "Installing took over {}, so it was stopped.",
+            jig_process::describe(limit)
+        ),
+        result => result.context("Couldn't run the installer")?,
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let last: Vec<&str> = stderr.trim().lines().rev().take(3).collect();
@@ -164,6 +180,17 @@ mod tests {
         assert!(own.join("bin/t").is_file());
         let error = install_own_folder("echo nope >&2; exit 3", &parent.path().join("x"));
         assert_eq!(error.unwrap_err().to_string(), "Installing failed: nope");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stalled_installer_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = run_installer_within("sleep 30", dir.path(), Duration::from_secs(1));
+        assert_eq!(
+            error.unwrap_err().to_string(),
+            "Installing took over 1 s, so it was stopped."
+        );
     }
 
     // Windows has no HOME, so paths there show in full.

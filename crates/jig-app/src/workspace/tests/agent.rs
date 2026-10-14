@@ -497,7 +497,7 @@ fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
         "100 px wider: {before:?} → {after:?}"
     );
     assert!(
-        vcx.update(|_, cx| workspace.read(cx).agent_dock.is_some()),
+        vcx.update(|_, cx| workspace.read(cx).agent.dock.is_some()),
         "the next conversation opens docked, this wide"
     );
 

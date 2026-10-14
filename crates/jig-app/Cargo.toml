@@ -3,7 +3,11 @@ name = "jig-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 publish = false
+
+[lints]
+workspace = true
 
 # Capitalised because an unbundled macOS app is named in the menu bar after
 # its executable.
@@ -16,13 +20,14 @@ gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
 jig-ai.workspace = true
+jig-process.workspace = true
 anyhow.workspace = true
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
-toml = "0.9"
+serde_json.workspace = true
+serde.workspace = true
+toml.workspace = true
 ignore = "0.4"
 regex = "1"
-libc = "0.2"
+libc.workspace = true
 futures = "0.3"
 # The LSP types GPUI Kit's editor speaks, for go-to-definition.
 lsp-types = "0.97"
@@ -34,7 +39,7 @@ notify = "7"
 trash = "5"
 # Updates: the latest release from GitHub, and the check that a download
 # was signed with Jig's key.
-ureq = "3"
+ureq.workspace = true
 minisign-verify = "0.2"
 # GDScript's grammar, which GPUI Kit has no feature for; registered in
 # `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
@@ -78,5 +83,5 @@ tree-sitter-xml = "0.7"
 snapshots = ["gpui-kit/test-support"]
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }

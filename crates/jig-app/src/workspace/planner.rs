@@ -146,7 +146,7 @@ impl Workspace {
     }
 
     pub(super) fn planner_shown(&self) -> bool {
-        self.sidebar_shown() && self.sidebar_view == SidebarView::Tasks
+        self.sidebar_shown() && self.sidebar.view == SidebarView::Tasks
     }
 
     pub(super) fn planner_focused(&self, window: &Window, cx: &App) -> bool {

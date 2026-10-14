@@ -69,8 +69,21 @@ impl Diagnostic {
 }
 
 impl PromptRequest {
+    /// The text the command replaces; empty when [`Self::check_target`]
+    /// would fail, so a bad range can't panic here.
     pub fn target_text(&self) -> &str {
-        &self.text[self.target.clone()]
+        self.text.get(self.target.clone()).unwrap_or_default()
+    }
+
+    pub fn check_target(&self) -> anyhow::Result<()> {
+        let Range { start, end } = self.target;
+        if start > end || self.text.get(start..end).is_none() {
+            anyhow::bail!(
+                "The region to edit ({start}..{end}) isn't within the file's {} bytes.",
+                self.text.len()
+            );
+        }
+        Ok(())
     }
 }
 
@@ -90,14 +103,18 @@ fn window(text: &str, range: &Range<usize>) -> Range<usize> {
     let spare = MAX_FILE_BYTES.saturating_sub(range.len());
     let start = range.start.saturating_sub(spare / 2);
     let end = (range.end + spare - (range.start - start)).min(text.len());
-    // Whole lines only.
-    let start = match text[..start].rfind('\n') {
-        Some(newline) if start > 0 => newline + 1,
-        _ => 0,
-    };
+    // Whole lines only. `start` and `end` may fall inside a multibyte
+    // character, so look for newlines in the bytes: the byte after one is
+    // always a character boundary.
+    let bytes = text.as_bytes();
+    let start = bytes[..start]
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(0, |newline| newline + 1);
     let start = start.min(range.start);
-    let end = text[end..]
-        .find('\n')
+    let end = bytes[end..]
+        .iter()
+        .position(|&byte| byte == b'\n')
         .map_or(text.len(), |newline| end + newline + 1);
     start..end.max(range.end)
 }
@@ -274,6 +291,39 @@ mod tests {
         let (_, user) = build(&request(10..19));
         assert!(!user.contains("not shown"));
         assert!(user.ends_with(REMINDER));
+    }
+
+    #[test]
+    fn a_big_multibyte_file_is_cut_without_splitting_a_character() {
+        // Lines of three-byte characters, so the window's first guess at
+        // its edges lands inside one wherever the region is.
+        let text: String = (0..3000).map(|n| format!("é{n}→€€€€\n")).collect();
+        for offset in [0, 1, 7, 100, 1000] {
+            let line = format!("é{}→", 1500 + offset);
+            let start = text.find(&line).unwrap();
+            let mut big = request(start..start + line.len());
+            big.text = text.clone();
+            big.check_target().unwrap();
+            let (_, user) = build(&big);
+            assert!(user.contains(&format!("<<<SELECTION>>>{line}<<<END>>>")));
+            assert!(user.contains("lines above not shown]\n"));
+        }
+    }
+
+    #[test]
+    fn a_target_outside_the_text_or_inside_a_character_is_refused() {
+        let mut bad = request(0..100);
+        assert!(bad.check_target().is_err());
+        assert_eq!(bad.target_text(), "");
+        bad.text = "é".into();
+        bad.target = 1..2;
+        assert!(bad.check_target().is_err());
+        // A reversed range, as a stale offset could make.
+        bad.target = Range { start: 2, end: 1 };
+        assert!(bad.check_target().is_err());
+        bad.target = 0..2;
+        bad.check_target().unwrap();
+        assert_eq!(bad.target_text(), "é");
     }
 
     #[test]

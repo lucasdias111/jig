@@ -10,11 +10,11 @@ use std::collections::HashSet;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime};
 
-use crate::process::NoWindow as _;
 use anyhow::{Context as _, Result, anyhow, bail};
+use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
 use super::{
@@ -32,6 +32,13 @@ pub const DEFAULT_MODEL: &str = "opencode-go/qwen3.8-flash";
 /// for a model it doesn't know.
 const CONTEXT_TOKENS: u32 = 128_000;
 const OUTPUT_TOKENS: u32 = 16_000;
+
+/// How long `opencode serve` gets to say where it listens. A first start
+/// may install its packages, so it's generous; past it, something's stuck.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long one ordinary request gets, all of it. The event stream and a
+/// command's request, which only returns once the command is done, have none.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What an agent run needs from OpenCode: the model, as OpenCode names it,
 /// and the provider config to start the server with.
@@ -165,17 +172,36 @@ impl Server {
             .spawn()
             .context("Couldn't start OpenCode. Is `opencode` installed?")?;
         let stdout = child.stdout.take().context("no stdout from opencode")?;
-        let mut url = None;
-        for line in BufReader::new(stdout).lines() {
-            let line = line?;
-            if let Some(rest) = line.split("listening on ").nth(1) {
-                url = Some(rest.trim().trim_end_matches('/').to_string());
-                break;
+        // Read on a thread of its own, so a server that never says where it
+        // listens can be given up on; it keeps reading after, so the server
+        // never writes into a closed pipe.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut tx = Some(tx);
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if let Some(rest) = line.split("listening on ").nth(1)
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(rest.trim().trim_end_matches('/').to_string());
+                }
             }
-        }
-        let Some(url) = url else {
-            let _ = child.kill();
-            bail!("OpenCode exited before it started listening");
+        });
+        let url = match rx.recv_timeout(STARTUP_TIMEOUT) {
+            Ok(url) => url,
+            Err(why) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                match why {
+                    mpsc::RecvTimeoutError::Timeout => bail!(
+                        "OpenCode didn't start listening within {} s",
+                        STARTUP_TIMEOUT.as_secs()
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        bail!("OpenCode exited before it started listening")
+                    }
+                }
+            }
         };
         Ok(Self {
             url,
@@ -211,30 +237,55 @@ impl Server {
         query: &[(&str, &str)],
         body: Option<&Value>,
     ) -> Result<Value> {
+        self.send(method, path, directory, query, body, Some(REQUEST_TIMEOUT))
+    }
+
+    /// One request, given up on after `timeout`, or never with `None`.
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        directory: &str,
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<Value> {
         let url = format!("{}{path}", self.url);
         let query = std::iter::once(("directory", directory)).chain(query.iter().copied());
         let mut response = match (method, body) {
             ("PATCH", Some(body)) => self
                 .http
                 .patch(&url)
+                .config()
+                .timeout_global(timeout)
+                .build()
                 .query_pairs(query)
                 .header("Authorization", &self.auth)
                 .send_json(body),
             (_, Some(body)) => self
                 .http
                 .post(&url)
+                .config()
+                .timeout_global(timeout)
+                .build()
                 .query_pairs(query)
                 .header("Authorization", &self.auth)
                 .send_json(body),
             ("GET", None) => self
                 .http
                 .get(&url)
+                .config()
+                .timeout_global(timeout)
+                .build()
                 .query_pairs(query)
                 .header("Authorization", &self.auth)
                 .call(),
             (_, None) => self
                 .http
                 .post(&url)
+                .config()
+                .timeout_global(timeout)
+                .build()
                 .query_pairs(query)
                 .header("Authorization", &self.auth)
                 .send_empty(),
@@ -443,10 +494,11 @@ impl Session {
                 });
                 std::thread::spawn(move || {
                     let path = format!("/session/{}/command", session.id);
+                    let directory = &session.directory;
                     if let Err(error) =
                         session
                             .server
-                            .request("POST", &path, &session.directory, Some(&body))
+                            .send("POST", &path, directory, &[], Some(&body), None)
                     {
                         *failed.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(format!("{error:#}"));

@@ -8,7 +8,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-cargo build --release -p jig-app
+cargo build --locked --release -p jig-app
 
 app=target/Jig.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use jig_ai::process::NoWindow as _;
+use jig_process::NoWindow as _;
 
 /// What gets replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]

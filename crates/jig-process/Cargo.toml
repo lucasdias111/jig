@@ -1,0 +1,17 @@
+[package]
+name = "jig-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# Starting other programs: shared by the AI layer and the app, so neither
+# owns the other's plumbing.
+[dependencies]
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

@@ -103,7 +103,7 @@ impl RepoWatch {
 
 impl Workspace {
     pub(in crate::workspace) fn git_view_shown(&self) -> bool {
-        self.sidebar_shown() && self.sidebar_view == SidebarView::Git
+        self.sidebar_shown() && self.sidebar.view == SidebarView::Git
     }
 
     /// Watch the repository while the Git view shows, and stop when it
