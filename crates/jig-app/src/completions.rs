@@ -174,6 +174,31 @@ pub fn from_server(
         .collect()
 }
 
+/// Whether `offset` is where a struct literal's next field could go: just
+/// after its `{` or a `,`, maybe past spaces or a new line, with nothing of
+/// a name typed yet. Typing there asks the server, and its fields are
+/// listed if that's all it offers ([`only_fields`]).
+pub fn could_start_a_field(text: &str, offset: usize) -> bool {
+    let offset = offset.min(text.len());
+    if name_start(text, offset) != offset {
+        return false;
+    }
+    text[..offset].trim_end().ends_with(['{', ','])
+}
+
+/// Whether `found` is a list of fields to fill in, as a server offers in a
+/// struct or object literal, rather than everything that could go in a
+/// block or a call's arguments.
+pub fn only_fields(found: &[Completion]) -> bool {
+    !found.is_empty()
+        && found.iter().all(|completion| {
+            matches!(
+                completion.item.kind,
+                Some(CompletionItemKind::FIELD | CompletionItemKind::PROPERTY)
+            ) || completion.item.label.starts_with("..")
+        })
+}
+
 /// Other words in `text` that start with the one being typed at `offset`,
 /// nearest first.
 pub fn from_words(text: &str, offset: usize) -> Vec<Completion> {
@@ -411,6 +436,36 @@ mod tests {
     fn words_match_any_case() {
         let text = "HttpClient\nhttp";
         assert_eq!(labels(&from_words(text, text.len())), ["HttpClient"]);
+    }
+
+    #[test]
+    fn fields_could_start_after_a_brace_or_comma() {
+        let at_end = |text: &str| could_start_a_field(text, text.len());
+        assert!(at_end("let p = Point {"));
+        assert!(at_end("let p = Point { "));
+        assert!(at_end("let p = Point {\n        "));
+        assert!(at_end("let p = Point { x: 1, "));
+        assert!(!at_end("let p = Point { x: 1, he"), "a name is being typed");
+        assert!(!at_end("let p = Point { x: "));
+        assert!(!at_end("let n = 1 "));
+    }
+
+    #[test]
+    fn only_fields_is_a_struct_literal_s_list() {
+        let found = |kinds: &[(&str, u32)]| {
+            let response: Vec<_> = kinds
+                .iter()
+                .map(|(label, kind)| json!({"label": label, "kind": kind}))
+                .collect();
+            from_server("", 0, Encoding::Utf8, &json!(response), "    ")
+        };
+        assert!(only_fields(&found(&[("x", 5), ("height", 5)])));
+        assert!(only_fields(&found(&[
+            ("x", 5),
+            ("..Default::default()", 15)
+        ])));
+        assert!(!only_fields(&found(&[("x", 5), ("main", 3)])), "a block");
+        assert!(!only_fields(&found(&[])));
     }
 
     #[test]

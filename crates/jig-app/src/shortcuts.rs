@@ -303,6 +303,16 @@ pub const ALL: &[Shortcut] = &[
         IN_CODE,
         ShowHover
     ),
+    // ⌃Space everywhere, as in most editors; on a Mac it can clash with
+    // switching input sources, and Settings can change it.
+    shortcut!(
+        "show_completions",
+        "Show completions",
+        Navigation,
+        ["ctrl-space"],
+        IN_CODE,
+        ShowCompletions
+    ),
     shortcut!(
         "next_tab",
         "Next tab",

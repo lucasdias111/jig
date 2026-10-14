@@ -585,3 +585,131 @@ fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
         lib_source
     );
 }
+
+/// A tab whose Rust server answers completions with `answer`, given the
+/// line asked about.
+fn with_completing_server(
+    cx: &mut TestAppContext,
+    text: &str,
+    answer: impl Fn(u64) -> serde_json::Value + Send + 'static,
+) -> (AnyWindowHandle, Entity<Workspace>) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let path = dir.path().join("src/main.rs");
+    std::fs::write(&path, text).unwrap();
+    let (client, _seen) = crate::lsp::fake_server(
+        dir.path().to_path_buf(),
+        move |method, params| match method {
+            "textDocument/completion" => answer(params["position"]["line"].as_u64().unwrap()),
+            _ => serde_json::Value::Null,
+        },
+    );
+    let server = crate::lsp::server_for("rust").unwrap();
+    let root = crate::lsp::root_for(server, &path);
+    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &path);
+    // The folder goes with the test's end; the tab has read the file.
+    std::mem::forget(dir);
+    (window, workspace)
+}
+
+fn put_cursor(cx: &mut TestAppContext, workspace: &Entity<Workspace>, at: usize) {
+    cx.update(|cx| workspace.read(cx).editor().clone().select(at..at, cx));
+}
+
+/// Wait for the server's answer to show, or not.
+fn settle(cx: &mut TestAppContext) {
+    for _ in 0..50 {
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[gpui_kit::test]
+fn completions_show_before_where_a_list_last_opened(cx: &mut TestAppContext) {
+    let text = "fn a() {\n    \n}\nfn b() {\n    \n}\n";
+    let (window, workspace) = with_completing_server(
+        cx,
+        text,
+        |_| serde_json::json!([{"label": "value", "kind": 6}]),
+    );
+    put_cursor(cx, &workspace, text.rfind("    \n").unwrap() + 4);
+    type_slowly(cx, window, "v");
+    settle(cx);
+    assert_eq!(completion_labels(cx, &workspace), ["value"]);
+    press(cx, window, "escape");
+    put_cursor(cx, &workspace, text.find("    \n").unwrap() + 4);
+    type_slowly(cx, window, "v");
+    settle(cx);
+    assert_eq!(completion_labels(cx, &workspace), ["value"]);
+}
+
+#[gpui_kit::test]
+fn a_struct_literal_lists_its_fields(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let text = "fn a() {\n    if ready \n    let p = Point \n}\n";
+    // The `if` gets everything a block could hold; below it, the literal
+    // gets its fields.
+    let (window, workspace) = with_completing_server(cx, text, |line| match line {
+        1 => json!([{"label": "x", "kind": 5}, {"label": "main", "kind": 3}]),
+        _ => json!([
+            {"label": "x", "kind": 5, "sortText": "1"},
+            {"label": "height", "kind": 5, "sortText": "2"},
+        ]),
+    });
+    put_cursor(cx, &workspace, text.find("ready ").unwrap() + 6);
+    type_slowly(cx, window, "{ ");
+    settle(cx);
+    assert!(completion_labels(cx, &workspace).is_empty(), "a block");
+
+    let literal = cx
+        .update(|cx| workspace.read(cx).editor().text(cx))
+        .find("Point ")
+        .unwrap()
+        + 6;
+    put_cursor(cx, &workspace, literal);
+    type_slowly(cx, window, "{");
+    settle(cx);
+    assert!(
+        completion_labels(cx, &workspace).is_empty(),
+        "Enter is free"
+    );
+    type_slowly(cx, window, " ");
+    settle(cx);
+    assert_eq!(completion_labels(cx, &workspace), ["x", "height"]);
+    // And on a new line after a comma.
+    press(cx, window, "escape");
+    type_slowly(cx, window, "x: 1,");
+    settle(cx);
+    assert!(
+        completion_labels(cx, &workspace).is_empty(),
+        "Enter is free"
+    );
+    press(cx, window, "enter");
+    settle(cx);
+    assert_eq!(completion_labels(cx, &workspace), ["x", "height"]);
+}
+
+#[gpui_kit::test]
+fn show_completions_lists_what_fits_at_the_cursor(cx: &mut TestAppContext) {
+    let text = "fn a() {\n    \n}\n";
+    let (window, workspace) = with_completing_server(cx, text, |_| {
+        serde_json::json!([
+            {"label": "value", "kind": 6, "sortText": "1"},
+            {"label": "main", "kind": 3, "sortText": "2"},
+        ])
+    });
+    put_cursor(cx, &workspace, text.find("    \n").unwrap() + 4);
+    settle(cx);
+    assert!(completion_labels(cx, &workspace).is_empty());
+    press(cx, window, "ctrl-space");
+    settle(cx);
+    assert_eq!(completion_labels(cx, &workspace), ["value", "main"]);
+    press(cx, window, "enter");
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        assert_eq!(editor.text(cx), "fn a() {\n    value\n}\n");
+    });
+}

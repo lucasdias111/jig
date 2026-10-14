@@ -145,11 +145,13 @@ impl InputBaseState<EditorMode> {
             return;
         }
 
-        let start_offset = self
-            .extras
-            .context_menu_content
-            .completion
+        // Jig patch: carry on from where the open list started, if the
+        // cursor is still past it; otherwise start here. Upstream kept the
+        // first start for good, so nothing completed before it again.
+        let menu = &self.extras.context_menu_content.completion;
+        let start_offset = menu
             .trigger_start_offset
+            .filter(|&offset| menu.open && offset <= new_offset)
             .unwrap_or(start);
         if new_offset < start_offset {
             return;

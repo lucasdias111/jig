@@ -99,6 +99,7 @@ actions!(
         NextProblem,
         PreviousProblem,
         ShowHover,
+        ShowCompletions,
         ToggleLineComment,
         FormatDocument,
         EditFormatters,
@@ -748,6 +749,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_problem))
             .on_action(cx.listener(Self::previous_problem))
             .on_action(cx.listener(Self::show_hover))
+            .on_action(cx.listener(Self::show_completions))
             .on_action(cx.listener(Self::toggle_line_comment))
             .on_action(cx.listener(Self::format_document))
             .on_action(cx.listener(Self::edit_formatters))

@@ -126,6 +126,11 @@ impl Workspace {
                         this.on_buffer_changed(cx);
                     }
                 }
+                if matches!(event, InputEvent::PressEnter { .. })
+                    && this.tab().editor.state() == state
+                {
+                    this.completions_after_enter(window, cx);
+                }
                 cx.notify();
             },
         );
