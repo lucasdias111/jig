@@ -194,8 +194,8 @@ impl Focusable for CommandPalette {
 }
 
 impl CommandPalette {
-    /// `has_selection` decides whether a custom command rewrites the
-    /// selection or inserts at the cursor.
+    /// `has_selection` decides whether a typed prompt is said to edit the
+    /// selection or the cursor's line.
     pub fn new(
         presets: Rc<Vec<Preset>>,
         has_selection: bool,
@@ -737,7 +737,7 @@ impl CommandPalette {
                     .on_agent(self.agent),
             )),
             Some(Row::Custom(text)) => cx.emit(PaletteEvent::Run(
-                Invocation::custom(text, self.has_selection).on_agent(self.agent),
+                Invocation::custom(text).on_agent(self.agent),
             )),
             Some(Row::Conversation(index)) => {
                 cx.emit(PaletteEvent::Resume(self.conversations[*index].id.clone()))
@@ -1309,7 +1309,7 @@ impl Render for CommandPalette {
             let target = if self.has_selection {
                 "the selection"
             } else {
-                "the cursor"
+                "this line"
             };
             let sees = std::iter::once("this file")
                 .chain(self.context.iter().map(String::as_str))
@@ -1581,7 +1581,7 @@ mod tests {
                     task: None,
                     name: None,
                     instruction: "add".into(),
-                    scope: Scope::Cursor
+                    scope: Scope::Selection
                 }
             );
         });

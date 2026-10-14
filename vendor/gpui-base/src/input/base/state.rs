@@ -1042,6 +1042,36 @@ impl<M: InputModeKind> InputBaseState<M> {
         });
     }
 
+    /// Jig patch: replace `range` (UTF-8 byte offsets) with `text` as one
+    /// undo step, whatever the selection or an input method's marked text
+    /// says, and put the cursor after it.
+    pub fn replace_range(
+        &mut self,
+        range: Range<usize>,
+        text: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text: SharedString = text.into();
+        let range = self.text.clip_offset(range.start, Bias::Left)
+            ..self.text.clip_offset(range.end, Bias::Right);
+        self.with_edits_allowed(|this| {
+            this.ime_marked_range = None;
+            this.undo_manager.set_pending_intent(EditIntent::Atomic);
+            let range_utf16 = this.range_to_utf16(&range);
+            this.replace_text_in_range_silent(Some(range_utf16), &text, window, cx);
+            let end = this.active_selection().end;
+            this.set_cursor_to(end);
+        });
+    }
+
+    /// Jig patch: undo the last edit straight away. Dispatching `Undo`
+    /// reaches the editor only through focus, which may not have settled
+    /// yet, e.g. just after a popup gave it back.
+    pub fn undo_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.replay_history(true, window, cx);
+    }
+
     fn replace_text(
         &mut self,
         text: impl Into<SharedString>,

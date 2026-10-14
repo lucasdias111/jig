@@ -139,14 +139,10 @@ impl Invocation {
         self
     }
 
-    /// A typed instruction. It works on the selection when there is one and
-    /// inserts at the cursor otherwise.
-    pub fn custom(text: &str, has_selection: bool) -> Self {
-        let scope = if has_selection {
-            Scope::Selection
-        } else {
-            Scope::Cursor
-        };
+    /// A typed instruction. It works on the selection, or the line the
+    /// cursor is on: what's typed is usually about the code there, and an
+    /// insertion at the cursor would keep the old code beside its rewrite.
+    pub fn custom(text: &str) -> Self {
         Self {
             comment: None,
             agent: false,
@@ -154,7 +150,7 @@ impl Invocation {
             task: None,
             name: None,
             instruction: text.trim().to_string(),
-            scope,
+            scope: Scope::Selection,
         }
     }
 }
@@ -632,16 +628,13 @@ mod tests {
 
     #[test]
     fn custom_invocation_scope() {
+        // The selection, or the cursor's line: never an insertion beside it.
         assert_eq!(
-            Invocation::custom(" make it async ", true).scope,
+            Invocation::custom(" make it async ").scope,
             Scope::Selection
         );
         assert_eq!(
-            Invocation::custom("insert a struct", false).scope,
-            Scope::Cursor
-        );
-        assert_eq!(
-            Invocation::custom(" make it async ", true).instruction,
+            Invocation::custom(" make it async ").instruction,
             "make it async"
         );
     }

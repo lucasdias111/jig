@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use gpui_kit::component::input::{
-    EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Undo,
+    EditorState, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
 };
 use gpui_kit::{App, Bounds, Entity, Hsla, Pixels, Point, Window, point};
 
@@ -143,7 +143,7 @@ impl EditorHandle for KitEditor {
         self.state.update(cx, |state, cx| {
             state.set_selected_range(range.clone(), cx);
             let start = state.selected_range().start;
-            state.replace(text.clone(), window, cx);
+            state.replace_range(range, text.clone(), window, cx);
             start..start + text.len()
         })
     }
@@ -180,7 +180,8 @@ impl EditorHandle for KitEditor {
 
     fn undo(&self, window: &mut Window, cx: &mut App) {
         self.focus(window, cx);
-        window.dispatch_action(Box::new(Undo), cx);
+        self.state
+            .update(cx, |state, cx| state.undo_last(window, cx));
     }
 }
 

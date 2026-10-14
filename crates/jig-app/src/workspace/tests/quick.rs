@@ -403,3 +403,76 @@ fn agents_md_goes_with_every_quick_command(cx: &mut TestAppContext) {
     let second = provider.0.lock().unwrap()[1].clone();
     assert!(second.contains("Prefer anyhow."), "{second}");
 }
+
+#[gpui_kit::test]
+fn a_typed_prompt_without_a_selection_rewrites_the_line(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    let original = "fn a() {\n    let count = 1;\n    count\n}\n";
+    std::fs::write(&path, original).unwrap();
+    let (window, workspace) = open(cx, &path);
+    use_provider(
+        cx,
+        &workspace,
+        Ok(r#"{"replace": "    let total = 1;", "message": "Renamed."}"#),
+    );
+    // The cursor in `count`, nothing selected.
+    run_preset(cx, window, &workspace, 19..19, "call it total");
+    assert_eq!(
+        text(cx, &workspace),
+        "fn a() {\n    let total = 1;\n    count\n}\n"
+    );
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(text(cx, &workspace), original);
+}
+
+#[gpui_kit::test]
+fn escape_rejects_after_the_selection_button(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    let original = "fn a() {\n    let count = 1;\n    count\n}\n";
+    std::fs::write(&path, original).unwrap();
+    let (window, workspace) = open(cx, &path);
+    use_provider(
+        cx,
+        &workspace,
+        Ok(r#"{"replace": "total", "message": "Renamed."}"#),
+    );
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let (from, to) = vcx.update(|_, cx| {
+        let state = workspace.read(cx).editor().state().read(cx);
+        let from = state.range_to_bounds(&(17..17)).unwrap();
+        let to = state.range_to_bounds(&(22..22)).unwrap();
+        (from.left_center(), to.left_center())
+    });
+    let none = gpui_kit::Modifiers::none();
+    vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, none);
+    vcx.simulate_mouse_move(to, Some(gpui_kit::MouseButton::Left), none);
+    vcx.simulate_mouse_up(to, gpui_kit::MouseButton::Left, none);
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.update(|_, cx| workspace.read(cx).editor().selection(cx)),
+        17..22
+    );
+    vcx.update(|window, cx| window.render_frame(cx));
+    let button = vcx
+        .debug_bounds("selection-command")
+        .expect("the button shows");
+    vcx.simulate_click(button.center(), none);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.simulate_input("rename it");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.update(|_, cx| workspace.read(cx).editor().text(cx)),
+        "fn a() {\n    let total = 1;\n    count\n}\n"
+    );
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.update(|_, cx| workspace.read(cx).editor().text(cx)),
+        original
+    );
+}
