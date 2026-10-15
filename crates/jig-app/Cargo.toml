@@ -40,7 +40,7 @@ trash = "5"
 # Updates: the latest release from GitHub, and the check that a download
 # was signed with Jig's key.
 ureq.workspace = true
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 # GDScript's grammar, which GPUI Kit has no feature for; registered in
 # `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
 tree-sitter-gdscript = "6"
