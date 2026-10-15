@@ -55,12 +55,14 @@ impl LivePoints {
     }
 }
 
-/// The places' ids in a debugger's output, when it's our logpoints'.
+/// The places' ids in a debugger's output, when it's our logpoints'. Some
+/// debuggers put something before the message, as Delve does its
+/// goroutine: `> [Go 1]: jig-fired 3`.
 pub(super) fn fired(output: &str) -> Option<Vec<usize>> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| line.trim().strip_prefix(MARKER)?.parse().ok())
+        .map(|line| line.trim().rsplit_once(MARKER)?.1.parse().ok())
         .collect::<Option<Vec<usize>>>()
         .filter(|ids| !ids.is_empty())
 }
@@ -124,6 +126,7 @@ mod tests {
     #[test]
     fn reads_only_our_messages() {
         assert_eq!(fired("jig-fired 3\n"), Some(vec![3]));
+        assert_eq!(fired("> [Go 1]: jig-fired 3\n"), Some(vec![3]));
         assert_eq!(fired("jig-fired 3\njig-fired 4\n"), Some(vec![3, 4]));
         assert_eq!(fired("total 6\n"), None);
         assert_eq!(fired("jig-fired 3\ntotal 6\n"), None);

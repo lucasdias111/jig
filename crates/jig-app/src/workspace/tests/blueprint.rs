@@ -776,50 +776,63 @@ fn asks_to_hear_each_block_fire_and_lights_it(cx: &mut TestAppContext) {
     assert!(logpoints(cx).is_empty());
 }
 
-/// JavaScript with js-debug: the blueprint fires off as the program runs,
-/// as it does for Rust. Needs Node, and `JIG_DEBUGGERS_DIR` where js-debug
-/// is installed.
-#[gpui_kit::test]
-#[ignore]
-fn fires_off_in_javascript_live(cx: &mut TestAppContext) {
-    assert!(
-        std::env::var_os("JIG_DEBUGGERS_DIR").is_some(),
-        "JIG_DEBUGGERS_DIR: where js-debug is installed"
-    );
+/// Runs `files` with debugger `debugger` and no breakpoint, the blueprint
+/// of `source`'s `main` showing: its `big` and `small` calls light up as
+/// the program goes round its loop, it never stops, and it prints `done`
+/// with none of the logpoints' messages.
+fn fires_off_live(
+    cx: &mut TestAppContext,
+    debugger: &str,
+    files: &[(&str, &str)],
+    source: &str,
+    run: &str,
+) {
     cx.executor().allow_parking();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir_all(root.join(".jig")).unwrap();
-    let source = root.join("main.js");
-    std::fs::write(
-        &source,
-        "function main() {\n  for (let item = 0; item < 60; item++) {\n    if (item % 2 === 0) {\n      big(item);\n    } else {\n      small(item);\n    }\n    pause(50);\n  }\n  console.log('done');\n}\n\nfunction big(_) {}\nfunction small(_) {}\nfunction pause(ms) {\n  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n}\n\nmain();\n",
-    )
-    .unwrap();
+    for (name, text) in files {
+        std::fs::write(root.join(name), text).unwrap();
+    }
     std::fs::write(
         root.join(".jig/run.toml"),
-        "[[run]]\nname = \"App\"\ncommand = \"node main.js\"\n",
+        format!("[[run]]\nname = \"App\"\n{run}"),
     )
     .unwrap();
+    let source = root.join(source);
     let (window, workspace) = open(cx, &root);
-    step(cx, window, |_, cx| {
-        crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+    let key = debugger.to_string();
+    step(cx, window, move |_, cx| {
+        crate::settings::update(cx, |s| {
+            s.debugging.set_enabled(&key, true);
+            // C and Swift aren't in everyone's list from the start.
+            for language in ["c", "swift"] {
+                if !s.languages.added.iter().any(|added| added == language) {
+                    s.languages.added.push(language.into());
+                }
+            }
+        })
     });
     open_file(cx, window, &workspace, &source);
     toggle(cx, window);
     let view = view(cx, &workspace);
     assert_eq!(
-        cx.update(|cx| view.read(cx).current_function().unwrap().name.clone()),
+        cx.update(|cx| view.read(cx).current_function().unwrap().short.clone()),
         "main"
     );
     let node = |cx: &mut TestAppContext, title: &str| {
         cx.update(|cx| {
-            view.read(cx)
-                .graph()
-                .nodes
+            let view = view.read(cx);
+            let nodes = &view.graph().nodes;
+            nodes
                 .iter()
                 .position(|node| node.title == title)
-                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no {title} in {:?}",
+                        nodes.iter().map(|n| &n.title).collect::<Vec<_>>()
+                    )
+                })
         })
     };
     let (big, small) = (node(cx, "Call big"), node(cx, "Call small"));
@@ -851,7 +864,8 @@ fn fires_off_in_javascript_live(cx: &mut TestAppContext) {
         }
     }
     step(cx, window, |window, cx| window.press("enter", cx));
-    for _ in 0..1500 {
+    // Building and starting a debugger can take a while.
+    for _ in 0..4000 {
         tick(cx);
         if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(Phase::Ended) {
             break;
@@ -865,12 +879,105 @@ fn fires_off_in_javascript_live(cx: &mut TestAppContext) {
     let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     eprintln!("{texts:#?}");
-    assert!(texts.iter().any(|text| text == "done"));
+    assert!(texts.iter().any(|text| text == "done"), "it ran to the end");
     assert!(
         !texts.iter().any(|text| text.contains("jig-fired")),
         "the logpoints' messages stay out of the console"
     );
     assert_eq!(seen, [big, small].into(), "both ways the `if` went lit up");
+}
+
+fn needs_debuggers_dir() {
+    assert!(
+        std::env::var_os("JIG_DEBUGGERS_DIR").is_some(),
+        "JIG_DEBUGGERS_DIR: where the debugger is installed"
+    );
+}
+
+/// JavaScript with js-debug. Needs Node, and `JIG_DEBUGGERS_DIR`.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_javascript_live(cx: &mut TestAppContext) {
+    needs_debuggers_dir();
+    fires_off_live(
+        cx,
+        "typescript",
+        &[(
+            "main.js",
+            "function main() {\n  for (let item = 0; item < 60; item++) {\n    if (item % 2 === 0) {\n      big(item);\n    } else {\n      small(item);\n    }\n    pause(50);\n  }\n  console.log('done');\n}\n\nfunction big(_) {}\nfunction small(_) {}\nfunction pause(ms) {\n  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n}\n\nmain();\n",
+        )],
+        "main.js",
+        "command = \"node main.js\"\n",
+    );
+}
+
+/// Python with debugpy. Needs `JIG_DEBUGGERS_DIR`.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_python_live(cx: &mut TestAppContext) {
+    needs_debuggers_dir();
+    fires_off_live(
+        cx,
+        "python",
+        &[(
+            "main.py",
+            "import time\n\n\ndef main():\n    for item in range(60):\n        if item % 2 == 0:\n            big(item)\n        else:\n            small(item)\n        time.sleep(0.05)\n    print(\"done\")\n\n\ndef big(_):\n    pass\n\n\ndef small(_):\n    pass\n\n\nmain()\n",
+        )],
+        "main.py",
+        "command = \"python3 main.py\"\n",
+    );
+}
+
+/// Go with Delve. Needs Go, and `JIG_DEBUGGERS_DIR`.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_go_live(cx: &mut TestAppContext) {
+    needs_debuggers_dir();
+    fires_off_live(
+        cx,
+        "go",
+        &[
+            (
+                "main.go",
+                "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tfor item := 0; item < 60; item++ {\n\t\tif item%2 == 0 {\n\t\t\tbig(item)\n\t\t} else {\n\t\t\tsmall(item)\n\t\t}\n\t\ttime.Sleep(50 * time.Millisecond)\n\t}\n\tfmt.Println(\"done\")\n}\n\nfunc big(_ int)   {}\nfunc small(_ int) {}\n",
+            ),
+            ("go.mod", "module sample\n\ngo 1.22\n"),
+        ],
+        "main.go",
+        "command = \"go run .\"\n",
+    );
+}
+
+/// C with LLDB, built with the system's compiler.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_c_live(cx: &mut TestAppContext) {
+    fires_off_live(
+        cx,
+        "rust",
+        &[(
+            "main.c",
+            "#include <stdio.h>\n#include <unistd.h>\n\nvoid big(int x);\nvoid small(int x);\n\nint main(void) {\n    for (int item = 0; item < 60; item++) {\n        if (item % 2 == 0) {\n            big(item);\n        } else {\n            small(item);\n        }\n        usleep(50000);\n    }\n    printf(\"done\\n\");\n    return 0;\n}\n\nvoid big(int x) {}\nvoid small(int x) {}\n",
+        )],
+        "main.c",
+        "command = \"./app\"\nprogram = \"app\"\nbuild = \"cc -g -O0 main.c -o app\"\n",
+    );
+}
+
+/// Swift with LLDB. Needs Xcode's tools.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_swift_live(cx: &mut TestAppContext) {
+    fires_off_live(
+        cx,
+        "rust",
+        &[(
+            "main.swift",
+            "import Foundation\n\nfunc main() {\n    for item in 0..<60 {\n        if item % 2 == 0 {\n            big(item)\n        } else {\n            small(item)\n        }\n        usleep(50000)\n    }\n    print(\"done\")\n}\n\nfunc big(_ x: Int) {}\nfunc small(_ x: Int) {}\n\nmain()\n",
+        )],
+        "main.swift",
+        "command = \"./app\"\nprogram = \"app\"\nbuild = \"swiftc -g -Onone main.swift -o app\"\n",
+    );
 }
 
 /// A TypeScript file's blueprint, from the button's shortcut, with its

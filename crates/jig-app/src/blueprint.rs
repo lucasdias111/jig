@@ -2,14 +2,15 @@
 //! order they run in, like an Unreal Blueprint's exec wires. Each statement
 //! is a block; `if`, `match` and loops branch, and `return`, `continue` and
 //! panics end a path. Read with tree-sitter, so it works on code that
-//! doesn't build yet. Rust is read here; JavaScript and TypeScript in
-//! `script`.
+//! doesn't build yet. Rust is read here; every other language by the
+//! shared builder in `flow`, as its `Syntax` in `lang` says.
 
 mod data;
 pub mod debug;
+mod flow;
+mod lang;
 pub mod layout;
 pub mod live;
-mod script;
 pub mod view;
 
 use std::ops::Range;
@@ -121,6 +122,13 @@ pub enum Lang {
     JavaScript,
     TypeScript,
     Tsx,
+    Python,
+    Go,
+    Java,
+    C,
+    Cpp,
+    Swift,
+    Zig,
 }
 
 impl Lang {
@@ -131,6 +139,13 @@ impl Lang {
             "javascript" => Lang::JavaScript,
             "typescript" => Lang::TypeScript,
             "tsx" => Lang::Tsx,
+            "python" => Lang::Python,
+            "go" => Lang::Go,
+            "java" => Lang::Java,
+            "c" => Lang::C,
+            "cpp" => Lang::Cpp,
+            "swift" => Lang::Swift,
+            "zig" => Lang::Zig,
             _ => return None,
         })
     }
@@ -141,6 +156,13 @@ impl Lang {
             Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Lang::Python => tree_sitter_python::LANGUAGE.into(),
+            Lang::Go => tree_sitter_go::LANGUAGE.into(),
+            Lang::Java => tree_sitter_java::LANGUAGE.into(),
+            Lang::C => tree_sitter_c::LANGUAGE.into(),
+            Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
+            Lang::Zig => tree_sitter_zig::LANGUAGE.into(),
         }
     }
 }
@@ -163,8 +185,8 @@ pub fn functions(source: &str, lang: Lang) -> Vec<Function> {
     let Some(tree) = parse(source, lang) else {
         return Vec::new();
     };
-    if lang != Lang::Rust {
-        return script::functions(tree.root_node(), source);
+    if let Some(syntax) = lang::syntax(lang) {
+        return flow::functions(syntax, tree.root_node(), source);
     }
     let mut found = Vec::new();
     collect_functions(tree.root_node(), source, &Scope::default(), &mut found);
@@ -259,8 +281,8 @@ pub fn at(functions: &[Function], offset: usize) -> Option<usize> {
 /// longer there.
 pub fn graph(source: &str, lang: Lang, function: &Function) -> Option<Graph> {
     let tree = parse(source, lang)?;
-    if lang != Lang::Rust {
-        return script::graph(tree.root_node(), source, function);
+    if let Some(syntax) = lang::syntax(lang) {
+        return flow::graph(syntax, tree.root_node(), source, function);
     }
     let item = tree
         .root_node()
@@ -704,8 +726,8 @@ pub fn callers_in(source: &str, lang: Lang, function: &Function) -> Vec<(String,
     let Some(tree) = parse(source, lang) else {
         return Vec::new();
     };
-    if lang != Lang::Rust {
-        return script::callers_in(tree.root_node(), source, function);
+    if let Some(syntax) = lang::syntax(lang) {
+        return flow::callers_in(syntax, tree.root_node(), source, function);
     }
     let short = function.name.rsplit("::").next().unwrap_or(&function.name);
     let functions = functions(source, lang);
