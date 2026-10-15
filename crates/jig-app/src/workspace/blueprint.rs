@@ -6,6 +6,10 @@
 //! The functions calling the one shown come from the language server's
 //! call hierarchy, or without one, from this file; a caller, or a call's
 //! button, opens that function's blueprint, and Go Back returns.
+//!
+//! While debugging, a block's dot sets a breakpoint on its line, the block
+//! the debugger is paused in is marked and followed, and the way it went
+//! this session is lit, with how many times it paused in each block.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -18,8 +22,11 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
+use super::breakpoints::{line_of, line_range};
 use super::definitions::with_timeout;
+use super::tabs::canonical;
 use super::{ToggleBlueprint, Workspace};
+use crate::blueprint::debug::DebugMarks;
 use crate::blueprint::{self, Caller, Function, view::BlueprintEvent, view::BlueprintView};
 use crate::lsp;
 
@@ -30,6 +37,8 @@ const CALLERS_TIMEOUT: Duration = Duration::from_secs(10);
 /// many times, this far apart.
 const CALLERS_ATTEMPTS: usize = 4;
 const CALLERS_RETRY: Duration = Duration::from_secs(2);
+/// More pauses than anyone steps through in one session.
+const MAX_TRAIL: usize = 2000;
 
 pub(super) struct OpenBlueprint {
     pub(super) view: Entity<BlueprintView>,
@@ -76,6 +85,11 @@ impl Workspace {
                 }
             }
             BlueprintEvent::StepInto(callee) => this.open_callee(*callee, window, cx),
+            BlueprintEvent::ToggleBreakpoint(at) => {
+                let line = line_of(&this.editor().text(cx), *at);
+                let id = this.tab().id();
+                this.toggle_breakpoint_line(id, line, window, cx);
+            }
         });
         let code = self.editor().state().focus_handle(cx);
         let tab = self.tab().id();
@@ -96,6 +110,7 @@ impl Workspace {
         if let Some(function) = function {
             self.find_callers(&view, &function, window, cx);
         }
+        self.refresh_blueprint_debug(cx);
         cx.notify();
     }
 
@@ -344,6 +359,50 @@ impl Workspace {
         let cursor = tab.editor.cursor(cx);
         open.view
             .update(cx, |view, cx| view.refresh(source, cursor, cx));
+        // Breakpoints move with the lines.
+        self.refresh_blueprint_debug(cx);
+    }
+
+    /// The debugger paused at `line` (0-based) of `path`: on the trail.
+    pub(super) fn note_pause(&mut self, path: &Path, line: u32) {
+        let place = (canonical(path), line);
+        if self.debug_trail.last() != Some(&place) {
+            self.debug_trail.push(place);
+        }
+        if self.debug_trail.len() > MAX_TRAIL {
+            self.debug_trail.remove(0);
+        }
+    }
+
+    /// Hand each blueprint showing the debugger's marks in its file.
+    pub(super) fn refresh_blueprint_debug(&self, cx: &mut App) {
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let Some(open) = tab.blueprint.as_ref() else {
+                continue;
+            };
+            let text = tab.editor.text(cx);
+            let path = tab.document.path.as_deref().map(canonical);
+            let code_on =
+                |line: u32| line_range(&text, line).map(|range| first_code(&text, range.start));
+            let marks = DebugMarks {
+                enabled: self.takes_breakpoints_in(ix),
+                breakpoints: self
+                    .breakpoint_lines(ix, cx)
+                    .into_iter()
+                    .filter_map(code_on)
+                    .collect(),
+                paused: self
+                    .execution_offset(ix, cx)
+                    .map(|at| first_code(&text, at)),
+                trail: self
+                    .debug_trail
+                    .iter()
+                    .filter(|(file, _)| Some(file) == path.as_ref())
+                    .filter_map(|&(_, line)| code_on(line))
+                    .collect(),
+            };
+            open.view.update(cx, |view, cx| view.set_debug(marks, cx));
+        }
     }
 }
 
@@ -405,6 +464,14 @@ fn callers_from(
         .collect();
     callers.sort_by(|a, b| (&a.path, a.at).cmp(&(&b.path, b.at)));
     callers
+}
+
+/// The first code on the line from `start`, past its indentation, which
+/// is where its block starts.
+fn first_code(text: &str, start: usize) -> usize {
+    let line = &text[start..];
+    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+    start + indent
 }
 
 /// `workspace.rs:412`: the file's name and the line `at` is on.

@@ -205,6 +205,9 @@ pub struct Workspace {
     planner: planner::PlannerState,
     /// Where jumps came from, for Go Back and Go Forward.
     history: navigation::History,
+    /// Where the debugger paused this session, oldest first, as files and
+    /// 0-based lines: the blueprint lights the way it went.
+    debug_trail: Vec<(PathBuf, u32)>,
     file_watch: file_watch::FileWatch,
     /// A save waiting on its formatter.
     pending_save: Option<format::PendingSave>,
@@ -288,6 +291,7 @@ impl Workspace {
             git: Default::default(),
             planner: Default::default(),
             history: Default::default(),
+            debug_trail: Vec::new(),
             file_watch: file_watch::FileWatch::start(window, cx),
             pending_save: None,
             status_note: None,

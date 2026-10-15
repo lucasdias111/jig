@@ -16,6 +16,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::debug::{self, DebugMarks, OnBlocks};
 use super::layout::{self, Layout, Rect};
 use super::{Caller, Function, Graph, Kind, Node};
 
@@ -57,6 +58,8 @@ pub enum BlueprintEvent {
     /// A call's button: show the blueprint of the function it calls,
     /// whose name starts at this offset.
     StepInto(usize),
+    /// A block's dot: a breakpoint on the line at this offset, or none.
+    ToggleBreakpoint(usize),
 }
 
 pub struct BlueprintView {
@@ -85,6 +88,8 @@ pub struct BlueprintView {
     folded: HashSet<Option<String>>,
     /// Sections already met, so a test module starts folded only once.
     seen_sections: HashSet<Option<String>>,
+    /// What the debugger has to show here.
+    debug: DebugMarks,
 }
 
 impl EventEmitter<BlueprintEvent> for BlueprintView {}
@@ -114,6 +119,7 @@ impl BlueprintView {
             highlight: None,
             folded: HashSet::new(),
             seen_sections: HashSet::new(),
+            debug: DebugMarks::default(),
         };
         this.refresh(source, cursor, cx);
         this
@@ -264,6 +270,39 @@ impl BlueprintView {
     #[cfg(test)]
     pub fn highlight(&self) -> Option<usize> {
         self.highlight
+    }
+
+    /// The debugger's marks, as they now are. Pausing somewhere new shows
+    /// that function, with the block it's paused in on screen.
+    pub fn set_debug(&mut self, marks: DebugMarks, cx: &mut Context<Self>) {
+        if marks == self.debug {
+            return;
+        }
+        let paused = marks.paused.filter(|&at| Some(at) != self.debug.paused);
+        self.debug = marks;
+        if let Some(at) = paused
+            && let Some(ix) = super::at(&self.functions, at)
+        {
+            if self.current != Some(ix) {
+                self.show(ix, cx);
+            }
+            if let Some(node) = super::node_at(&self.graph, at) {
+                self.bring_into_view(self.layout.rects[node]);
+            }
+        }
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn on_blocks(&self) -> OnBlocks {
+        debug::on_blocks(&self.graph, &self.debug)
+    }
+
+    /// Node `ix`'s breakpoint, as its dot does.
+    pub fn toggle_breakpoint(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(node) = self.graph.nodes.get(ix) {
+            cx.emit(BlueprintEvent::ToggleBreakpoint(node.range.start));
+        }
     }
 
     /// Node `ix`'s call, as its button does.
@@ -505,13 +544,65 @@ impl BlueprintView {
     /// One block: a header with its title, then its code, then its pin
     /// rows: data inputs on the left, named outputs and data values on the
     /// right.
-    fn render_node(&self, ix: usize, node: &Node, rect: Rect, cx: &Context<Self>) -> AnyElement {
+    fn render_node(
+        &self,
+        ix: usize,
+        node: &Node,
+        rect: Rect,
+        marks: &OnBlocks,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let zoom = self.zoom;
         let scaled = |value: f32| px(value * zoom);
         let accent = kind_colour(node.kind, cx);
         let at = self.to_canvas((rect.x, rect.y));
         let highlighted = self.highlight == Some(ix);
+        let paused = marks.paused == Some(ix);
+        let visits = marks.visits.get(ix).copied().unwrap_or_default();
+        // Once it has run through here, what it hasn't reached fades.
+        let unreached = marks.traced() && visits == 0 && !paused;
+        let group: SharedString = format!("blueprint-node-{ix}").into();
+        let breakpoint = self.debug.enabled.then(|| {
+            let set = marks.breakpoints.contains(&ix);
+            let size = scaled(9.);
+            div()
+                .id(("blueprint-breakpoint", ix))
+                .flex_none()
+                .size(size)
+                .rounded(size)
+                .border_1()
+                .when(set, |this| this.bg(theme.red).border_color(theme.red))
+                .when(!set, |this| {
+                    this.border_color(transparent_black())
+                        .group_hover(group.clone(), |style| {
+                            style.border_color(theme.muted_foreground.opacity(0.6))
+                        })
+                        .hover(|style| style.bg(theme.red.opacity(0.5)))
+                })
+                .tooltip(move |window, cx| {
+                    let text = if set {
+                        "Remove the breakpoint"
+                    } else {
+                        "Add a breakpoint"
+                    };
+                    Tooltip::new(text).build(window, cx)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_breakpoint(ix, cx);
+                }))
+        });
+        let visit_count = (visits > 1).then(|| {
+            div()
+                .flex_none()
+                .px(scaled(4.))
+                .rounded(scaled(4.))
+                .bg(theme.blue.opacity(0.18))
+                .text_color(theme.blue)
+                .text_size(scaled(10.5))
+                .child(format!("×{visits}"))
+        });
         let data = self.layout.data;
         let step = node.callee.map(|_| {
             div()
@@ -601,9 +692,17 @@ impl BlueprintView {
             .h(scaled(rect.height))
             .overflow_hidden()
             .rounded(scaled(7.))
+            .group(group)
             .border_1()
-            .border_color(if highlighted { accent } else { theme.border })
-            .when(highlighted, |this| this.border_2())
+            .border_color(if paused {
+                theme.blue
+            } else if highlighted {
+                accent
+            } else {
+                theme.border
+            })
+            .when(highlighted || paused, |this| this.border_2())
+            .when(unreached, |this| this.opacity(0.55))
             .bg(theme.popover)
             .shadow_sm()
             .cursor_pointer()
@@ -622,8 +721,23 @@ impl BlueprintView {
                     .border_color(accent.opacity(0.35))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.foreground)
-                    .child(div().truncate().child(node.title.clone()))
-                    .children(step),
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .gap(scaled(6.))
+                            .children(breakpoint)
+                            .when(paused, |this| {
+                                this.child(div().flex_none().text_color(theme.blue).child("▶"))
+                            })
+                            .child(div().truncate().child(node.title.clone())),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap(scaled(4.))
+                            .children(visit_count)
+                            .children(step),
+                    ),
             )
             .children(body)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -734,14 +848,18 @@ impl BlueprintView {
     }
 
     /// Each wire's ends in the canvas.
-    fn wires(&self) -> Vec<(Point<Pixels>, Point<Pixels>)> {
+    /// Each wire's ends in the canvas, and whether the debugger went
+    /// along it.
+    fn wires(&self, marks: &OnBlocks) -> Vec<(Point<Pixels>, Point<Pixels>, bool)> {
         self.graph
             .edges
             .iter()
-            .map(|edge| {
+            .enumerate()
+            .map(|(ix, edge)| {
                 (
                     self.to_canvas(self.layout.out_pin(&self.graph, edge.from, edge.out)),
                     self.to_canvas(self.layout.in_pin(edge.to)),
+                    marks.taken.contains(&ix),
                 )
             })
             .collect()
@@ -816,7 +934,9 @@ impl BlueprintView {
         let grid = theme.foreground.opacity(0.045);
         let wire = theme.foreground.opacity(0.6);
         let pin = theme.foreground.opacity(0.8);
-        let wires = self.wires();
+        let marks = debug::on_blocks(&self.graph, &self.debug);
+        let wires = self.wires(&marks);
+        let taken_wire = theme.blue;
         let caller_wires = self.caller_wires();
         let caller_wire = theme.muted_foreground.opacity(0.5);
         let pins = self.pins();
@@ -849,8 +969,22 @@ impl BlueprintView {
                         window,
                     );
                 }
-                for (from, to) in wires {
+                // The way it went on top, brighter and wider.
+                let (taken, others): (Vec<_>, Vec<_>) =
+                    wires.into_iter().partition(|(_, _, taken)| *taken);
+                for (from, to, _) in others {
                     paint_wire(drawn.origin + from, drawn.origin + to, zoom, wire, window);
+                }
+                for (from, to, _) in taken {
+                    let width = (3. * zoom).max(1.5);
+                    paint_curve(
+                        drawn.origin + from,
+                        drawn.origin + to,
+                        zoom,
+                        width,
+                        taken_wire,
+                        window,
+                    );
                 }
             },
         )
@@ -879,7 +1013,7 @@ impl BlueprintView {
             .iter()
             .zip(&self.layout.rects)
             .enumerate()
-            .map(|(ix, (node, rect))| self.render_node(ix, node, *rect, cx))
+            .map(|(ix, (node, rect))| self.render_node(ix, node, *rect, &marks, cx))
             .collect();
         div()
             .id("blueprint-canvas")

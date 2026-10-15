@@ -354,6 +354,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.debug_trail.clear();
+        self.refresh_blueprint_debug(cx);
         let plan = match debug_target::plan_for(&config, &debuggers::registry()) {
             Ok(plan) => plan,
             Err(why) => {
@@ -807,6 +809,11 @@ impl Workspace {
         // Start where there's code to show: a crash often pauses inside
         // the system's libraries.
         let first = frames.iter().position(|f| f.path.is_some()).unwrap_or(0);
+        if let Some(frame) = frames.get(first)
+            && let Some(path) = &frame.path
+        {
+            self.note_pause(path, frame.line.saturating_sub(1));
+        }
         let Some(debug) = self.debug_mut() else {
             return;
         };

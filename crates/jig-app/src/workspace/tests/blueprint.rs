@@ -434,3 +434,182 @@ fn test_modules_start_folded_and_open_when_shown(cx: &mut TestAppContext) {
     assert!(!folded(cx, Some("mod tests")));
     step(cx, window, |window, cx| window.render_frame(cx));
 }
+
+#[gpui_kit::test]
+fn debugging_follows_along_in_the_blueprint(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("src/main.rs");
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".jig")).unwrap();
+    std::fs::write(
+        &source,
+        "fn main() {\n    let numbers = vec![1, 2, 3];\n    let total: i32 = numbers.iter().sum();\n    println!(\"total {total}\");\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".jig/run.toml"),
+        "[[run]]\nname = \"App\"\ncommand = \"./app\"\nprogram = \"app\"\n",
+    )
+    .unwrap();
+    let source = source.canonicalize().unwrap();
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    super::debug::fake_adapter(source.clone(), sent.clone());
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &source);
+    toggle(cx, window);
+    let view = view(cx, &workspace);
+    let node = |cx: &mut TestAppContext, title: &str| {
+        cx.update(|cx| {
+            view.read(cx)
+                .graph()
+                .nodes
+                .iter()
+                .position(|node| node.title == title)
+                .unwrap()
+        })
+    };
+    let total = node(cx, "Let total");
+
+    // A block's dot sets a breakpoint on its line.
+    step(cx, window, |_, cx| {
+        view.update(cx, |view, cx| view.toggle_breakpoint(total, cx))
+    });
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert_eq!(this.breakpoint_lines(this.active, cx), [2].into());
+    });
+    let marks = cx.update(|cx| view.read(cx).on_blocks());
+    assert!(marks.breakpoints.contains(&total));
+
+    step(cx, window, |window, cx| window.press("ctrl-d", cx));
+    wait_until(cx, |cx| {
+        cx.update(|cx| workspace.read(cx).run_picker_rows(cx))
+            .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
+    });
+    step(cx, window, |window, cx| window.press("enter", cx));
+    wait_until(cx, |cx| {
+        cx.update(|cx| workspace.read(cx).debug_variable_rows().len() >= 3)
+    });
+    assert!(showing(cx, &workspace), "the blueprint stays while paused");
+    let marks = cx.update(|cx| view.read(cx).on_blocks());
+    assert_eq!(marks.paused, Some(total));
+    assert_eq!(marks.visits[total], 1);
+
+    // Resumed and finished: no pause, but the way it went stays.
+    step(cx, window, |window, cx| window.press("f9", cx));
+    wait_until(cx, |cx| {
+        cx.update(|cx| workspace.read(cx).run_output())
+            .is_some_and(|(_, _, ending)| ending.is_some())
+    });
+    let marks = cx.update(|cx| view.read(cx).on_blocks());
+    assert_eq!(marks.paused, None);
+    assert_eq!(marks.visits[total], 1);
+    assert!(marks.traced());
+}
+
+/// Stepping through a loop with the real LLDB lights both ways the `if`
+/// went. Needs `lldb-dap` (Xcode's, or one on the PATH); macOS may ask
+/// once to allow debugging.
+#[gpui_kit::test]
+#[ignore]
+fn stepping_lights_the_way_live(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    let source = root.join("src/main.rs");
+    std::fs::write(
+        &source,
+        "fn main() {\n    let items = vec![1, 5];\n    for item in items {\n        if item > 2 {\n            big(item);\n        } else {\n            small(item);\n        }\n    }\n    done();\n}\n\nfn big(_: i32) {}\nfn small(_: i32) {}\nfn done() {}\n",
+    )
+    .unwrap();
+    let (window, workspace) = open(cx, &root);
+    open_file(cx, window, &workspace, &source);
+    toggle(cx, window);
+    let view = view(cx, &workspace);
+    let node = |cx: &mut TestAppContext, title: &str| {
+        cx.update(|cx| {
+            view.read(cx)
+                .graph()
+                .nodes
+                .iter()
+                .position(|node| node.title == title)
+                .unwrap()
+        })
+    };
+    let first = node(cx, "Let items");
+    step(cx, window, |_, cx| {
+        view.update(cx, |view, cx| view.toggle_breakpoint(first, cx))
+    });
+    let wait = |cx: &mut TestAppContext, done: &dyn Fn(&Workspace, &gpui_kit::App) -> bool| {
+        for _ in 0..1200 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            if cx.update(|cx| done(workspace.read(cx), cx)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let output = cx.update(|cx| workspace.read(cx).run_output());
+        panic!("timed out: {output:#?}");
+    };
+    use crate::workspace::debug::Phase;
+    step(cx, window, |window, cx| window.press("ctrl-d", cx));
+    wait(cx, &|this, cx| {
+        this.run_picker_rows(cx)
+            .is_some_and(|rows| rows.iter().any(|row| row == "sample"))
+    });
+    step(cx, window, |window, cx| window.input("sample", cx));
+    step(cx, window, |window, cx| window.press("enter", cx));
+    wait(cx, &|this, _| this.debug_phase() == Some(Phase::Paused));
+    assert!(showing(cx, &workspace));
+    // Step over until `done` is next, or it ends.
+    let done = node(cx, "Call done");
+    for _ in 0..30 {
+        if cx.update(|cx| view.read(cx).on_blocks().paused) == Some(done) {
+            break;
+        }
+        step(cx, window, |window, cx| window.press("f8", cx));
+        wait(cx, &|this, _| {
+            matches!(this.debug_phase(), Some(Phase::Paused) | Some(Phase::Ended))
+        });
+        if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(Phase::Ended) {
+            break;
+        }
+    }
+    let marks = cx.update(|cx| view.read(cx).on_blocks());
+    let graph = cx.update(|cx| view.read(cx).graph().clone());
+    let titles = |edges: &std::collections::HashSet<usize>| {
+        let mut taken: Vec<(String, String)> = edges
+            .iter()
+            .map(|&edge| {
+                let edge = graph.edges[edge];
+                (
+                    graph.nodes[edge.from].title.clone(),
+                    graph.nodes[edge.to].title.clone(),
+                )
+            })
+            .collect();
+        taken.sort();
+        taken
+    };
+    eprintln!(
+        "visits {:?}\ntaken {:?}",
+        marks.visits,
+        titles(&marks.taken)
+    );
+    assert!(
+        marks.visits[node(cx, "Branch")] >= 2,
+        "round the loop twice"
+    );
+    let taken = titles(&marks.taken);
+    assert!(taken.contains(&("Branch".into(), "Call big".into())));
+    assert!(taken.contains(&("Branch".into(), "Call small".into())));
+    step(cx, window, |window, cx| window.press("secondary-f2", cx));
+}

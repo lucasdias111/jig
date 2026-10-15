@@ -5,6 +5,7 @@
 //! code that doesn't build yet.
 
 mod data;
+pub mod debug;
 pub mod layout;
 pub mod view;
 

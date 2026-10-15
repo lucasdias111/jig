@@ -183,6 +183,7 @@ impl Workspace {
             }
             self.tabs[ix].marks.enabled = enabled;
         }
+        self.refresh_blueprint_debug(cx);
     }
 
     /// ⌘F8: a breakpoint on the cursor's line, or none.
@@ -201,7 +202,7 @@ impl Workspace {
         self.toggle_breakpoint_line(id, line, window, cx);
     }
 
-    fn toggle_breakpoint_line(
+    pub(super) fn toggle_breakpoint_line(
         &mut self,
         id: EntityId,
         line: u32,
@@ -224,6 +225,7 @@ impl Workspace {
         self.breakpoints
             .set(path.clone(), self.breakpoint_lines(ix, cx));
         self.breakpoints_changed(&path, cx);
+        self.refresh_blueprint_debug(cx);
         cx.notify();
     }
 
@@ -297,10 +299,23 @@ impl Workspace {
     ) {
         self.clear_execution_line(cx);
         let position = lsp_types::Position::new(line, 0);
-        self.open_at(path, lsp_types::Range::new(position, position), window, cx);
+        // Following along in the blueprint: it stays, at the pause.
+        let in_blueprint = self.blueprint().is_some();
+        if in_blueprint {
+            self.remember_location(cx);
+            self.open_file(path, window, cx);
+        } else {
+            self.open_at(path, lsp_types::Range::new(position, position), window, cx);
+        }
         let Some(ix) = self.tab_for(path) else {
             return;
         };
+        if in_blueprint && self.showing(path) {
+            let text = self.editor().text(cx);
+            if let Some(range) = line_range(&text, line) {
+                self.blueprint_at(range.start, window, cx);
+            }
+        }
         let text = self.tabs[ix].editor.text(cx);
         if let Some(range) = line_range(&text, line) {
             let color = cx.theme().blue.opacity(0.22);
@@ -313,6 +328,24 @@ impl Workspace {
                 cx,
             );
         }
+        self.refresh_blueprint_debug(cx);
+    }
+
+    /// Where the debugger is paused in tab `ix`: the start of the marked
+    /// line.
+    pub(super) fn execution_offset(&self, ix: usize, cx: &App) -> Option<usize> {
+        self.tabs[ix]
+            .marks
+            .execution
+            .get_ranges(cx)
+            .into_iter()
+            .next()
+            .map(|range| range.start)
+    }
+
+    /// Whether tab `ix` takes breakpoints.
+    pub(super) fn takes_breakpoints_in(&self, ix: usize) -> bool {
+        self.tabs[ix].marks.enabled
     }
 
     /// Where the execution line is marked, if anywhere.
@@ -329,6 +362,7 @@ impl Workspace {
         for tab in &self.tabs {
             tab.marks.execution.clear(cx);
         }
+        self.refresh_blueprint_debug(cx);
     }
 }
 
@@ -347,7 +381,7 @@ fn breakpoint_decorations(text: &str, lines: &BTreeSet<u32>, color: Hsla) -> Vec
 }
 
 /// The 0-based line `offset` is on.
-fn line_of(text: &str, offset: usize) -> u32 {
+pub(super) fn line_of(text: &str, offset: usize) -> u32 {
     let mut offset = offset.min(text.len());
     while !text.is_char_boundary(offset) {
         offset -= 1;
@@ -357,7 +391,7 @@ fn line_of(text: &str, offset: usize) -> u32 {
 
 /// Line `line`'s bytes, its newline included; `None` past the end or for an
 /// empty last line, which has nothing to decorate.
-fn line_range(text: &str, line: u32) -> Option<Range<usize>> {
+pub(super) fn line_range(text: &str, line: u32) -> Option<Range<usize>> {
     let mut start = 0;
     for _ in 0..line {
         start += text[start..].find('\n')? + 1;

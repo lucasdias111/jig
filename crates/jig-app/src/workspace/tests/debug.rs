@@ -93,7 +93,7 @@ env = {{ GREETING = "there" }}
 /// Plays `lldb-dap`'s part, as it answered for a real program: stops at
 /// the breakpoint, shows `numbers` and `total`, and finishes on resume.
 /// Records the breakpoint lines it was given.
-fn fake_adapter(
+pub(super) fn fake_adapter(
     source: std::path::PathBuf,
     breakpoints: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
 ) {
