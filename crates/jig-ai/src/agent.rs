@@ -137,12 +137,12 @@ pub fn prompt(request: &PromptRequest) -> String {
     }
     let file = request.file_name.as_deref().unwrap_or("an unsaved file");
     let line = |offset: usize| {
-        let bytes = request.text.as_bytes();
-        bytes[..offset.min(bytes.len())]
-            .iter()
-            .filter(|&&byte| byte == b'\n')
+        1 + request
+            .text
+            .bytes()
+            .take(offset)
+            .filter(|&b| b == b'\n')
             .count()
-            + 1
     };
     let range = request.target.clone();
     out.push_str("\n\n");
