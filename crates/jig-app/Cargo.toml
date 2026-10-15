@@ -34,7 +34,7 @@ lsp-types = "0.97"
 # Line diffs against git for the gutter's change bars.
 similar = "3"
 # Reloading open files changed outside Jig. GPUI already builds this version.
-notify = "7"
+notify = "8"
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
 # Updates: the latest release from GitHub, and the check that a download
