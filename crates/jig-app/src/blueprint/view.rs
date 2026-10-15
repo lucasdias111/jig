@@ -295,7 +295,13 @@ impl BlueprintView {
 
     #[cfg(test)]
     pub fn on_blocks(&self) -> OnBlocks {
-        debug::on_blocks(&self.graph, &self.debug)
+        debug::on_blocks(&self.graph, self.function_range(), &self.debug)
+    }
+
+    /// The function shown, in the file.
+    fn function_range(&self) -> Range<usize> {
+        self.current_function()
+            .map_or(0..0, |function| function.range.clone())
     }
 
     /// Node `ix`'s breakpoint, as its dot does.
@@ -934,7 +940,7 @@ impl BlueprintView {
         let grid = theme.foreground.opacity(0.045);
         let wire = theme.foreground.opacity(0.6);
         let pin = theme.foreground.opacity(0.8);
-        let marks = debug::on_blocks(&self.graph, &self.debug);
+        let marks = debug::on_blocks(&self.graph, self.function_range(), &self.debug);
         let wires = self.wires(&marks);
         let taken_wire = theme.blue;
         let caller_wires = self.caller_wires();

@@ -611,5 +611,9 @@ fn stepping_lights_the_way_live(cx: &mut TestAppContext) {
     let taken = titles(&marks.taken);
     assert!(taken.contains(&("Branch".into(), "Call big".into())));
     assert!(taken.contains(&("Branch".into(), "Call small".into())));
+    assert!(
+        taken.contains(&("For Each".into(), "Call done".into())),
+        "out of the loop"
+    );
     step(cx, window, |window, cx| window.press("secondary-f2", cx));
 }

@@ -3,6 +3,7 @@
 //! workspace hands over places in the file; this finds their blocks.
 
 use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 
 use super::{Graph, node_at};
 
@@ -38,15 +39,19 @@ impl OnBlocks {
     }
 }
 
-pub fn on_blocks(graph: &Graph, marks: &DebugMarks) -> OnBlocks {
+/// The marks on `graph`'s blocks, the function at `function` in the file.
+pub fn on_blocks(graph: &Graph, function: Range<usize>, marks: &DebugMarks) -> OnBlocks {
     let block = |offset: usize| node_at(graph, offset);
     let mut visits = vec![0; graph.nodes.len()];
     let mut taken = HashSet::new();
     let mut last = None;
     for &offset in &marks.trail {
         let Some(at) = block(offset) else {
-            // Gone into another function: the path here starts again.
-            last = None;
+            // Gone into another function: the path here starts again. A
+            // line of this one with no block, a closing `}`, is on the way.
+            if !function.contains(&offset) {
+                last = None;
+            }
             continue;
         };
         // Steps within one block, a statement over several lines, are one.
@@ -129,6 +134,10 @@ mod tests {
         graph(SOURCE, &functions(SOURCE)[0]).unwrap()
     }
 
+    fn function() -> Range<usize> {
+        functions(SOURCE)[0].range.clone()
+    }
+
     fn title(graph: &Graph, node: usize) -> &str {
         &graph.nodes[node].title
     }
@@ -142,7 +151,7 @@ mod tests {
             paused: Some(at("done(")),
             trail: Vec::new(),
         };
-        let blocks = on_blocks(&graph, &marks);
+        let blocks = on_blocks(&graph, function(), &marks);
         let mut breakpoints: Vec<_> = blocks
             .breakpoints
             .iter()
@@ -167,13 +176,15 @@ mod tests {
             at("for item"),
             at("if item"),
             at("small("),
+            // LLDB stops on the loop's closing brace on the way out.
+            at("    }\n    done") + 4,
             at("done("),
         ];
         let marks = DebugMarks {
             trail,
             ..Default::default()
         };
-        let blocks = on_blocks(&graph, &marks);
+        let blocks = on_blocks(&graph, function(), &marks);
         let visits = |name: &str| {
             let node = graph.nodes.iter().position(|n| n.title == name).unwrap();
             blocks.visits[node]
@@ -205,7 +216,7 @@ mod tests {
             trail: vec![at("let total"), SOURCE.len() + 10, at("done(")],
             ..Default::default()
         };
-        let blocks = on_blocks(&graph, &marks);
+        let blocks = on_blocks(&graph, function(), &marks);
         assert!(blocks.taken.is_empty());
         assert!(blocks.traced());
     }
