@@ -418,6 +418,78 @@ fn debug_live(cx: &mut TestAppContext) {
     assert!(texts.contains(&"total 6".to_string()));
 }
 
+/// Pausing where a local refers to a struct whose fields reach a great
+/// deal more (as an app's state does) still shows the locals and
+/// resumes: Rust's LLDB formatters would sum all of it up first, and LLDB
+/// answers nothing else meanwhile. Needs what `debug_live` needs.
+#[gpui_kit::test]
+#[ignore]
+fn resumes_past_a_big_struct_live(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    let source = root.join("src/main.rs");
+    // Each level refers to the next twice: 2^40 fields to sum up.
+    std::fs::write(
+        &source,
+        "#[allow(dead_code)]\nstruct Node {\n    left: Option<&'static Node>,\n    right: Option<&'static Node>,\n}\n\nfn main() {\n    let mut node: &'static Node = Box::leak(Box::new(Node { left: None, right: None }));\n    for _ in 0..40 {\n        node = Box::leak(Box::new(Node { left: Some(node), right: Some(node) }));\n    }\n    visit(node);\n}\n\nfn visit(node: &Node) {\n    println!(\"visited {}\", node.left.is_some());\n}\n",
+    )
+    .unwrap();
+    let (window, workspace) = open(cx, &root);
+    open_file(cx, window, &workspace, &source);
+    step(cx, window, |window, cx| {
+        workspace.update(cx, |this, cx| {
+            let id = this.tab().id();
+            this.toggle_breakpoint_line(id, 15, window, cx);
+        })
+    });
+    let wait = |cx: &mut TestAppContext, done: &dyn Fn(&Workspace, &gpui_kit::App) -> bool| {
+        for _ in 0..600 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            if cx.update(|cx| done(workspace.read(cx), cx)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let output = cx.update(|cx| workspace.read(cx).run_output());
+        panic!("timed out: {output:#?}");
+    };
+    use crate::workspace::debug::Phase;
+    step(cx, window, |window, cx| window.press("ctrl-d", cx));
+    wait(cx, &|this, cx| {
+        this.run_picker_rows(cx)
+            .is_some_and(|rows| rows.iter().any(|row| row == "sample"))
+    });
+    step(cx, window, |window, cx| window.input("sample", cx));
+    step(cx, window, |window, cx| window.press("enter", cx));
+    wait(cx, &|this, _| {
+        this.debug_variable_rows()
+            .iter()
+            .any(|(_, name, _)| name == "node")
+    });
+    // A `println!` line can have more than one breakpoint location.
+    for _ in 0..5 {
+        step(cx, window, |window, cx| window.press("f9", cx));
+        wait(cx, &|this, _| {
+            matches!(this.debug_phase(), Some(Phase::Paused) | Some(Phase::Ended))
+        });
+        if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(Phase::Ended) {
+            break;
+        }
+    }
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+    assert!(texts.contains(&"visited true".to_string()), "{texts:#?}");
+}
+
 #[gpui_kit::test]
 fn breakpoints_follow_the_debugging_setting(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

@@ -734,8 +734,15 @@ fn rust_init_commands(cwd: &Path) -> Vec<String> {
     if extra.is_file() {
         commands.push(format!("command source -s 0 \"{}\"", extra.display()));
     }
+    commands.push(WITHOUT_STRUCT_SUMMARIES.into());
     commands
 }
+
+/// Recent toolchains sum up every struct on one line from all its fields,
+/// through every reference, with no limit: for a `&mut` to a big app's
+/// state that never ends, and LLDB answers nothing else meanwhile, so the
+/// program can't be resumed. Structs still open field by field.
+const WITHOUT_STRUCT_SUMMARIES: &str = "script lldb.debugger.GetCategory(\"Rust\").DeleteTypeSummary(lldb.SBTypeNameSpecifier(\"lldb_lookup.is_udt\", lldb.eFormatterMatchCallback))";
 
 fn program_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(crate::lsp::search_path())
