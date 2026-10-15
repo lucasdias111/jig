@@ -316,8 +316,46 @@ fn show_document(
 }
 
 impl Workspace {
+    /// Where the name at `offset` in the current tab is declared, as Go to
+    /// Definition finds it: the file and the byte offset there.
+    pub(super) fn declaration_of(
+        &self,
+        offset: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Option<(PathBuf, usize)>> {
+        let provider = Definitions {
+            workspace: cx.entity().downgrade(),
+            editor: self.editor().state().entity_id(),
+        };
+        let rope = Rope::from(self.editor().text(cx).as_str());
+        let here = self.document().path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            // The provider reads the workspace, so not from inside it.
+            let found = cx
+                .update(|window, cx| provider.definitions(&rope, offset, window, cx))
+                .ok()?
+                .await
+                .ok()?;
+            let link = found.into_iter().next()?;
+            let uri = link.target_uri.as_str();
+            if uri.starts_with(USAGES_SCHEME) {
+                return None;
+            }
+            let path = lsp::uri_path(uri).or(here)?;
+            let text = this
+                .read_with(cx, |this, cx| this.buffer_text(&path, cx))
+                .ok()
+                .flatten()
+                .or_else(|| std::fs::read_to_string(&path).ok())?;
+            let at =
+                Rope::from(text.as_str()).position_to_offset(&link.target_selection_range.start);
+            Some((path, at))
+        })
+    }
+
     /// The text of `path` as open in a tab, unsaved edits and all.
-    fn buffer_text(&self, path: &Path, cx: &App) -> Option<String> {
+    pub(super) fn buffer_text(&self, path: &Path, cx: &App) -> Option<String> {
         self.tab_for(path).map(|ix| self.tabs[ix].editor.text(cx))
     }
 

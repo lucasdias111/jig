@@ -3638,6 +3638,7 @@ dependencies = [
  "tree-sitter-prisma-io",
  "tree-sitter-r",
  "tree-sitter-racket",
+ "tree-sitter-rust",
  "tree-sitter-scss",
  "tree-sitter-starlark",
  "tree-sitter-vim",

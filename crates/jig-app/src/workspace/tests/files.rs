@@ -480,12 +480,12 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
 
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-b", cx);
+        window.press("secondary-u", cx);
     });
     assert!(cx.update(|cx| workspace.read(cx).sidebar.open));
     assert!(
         !tree_focused(cx, window, &workspace),
-        "Cmd+B keeps focus in the editor"
+        "Cmd+U keeps focus in the editor"
     );
 
     step(cx, window, |window, cx| {
@@ -509,7 +509,7 @@ fn sidebar_toggles_and_reveals_the_open_file(cx: &mut TestAppContext) {
 
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-b", cx);
+        window.press("secondary-u", cx);
     });
     assert!(!cx.update(|cx| workspace.read(cx).sidebar.open));
 }

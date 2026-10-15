@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::*;
-use jig_editor::EditorHandle;
 
 use super::{FindInFiles, FocusFileTree, GoToFile, NewFile, Workspace};
 
@@ -30,7 +29,7 @@ impl Workspace {
         if self.home {
             self.home_focus.focus(window, cx);
         } else {
-            self.editor().focus(window, cx);
+            self.focus_code(window, cx);
         }
     }
 

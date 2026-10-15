@@ -1,6 +1,8 @@
 //! Go Back and Go Forward (⌃- and ⌃⇧-): jumps (a task's link, Go to
 //! Definition, Go to Line, a problem, a search result) remember where the
-//! cursor was, so you can go back and forth between them.
+//! cursor was, so you can go back and forth between them. A place in the
+//! blueprint view is one too, and going back to it shows the blueprint.
+//! A mouse's back and forward buttons do the same.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +21,8 @@ pub(super) struct Place {
     /// The cursor, as a byte offset. Edits since may have moved what was
     /// there; it's kept within the file.
     offset: usize,
+    /// The blueprint view was showing, there.
+    blueprint: bool,
 }
 
 #[derive(Default)]
@@ -54,9 +58,11 @@ impl Workspace {
         if self.home {
             return None;
         }
+        let blueprint = self.blueprint().and_then(|view| view.read(cx).place());
         Some(Place {
             path: self.document().path.clone()?,
-            offset: self.editor().cursor(cx),
+            offset: blueprint.unwrap_or_else(|| self.editor().cursor(cx)),
+            blueprint: blueprint.is_some(),
         })
     }
 
@@ -77,6 +83,7 @@ impl Workspace {
             self.remember(Place {
                 path: path.to_path_buf(),
                 offset,
+                blueprint: false,
             });
         }
     }
@@ -97,6 +104,20 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.step_history(false, window, cx);
+    }
+
+    /// A mouse's back or forward button, anywhere in the window.
+    pub(super) fn navigation_button(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let MouseButton::Navigate(direction) = event.button else {
+            return;
+        };
+        self.step_history(direction == NavigationDirection::Back, window, cx);
+        cx.stop_propagation();
     }
 
     fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -124,7 +145,13 @@ impl Workspace {
             offset -= 1;
         }
         self.editor().select(offset..offset, cx);
-        self.editor().focus(window, cx);
+        if place.blueprint {
+            self.blueprint_at(offset, window, cx);
+        } else {
+            // Showing the code, if its blueprint was.
+            self.close_blueprint(window, cx);
+            self.editor().focus(window, cx);
+        }
         cx.notify();
     }
 

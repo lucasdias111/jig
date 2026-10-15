@@ -2,6 +2,7 @@
 //! sidebar.
 
 mod agent;
+mod blueprint;
 mod brackets;
 mod breakpoints;
 mod code_menu;
@@ -119,7 +120,8 @@ actions!(
         ToggleTaskPlanner,
         NewTask,
         GoBack,
-        GoForward
+        GoForward,
+        ToggleBlueprint
     ]
 );
 
@@ -642,8 +644,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 }
 
 impl Workspace {
-    /// The current tab's code.
-    fn render_code(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The current tab's code, or its blueprint view.
+    fn render_code(&self, cx: &Context<Self>) -> AnyElement {
+        if let Some(view) = self.blueprint() {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .child(view.clone())
+                .into_any_element();
+        }
         div()
             .flex_1()
             .min_h_0()
@@ -664,6 +673,7 @@ impl Workspace {
                     .context_menu(self.code_menu(cx))
                     .size_full(),
             )
+            .into_any_element()
     }
 }
 
@@ -750,6 +760,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_task))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
+            .on_action(cx.listener(Self::toggle_blueprint))
+            .capture_any_mouse_down(cx.listener(Self::navigation_button))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
             .capture_action(cx.listener(Self::on_accept_tab))
@@ -776,6 +788,7 @@ impl Render for Workspace {
                             .border_b_1()
                             .border_color(theme.title_bar_border)
                             .child(title)
+                            .children(self.render_blueprint_button(cx))
                             .children(self.render_command_button(cx))
                             .children(self.render_run_controls(cx)),
                     ),

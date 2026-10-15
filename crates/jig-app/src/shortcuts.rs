@@ -411,7 +411,8 @@ pub const ALL: &[Shortcut] = &[
         "toggle_sidebar",
         "Toggle sidebar",
         View,
-        ["secondary-b"],
+        // ⌘B is the blueprint's.
+        ["secondary-u"],
         ANYWHERE,
         ToggleSidebar
     ),
@@ -439,6 +440,14 @@ pub const ALL: &[Shortcut] = &[
         ["ctrl-shift-g"],
         ANYWHERE,
         ToggleGitPanel
+    ),
+    shortcut!(
+        "toggle_blueprint",
+        "Show blueprint",
+        View,
+        ["secondary-b"],
+        ANYWHERE,
+        ToggleBlueprint
     ),
     shortcut!(
         "toggle_task_planner",
