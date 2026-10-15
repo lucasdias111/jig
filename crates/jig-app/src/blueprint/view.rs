@@ -4,11 +4,14 @@
 //! binding to the blocks reading it; the header's switch hides them.
 //! Clicking a block asks for its code; the functions calling this one
 //! sit to the left of its start, and a call's button opens what it calls.
+//! While debugging, blocks and wires light up as the program runs
+//! through them, unless the header's Live switch is off.
 
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tooltip::Tooltip;
@@ -18,6 +21,7 @@ use gpui_kit::*;
 
 use super::debug::{self, DebugMarks, OnBlocks};
 use super::layout::{self, Layout, Rect};
+use super::live::Firing;
 use super::{Caller, Function, Graph, Kind, Node};
 
 const LIST_WIDTH: f32 = 210.;
@@ -60,6 +64,9 @@ pub enum BlueprintEvent {
     StepInto(usize),
     /// A block's dot: a breakpoint on the line at this offset, or none.
     ToggleBreakpoint(usize),
+    /// Which lines it wants to hear about changed: the function shown, or
+    /// the Live switch.
+    LiveLines,
 }
 
 pub struct BlueprintView {
@@ -90,6 +97,9 @@ pub struct BlueprintView {
     seen_sections: HashSet<Option<String>>,
     /// What the debugger has to show here.
     debug: DebugMarks,
+    /// Whether blocks light up as the program runs through them.
+    live: bool,
+    firing: Firing,
 }
 
 impl EventEmitter<BlueprintEvent> for BlueprintView {}
@@ -120,6 +130,8 @@ impl BlueprintView {
             folded: HashSet::new(),
             seen_sections: HashSet::new(),
             debug: DebugMarks::default(),
+            live: true,
+            firing: Firing::default(),
         };
         this.refresh(source, cursor, cx);
         this
@@ -202,7 +214,9 @@ impl BlueprintView {
         self.zoom = 1.;
         self.callers = None;
         self.highlight = None;
+        self.firing.clear();
         cx.emit(BlueprintEvent::Shown(shown));
+        cx.emit(BlueprintEvent::LiveLines);
         cx.notify();
     }
 
@@ -279,7 +293,11 @@ impl BlueprintView {
             return;
         }
         let paused = marks.paused.filter(|&at| Some(at) != self.debug.paused);
+        let enabled = marks.enabled != self.debug.enabled;
         self.debug = marks;
+        if enabled {
+            cx.emit(BlueprintEvent::LiveLines);
+        }
         if let Some(at) = paused
             && let Some(ix) = super::at(&self.functions, at)
         {
@@ -291,6 +309,48 @@ impl BlueprintView {
             }
         }
         cx.notify();
+    }
+
+    /// The lines (0-based) the program should report reaching, as it
+    /// runs: each block's first, when debugging can see this file.
+    pub fn live_lines(&self) -> Vec<u32> {
+        if !self.live || !self.debug.enabled {
+            return Vec::new();
+        }
+        let mut lines: Vec<u32> = self
+            .graph
+            .nodes
+            .iter()
+            .map(|node| line_at(&self.source, node.range.start))
+            .collect();
+        lines.dedup();
+        lines
+    }
+
+    /// Light blocks up as the program runs through them, or not.
+    pub fn set_live(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.live = on;
+        self.firing.clear();
+        cx.emit(BlueprintEvent::LiveLines);
+        cx.notify();
+    }
+
+    /// The program reached `line` (0-based): light up its block.
+    pub fn fire_line(&mut self, line: u32, cx: &mut Context<Self>) {
+        let Some(at) = line_start(&self.source, line) else {
+            return;
+        };
+        let rest = &self.source[at..];
+        let at = at + rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        if let Some(node) = super::node_at(&self.graph, at) {
+            self.firing.fire(&self.graph, node, Instant::now());
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn firing(&self) -> &Firing {
+        &self.firing
     }
 
     #[cfg(test)]
@@ -556,6 +616,7 @@ impl BlueprintView {
         node: &Node,
         rect: Rect,
         marks: &OnBlocks,
+        now: Instant,
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -565,6 +626,7 @@ impl BlueprintView {
         let at = self.to_canvas((rect.x, rect.y));
         let highlighted = self.highlight == Some(ix);
         let paused = marks.paused == Some(ix);
+        let glow = self.firing.block(ix, now);
         let visits = marks.visits.get(ix).copied().unwrap_or_default();
         // Once it has run through here, what it hasn't reached fades.
         let unreached = marks.traced() && visits == 0 && !paused;
@@ -702,12 +764,14 @@ impl BlueprintView {
             .border_1()
             .border_color(if paused {
                 theme.blue
+            } else if glow > 0. {
+                theme.yellow.opacity(0.3 + 0.7 * glow)
             } else if highlighted {
                 accent
             } else {
                 theme.border
             })
-            .when(highlighted || paused, |this| this.border_2())
+            .when(highlighted || paused || glow > 0., |this| this.border_2())
             .when(unreached, |this| this.opacity(0.55))
             .bg(theme.popover)
             .shadow_sm()
@@ -856,17 +920,20 @@ impl BlueprintView {
     /// Each wire's ends in the canvas.
     /// Each wire's ends in the canvas, and whether the debugger went
     /// along it.
-    fn wires(&self, marks: &OnBlocks) -> Vec<(Point<Pixels>, Point<Pixels>, bool)> {
+    fn wires(&self, marks: &OnBlocks, now: Instant) -> Vec<Wire> {
         self.graph
             .edges
             .iter()
             .enumerate()
             .map(|(ix, edge)| {
-                (
-                    self.to_canvas(self.layout.out_pin(&self.graph, edge.from, edge.out)),
-                    self.to_canvas(self.layout.in_pin(edge.to)),
-                    marks.taken.contains(&ix),
-                )
+                let (lit, pulse) = self.firing.wire(ix, now);
+                Wire {
+                    from: self.to_canvas(self.layout.out_pin(&self.graph, edge.from, edge.out)),
+                    to: self.to_canvas(self.layout.in_pin(edge.to)),
+                    taken: marks.taken.contains(&ix),
+                    lit,
+                    pulse,
+                }
             })
             .collect()
     }
@@ -941,8 +1008,10 @@ impl BlueprintView {
         let wire = theme.foreground.opacity(0.6);
         let pin = theme.foreground.opacity(0.8);
         let marks = debug::on_blocks(&self.graph, self.function_range(), &self.debug);
-        let wires = self.wires(&marks);
+        let now = Instant::now();
+        let wires = self.wires(&marks, now);
         let taken_wire = theme.blue;
+        let firing_wire = theme.yellow;
         let caller_wires = self.caller_wires();
         let caller_wire = theme.muted_foreground.opacity(0.5);
         let pins = self.pins();
@@ -975,22 +1044,25 @@ impl BlueprintView {
                         window,
                     );
                 }
-                // The way it went on top, brighter and wider.
-                let (taken, others): (Vec<_>, Vec<_>) =
-                    wires.into_iter().partition(|(_, _, taken)| *taken);
-                for (from, to, _) in others {
-                    paint_wire(drawn.origin + from, drawn.origin + to, zoom, wire, window);
+                // The way it went on top, brighter and wider, and what's
+                // firing now on top of that.
+                let width = (3. * zoom).max(1.5);
+                for wire_ in wires.iter().filter(|w| !w.taken) {
+                    let (from, to) = (drawn.origin + wire_.from, drawn.origin + wire_.to);
+                    paint_wire(from, to, zoom, wire, window);
                 }
-                for (from, to, _) in taken {
-                    let width = (3. * zoom).max(1.5);
-                    paint_curve(
-                        drawn.origin + from,
-                        drawn.origin + to,
-                        zoom,
-                        width,
-                        taken_wire,
-                        window,
-                    );
+                for wire_ in wires.iter().filter(|w| w.taken) {
+                    let (from, to) = (drawn.origin + wire_.from, drawn.origin + wire_.to);
+                    paint_curve(from, to, zoom, width, taken_wire, window);
+                }
+                for wire_ in wires.iter().filter(|w| w.lit > 0.) {
+                    let (from, to) = (drawn.origin + wire_.from, drawn.origin + wire_.to);
+                    let colour = firing_wire.opacity(wire_.lit);
+                    paint_curve(from, to, zoom, width, colour, window);
+                    if let Some(t) = wire_.pulse {
+                        let at = curve_point(from, to, zoom, t);
+                        paint_data_pin(at, zoom * 1.4, firing_wire, window);
+                    }
                 }
             },
         )
@@ -1019,7 +1091,7 @@ impl BlueprintView {
             .iter()
             .zip(&self.layout.rects)
             .enumerate()
-            .map(|(ix, (node, rect))| self.render_node(ix, node, *rect, &marks, cx))
+            .map(|(ix, (node, rect))| self.render_node(ix, node, *rect, &marks, now, cx))
             .collect();
         div()
             .id("blueprint-canvas")
@@ -1066,12 +1138,31 @@ impl BlueprintView {
                     .child(name),
             )
             .child(
+                h_flex()
+                    .flex_none()
+                    .gap_3()
+                    .when(self.debug.enabled, |this| {
+                        this.child(
+                            Switch::new("blueprint-live")
+                                .checked(self.live)
+                                .small()
+                                .label("Live")
+                                .tooltip(
+                                    "While debugging, light up blocks as the program runs through them",
+                                )
+                                .on_click(
+                                    cx.listener(|this, on: &bool, _, cx| this.set_live(*on, cx)),
+                                ),
+                        )
+                    })
+                    .child(
                 Switch::new("blueprint-data-wires")
                     .checked(self.data_wires)
                     .small()
                     .label("Data wires")
                     .tooltip("Wires from each let and parameter to the blocks reading it")
                     .on_click(cx.listener(|this, on: &bool, _, cx| this.set_data_wires(*on, cx))),
+            ),
             )
     }
 
@@ -1095,7 +1186,11 @@ impl BlueprintView {
 }
 
 impl Render for BlueprintView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Fading out, frame by frame.
+        if self.firing.lit(Instant::now()) {
+            window.request_animation_frame();
+        }
         h_flex()
             .key_context("Blueprint")
             .track_focus(&self.focus)
@@ -1117,6 +1212,33 @@ impl Render for BlueprintView {
                     .child(self.render_canvas(cx)),
             )
     }
+}
+
+/// An exec wire as drawn: its ends in the canvas, whether the debugger
+/// went along it this session, and how brightly it's firing now, with
+/// where its pulse is.
+struct Wire {
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    taken: bool,
+    lit: f32,
+    pulse: Option<f32>,
+}
+
+/// The 0-based line `offset` is on.
+fn line_at(source: &str, offset: usize) -> u32 {
+    source[..offset.min(source.len())].matches('\n').count() as u32
+}
+
+/// Where 0-based line `line` starts.
+fn line_start(source: &str, line: u32) -> Option<usize> {
+    if line == 0 {
+        return Some(0);
+    }
+    source
+        .match_indices('\n')
+        .nth(line as usize - 1)
+        .map(|(at, _)| at + 1)
 }
 
 /// Test modules, folded shut until opened.
@@ -1225,6 +1347,20 @@ fn paint_curve(
     if let Ok(path) = path.build() {
         window.paint_path(path, colour);
     }
+}
+
+/// The point `t` (0 to 1) of the way along the wire `paint_curve` draws.
+fn curve_point(from: Point<Pixels>, to: Point<Pixels>, zoom: f32, t: f32) -> Point<Pixels> {
+    let reach = (f32::from(to.x - from.x).abs() / 2.).max(40. * zoom);
+    let (x0, y0) = (f32::from(from.x), f32::from(from.y));
+    let (x3, y3) = (f32::from(to.x), f32::from(to.y));
+    let (x1, x2) = (x0 + reach, x3 - reach);
+    let u = 1. - t;
+    let (a, b, c, d) = (u * u * u, 3. * u * u * t, 3. * u * t * t, t * t * t);
+    point(
+        px(a * x0 + b * x1 + c * x2 + d * x3),
+        px(a * y0 + b * y0 + c * y3 + d * y3),
+    )
 }
 
 /// An exec pin, an arrowhead pointing the way the flow goes: filled when

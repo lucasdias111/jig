@@ -617,3 +617,161 @@ fn stepping_lights_the_way_live(cx: &mut TestAppContext) {
     );
     step(cx, window, |window, cx| window.press("secondary-f2", cx));
 }
+
+/// With the real LLDB and no breakpoint, the blocks the program runs
+/// through light up as it goes, and the wires between them, while it
+/// carries on. Needs what `stepping_lights_the_way_live` needs.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_as_it_runs_live(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    let source = root.join("src/main.rs");
+    std::fs::write(
+        &source,
+        "fn main() {\n    for item in 0..60 {\n        if item % 2 == 0 {\n            big(item);\n        } else {\n            small(item);\n        }\n        std::thread::sleep(std::time::Duration::from_millis(50));\n    }\n    println!(\"done\");\n}\n\nfn big(_: i32) {}\nfn small(_: i32) {}\n",
+    )
+    .unwrap();
+    let (window, workspace) = open(cx, &root);
+    open_file(cx, window, &workspace, &source);
+    toggle(cx, window);
+    let view = view(cx, &workspace);
+    let node = |cx: &mut TestAppContext, title: &str| {
+        cx.update(|cx| {
+            view.read(cx)
+                .graph()
+                .nodes
+                .iter()
+                .position(|node| node.title == title)
+                .unwrap()
+        })
+    };
+    let (big, small) = (node(cx, "Call big"), node(cx, "Call small"));
+    use crate::workspace::debug::Phase;
+    let mut seen = std::collections::HashSet::new();
+    let mut tick = |cx: &mut TestAppContext| {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+        let now = std::time::Instant::now();
+        cx.update(|cx| {
+            let firing = view.read(cx).firing();
+            for node in [big, small] {
+                if firing.block(node, now) > 0. {
+                    seen.insert(node);
+                }
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    step(cx, window, |window, cx| window.press("ctrl-d", cx));
+    for _ in 0..1500 {
+        tick(cx);
+        if cx
+            .update(|cx| workspace.read(cx).run_picker_rows(cx))
+            .is_some_and(|rows| rows.iter().any(|row| row == "sample"))
+        {
+            break;
+        }
+    }
+    step(cx, window, |window, cx| window.input("sample", cx));
+    step(cx, window, |window, cx| window.press("enter", cx));
+    for _ in 0..1500 {
+        tick(cx);
+        if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(Phase::Ended) {
+            break;
+        }
+        assert_ne!(
+            cx.update(|cx| workspace.read(cx).debug_phase()),
+            Some(Phase::Paused),
+            "it never stops"
+        );
+    }
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+    eprintln!("{texts:#?}");
+    assert!(texts.contains(&"done".to_string()));
+    assert!(
+        !texts.iter().any(|text| text.contains("jig-fired")),
+        "the logpoints' messages stay out of the console"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text.starts_with("(lldb)") || text == "True"),
+        "nor does setting up LLDB"
+    );
+    assert_eq!(seen, [big, small].into(), "both ways the `if` went lit up");
+}
+
+/// While a blueprint shows, the debugger is asked to report each block's
+/// first line, a reported line lights its block, and the Live switch or
+/// going back to the code stops the asking.
+#[gpui_kit::test]
+fn asks_to_hear_each_block_fire_and_lights_it(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = open_rust(cx);
+    let path = dir.path().join("lib.rs").canonicalize().unwrap();
+    let inside = SOURCE.find("done").unwrap();
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .editor()
+            .clone()
+            .select(inside..inside, cx)
+    });
+    toggle(cx, window);
+    let logpoints = |cx: &mut TestAppContext| {
+        cx.update(|cx| workspace.update(cx, |this, _| this.live.logpoints(&path, &[])))
+    };
+    let lines: Vec<u32> = logpoints(cx).iter().map(|(line, _)| *line).collect();
+    // `fn second`, `if ready`, `go()` and `done()`.
+    assert_eq!(lines, [4, 5, 6, 8]);
+    // A breakpoint's line is left to the breakpoint.
+    let lines: Vec<u32> = cx.update(|cx| {
+        workspace.update(cx, |this, _| {
+            this.live
+                .logpoints(&path, &[5])
+                .iter()
+                .map(|(line, _)| *line)
+                .collect()
+        })
+    });
+    assert_eq!(lines, [4, 6, 8]);
+
+    let view = view(cx, &workspace);
+    let id = |message: &str| -> usize { message.rsplit(' ').next().unwrap().parse().unwrap() };
+    let go = id(&logpoints(cx)[2].1);
+    step(cx, window, |_, cx| {
+        workspace.update(cx, |this, cx| this.on_fired(&[go], cx))
+    });
+    let lit = cx.update(|cx| {
+        let view = view.read(cx);
+        let node = view
+            .graph()
+            .nodes
+            .iter()
+            .position(|node| node.title == "Call go")
+            .unwrap();
+        view.firing().block(node, std::time::Instant::now())
+    });
+    assert!(lit > 0.);
+
+    step(cx, window, |_, cx| {
+        view.update(cx, |view, cx| view.set_live(false, cx))
+    });
+    assert!(logpoints(cx).is_empty());
+    step(cx, window, |_, cx| {
+        view.update(cx, |view, cx| view.set_live(true, cx))
+    });
+    assert_eq!(logpoints(cx).len(), 4);
+    toggle(cx, window);
+    assert!(!showing(cx, &workspace));
+    assert!(logpoints(cx).is_empty());
+}

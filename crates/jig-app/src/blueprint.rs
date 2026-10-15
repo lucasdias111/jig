@@ -7,6 +7,7 @@
 mod data;
 pub mod debug;
 pub mod layout;
+pub mod live;
 pub mod view;
 
 use std::ops::Range;

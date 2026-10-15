@@ -90,12 +90,14 @@ impl Workspace {
                 let id = this.tab().id();
                 this.toggle_breakpoint_line(id, line, window, cx);
             }
+            BlueprintEvent::LiveLines => this.sync_live_points(cx),
         });
         let code = self.editor().state().focus_handle(cx);
         let tab = self.tab().id();
         let code_focused = cx.on_focus(&code, window, move |this, _, cx| {
             if let Some(tab) = this.tabs.iter_mut().find(|open| open.id() == tab) {
                 tab.blueprint = None;
+                this.sync_live_points(cx);
                 cx.notify();
             }
         });
@@ -117,6 +119,7 @@ impl Workspace {
     /// Back to the code, as it was.
     pub(super) fn close_blueprint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.tab_mut().blueprint.take().is_some() {
+            self.sync_live_points(cx);
             self.editor().focus(window, cx);
             cx.notify();
         }

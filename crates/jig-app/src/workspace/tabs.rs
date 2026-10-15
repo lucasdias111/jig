@@ -416,7 +416,10 @@ impl Workspace {
             self.leave_tab(cx);
         }
         self.remember_breakpoints(ix, cx);
-        self.tabs.remove(ix);
+        let blueprint = self.tabs.remove(ix).blueprint.is_some();
+        if blueprint {
+            self.sync_live_points(cx);
+        }
         if self.tabs.is_empty() {
             let tab = self.new_tab(Document::default(), window, cx);
             self.tabs.push(tab);

@@ -21,6 +21,7 @@ mod go_to_line;
 mod home;
 mod hover;
 mod line_edits;
+mod live;
 mod lsp;
 mod navigation;
 mod occurrences;
@@ -208,6 +209,8 @@ pub struct Workspace {
     /// Where the debugger paused this session, oldest first, as files and
     /// 0-based lines: the blueprint lights the way it went.
     debug_trail: Vec<(PathBuf, u32)>,
+    /// The logpoints that light blueprints up as the program runs.
+    live: live::LivePoints,
     file_watch: file_watch::FileWatch,
     /// A save waiting on its formatter.
     pending_save: Option<format::PendingSave>,
@@ -292,6 +295,7 @@ impl Workspace {
             planner: Default::default(),
             history: Default::default(),
             debug_trail: Vec::new(),
+            live: Default::default(),
             file_watch: file_watch::FileWatch::start(window, cx),
             pending_save: None,
             status_note: None,

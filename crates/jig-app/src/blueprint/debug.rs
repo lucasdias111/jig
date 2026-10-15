@@ -79,7 +79,7 @@ pub fn on_blocks(graph: &Graph, function: Range<usize>, marks: &DebugMarks) -> O
 /// The wires from node `from` to node `to`: straight there, or round
 /// the back of the innermost loop around `from` that leads there, since
 /// a loop's way back isn't drawn.
-fn way(graph: &Graph, from: usize, to: usize) -> Vec<usize> {
+pub(super) fn way(graph: &Graph, from: usize, to: usize) -> Vec<usize> {
     if let Some(edges) = path(graph, from, to) {
         return edges;
     }

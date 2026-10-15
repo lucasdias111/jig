@@ -271,13 +271,14 @@ impl Workspace {
         let registry = crate::debuggers::registry();
         self.all_breakpoints(cx)
             .into_iter()
-            .filter(|(path, _)| {
-                let language = crate::languages::language_for(path, &languages);
-                registry
-                    .for_language(language)
-                    .is_some_and(|debugger| debugger.key == key)
-            })
+            .filter(|(path, _)| takes(&registry, key, path, &languages))
             .collect()
+    }
+
+    /// Whether debugger `key` debugs `path`'s language.
+    pub(super) fn debugger_takes(&self, key: &str, path: &Path) -> bool {
+        let registry = crate::debuggers::registry();
+        takes(&registry, key, path, &self.settings.languages)
     }
 
     /// The breakpoints in `path`, open or not.
@@ -364,6 +365,19 @@ impl Workspace {
         }
         self.refresh_blueprint_debug(cx);
     }
+}
+
+/// Whether debugger `key` in `registry` debugs `path`'s language.
+fn takes(
+    registry: &crate::debuggers::Registry,
+    key: &str,
+    path: &Path,
+    languages: &crate::settings::LanguageSettings,
+) -> bool {
+    let language = crate::languages::language_for(path, languages);
+    registry
+        .for_language(language)
+        .is_some_and(|debugger| debugger.key == key)
 }
 
 fn breakpoint_decorations(text: &str, lines: &BTreeSet<u32>, color: Hsla) -> Vec<RangeDecoration> {

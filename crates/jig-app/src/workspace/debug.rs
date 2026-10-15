@@ -670,15 +670,31 @@ impl Workspace {
                 let Some(key) = self.debug().map(|debug| debug.plan.debugger.key.clone()) else {
                     return;
                 };
-                let breakpoints = self.breakpoints_for(&key, cx);
+                let mut breakpoints = self.breakpoints_for(&key, cx);
+                // Files only the blueprints want to hear from.
+                let live: Vec<PathBuf> = self
+                    .live
+                    .files()
+                    .filter(|path| breakpoints.iter().all(|(file, _)| file != *path))
+                    .filter(|path| self.debugger_takes(&key, path))
+                    .cloned()
+                    .collect();
+                breakpoints.extend(live.into_iter().map(|path| (path, Vec::new())));
+                let requests: Vec<Value> = breakpoints
+                    .iter()
+                    .map(|(path, lines)| {
+                        let logpoints = self.live.logpoints(path, lines);
+                        set_breakpoints_arguments(path, lines, &logpoints)
+                    })
+                    .collect();
                 let Some(debug) = self.debug_mut() else {
                     return;
                 };
-                for (path, lines) in breakpoints {
+                for arguments in requests {
                     debug.request_to(
                         id,
                         "setBreakpoints",
-                        set_breakpoints_arguments(&path, &lines),
+                        arguments,
                         Pending::Command("Setting breakpoints"),
                     );
                 }
@@ -733,6 +749,10 @@ impl Workspace {
                     Some(_) => Stream::Meta,
                 };
                 let text = body["output"].as_str().unwrap_or_default();
+                if let Some(ids) = super::live::fired(text) {
+                    self.on_fired(&ids, cx);
+                    return;
+                }
                 if stream == Stream::Meta && is_chatter(text) {
                     return;
                 }
@@ -941,12 +961,13 @@ impl Workspace {
     /// A breakpoint changed in `path`: tell a running debugger.
     pub(super) fn breakpoints_changed(&mut self, path: &std::path::Path, cx: &App) {
         let lines = self.breakpoints_in(path, cx);
+        let logpoints = self.live.logpoints(path, &lines);
         if let Some(debug) = self.debug_mut().filter(|d| d.configured && d.is_live()) {
             for id in 0..debug.clients.len() {
                 debug.request_to(
                     id,
                     "setBreakpoints",
-                    set_breakpoints_arguments(path, &lines),
+                    set_breakpoints_arguments(path, &lines, &logpoints),
                     Pending::Command("Setting breakpoints"),
                 );
             }
@@ -1353,16 +1374,31 @@ fn is_chatter(text: &str) -> bool {
     let text = text.trim();
     text.starts_with("Running initCommands")
         || text.starts_with("(lldb) command script import")
+        || text.strip_prefix("(lldb) ") == Some(crate::debuggers::WITHOUT_STRUCT_SUMMARIES)
         || (text.starts_with("Process ") && text.contains(" exited with status"))
         || text.contains("no plugin for the language \"rust\"")
 }
 
-fn set_breakpoints_arguments(path: &std::path::Path, lines: &[u32]) -> Value {
+/// Breakpoints on `lines` (0-based), and logpoints, which print their
+/// message there and carry on.
+fn set_breakpoints_arguments(
+    path: &std::path::Path,
+    lines: &[u32],
+    logpoints: &[(u32, String)],
+) -> Value {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let breakpoints: Vec<Value> = lines.iter().map(|line| json!({"line": line + 1})).collect();
+    let breakpoints: Vec<Value> = lines
+        .iter()
+        .map(|line| json!({"line": line + 1}))
+        .chain(
+            logpoints
+                .iter()
+                .map(|(line, message)| json!({"line": line + 1, "logMessage": message})),
+        )
+        .collect();
     json!({
         "source": {"name": name, "path": path},
         "breakpoints": breakpoints,
