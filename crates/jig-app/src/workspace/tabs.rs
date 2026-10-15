@@ -27,7 +27,8 @@ pub(super) struct Tab {
     pub(super) document: Document,
     pub(super) editor: KitEditor,
     pub(super) dirty: bool,
-    /// Detected from the file when it was opened; what Tab inserts.
+    /// Detected from the file when it was opened, or as its
+    /// `.editorconfig` says; what Tab inserts.
     pub(super) indentation: TabSize,
     pub(super) cursor: Entity<CursorPosition>,
     /// The file open in its language server, if it has one.
@@ -97,7 +98,11 @@ impl Workspace {
         if let Some(path) = document.path.as_deref() {
             self.file_watch.watch(path);
         }
-        let indentation = crate::indentation::detect(&document.saved_text);
+        let detected = crate::indentation::detect(&document.saved_text);
+        let indentation = match document.path.as_deref() {
+            Some(path) => crate::editorconfig::EditorConfig::for_file(path).tab_size(detected),
+            None => detected,
+        };
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
                 // Jig's own find panel takes ⌘F, over the same search.

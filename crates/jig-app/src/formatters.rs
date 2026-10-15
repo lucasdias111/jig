@@ -14,6 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use jig_process::NoWindow as _;
 use serde::Deserialize;
 
+use crate::editorconfig::LineEnding;
 use crate::tools::{self, Help};
 
 const BUILT_IN: &str = include_str!("../../../assets/default-formatters.toml");
@@ -374,9 +375,15 @@ fn load(user: Option<&Path>) -> Registry {
     }
 }
 
-/// `text` with trailing spaces and tabs taken off each line, and ending in
-/// a newline if it has any text, per the two settings.
-pub fn tidy(text: &str, trim_trailing_whitespace: bool, final_newline: bool) -> String {
+/// `text` with trailing spaces and tabs taken off each line, its line
+/// endings made `end_of_line`, and ending in a newline if it has any text,
+/// as asked.
+pub fn tidy(
+    text: &str,
+    trim_trailing_whitespace: bool,
+    final_newline: bool,
+    end_of_line: Option<LineEnding>,
+) -> String {
     let mut out = if trim_trailing_whitespace {
         let mut out = String::with_capacity(text.len());
         for line in text.split_inclusive('\n') {
@@ -388,8 +395,19 @@ pub fn tidy(text: &str, trim_trailing_whitespace: bool, final_newline: bool) -> 
     } else {
         text.to_string()
     };
+    if let Some(ending) = end_of_line {
+        out = out.replace("\r\n", "\n");
+        if ending == LineEnding::CrLf {
+            out = out.replace('\n', "\r\n");
+        }
+    }
     if final_newline && !out.is_empty() && !out.ends_with('\n') {
-        out.push_str(if text.contains("\r\n") { "\r\n" } else { "\n" });
+        let ending = end_of_line.unwrap_or(if text.contains("\r\n") {
+            LineEnding::CrLf
+        } else {
+            LineEnding::Lf
+        });
+        out.push_str(ending.as_str());
     }
     out
 }
@@ -550,12 +568,22 @@ command = ["cargo", "fmt"]
     #[test]
     fn tidy_trims_and_ends_with_a_newline() {
         let text = "a  \n\tb\t\r\n  \nc ";
-        assert_eq!(tidy(text, true, false), "a\n\tb\r\n\nc");
-        assert_eq!(tidy(text, true, true), "a\n\tb\r\n\nc\r\n");
-        assert_eq!(tidy(text, false, true), "a  \n\tb\t\r\n  \nc \r\n");
-        assert_eq!(tidy("x\n", false, true), "x\n");
-        assert_eq!(tidy("", true, true), "", "an empty file stays empty");
-        assert_eq!(tidy(text, false, false), text);
+        assert_eq!(tidy(text, true, false, None), "a\n\tb\r\n\nc");
+        assert_eq!(tidy(text, true, true, None), "a\n\tb\r\n\nc\r\n");
+        assert_eq!(tidy(text, false, true, None), "a  \n\tb\t\r\n  \nc \r\n");
+        assert_eq!(tidy("x\n", false, true, None), "x\n");
+        assert_eq!(tidy("", true, true, None), "", "an empty file stays empty");
+        assert_eq!(tidy(text, false, false, None), text);
+    }
+
+    #[test]
+    fn tidy_makes_the_line_endings_as_asked() {
+        let text = "a\r\nb\nc";
+        assert_eq!(tidy(text, false, true, Some(LineEnding::Lf)), "a\nb\nc\n");
+        assert_eq!(
+            tidy(text, false, true, Some(LineEnding::CrLf)),
+            "a\r\nb\r\nc\r\n"
+        );
     }
 
     /// Installs every built-in formatter Jig can install, or those named

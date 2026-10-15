@@ -1,5 +1,6 @@
 //! Format Document (⇧⌥F), and what saving does to a file when Settings
-//! asks: format it, trim trailing whitespace, end it with a newline.
+//! or the project's `.editorconfig` asks: format it, trim trailing
+//! whitespace, end it with a newline, make its line endings one kind.
 //!
 //! The file's language server formats when it can (only the selection, if
 //! there is one and the server formats ranges); otherwise the first
@@ -22,6 +23,7 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
+use crate::editorconfig::EditorConfig;
 use crate::formatters::{self, Formatter};
 use crate::lsp::{Client, Encoding};
 use crate::{languages, settings, text_edits};
@@ -173,14 +175,17 @@ impl Workspace {
         } else if current != text {
             (None, Some("The file changed while formatting.".to_string()))
         } else {
+            // The project's `.editorconfig` has its say over Settings.
             let formatting = settings::get(cx).formatting;
-            let tidy = |text: &str| {
-                formatters::tidy(
-                    text,
-                    formatting.trim_trailing_whitespace,
-                    formatting.final_newline,
-                )
-            };
+            let config = EditorConfig::for_file(&path);
+            let trim = config
+                .trim_trailing_whitespace()
+                .unwrap_or(formatting.trim_trailing_whitespace);
+            let final_newline = config
+                .insert_final_newline()
+                .unwrap_or(formatting.final_newline);
+            let tidy =
+                |text: &str| formatters::tidy(text, trim, final_newline, config.end_of_line());
             match formatted {
                 Ok(new) => (Some(tidy(new.as_deref().unwrap_or(&text))), None),
                 Err(reason) => (Some(tidy(&text)), Some(reason)),

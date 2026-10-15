@@ -17,6 +17,7 @@ mod debuggers;
 mod definitions;
 mod diff;
 mod document;
+mod editorconfig;
 mod field_box;
 mod file_icons;
 mod file_tree;

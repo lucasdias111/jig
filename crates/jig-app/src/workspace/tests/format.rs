@@ -167,7 +167,26 @@ fn trims_and_ends_with_a_newline_on_save_when_asked(cx: &mut TestAppContext) {
     assert_eq!(text, "a\nb\n", "the buffer too");
 }
 
-/// With no language server, the formatter for the language, fed the
+/// The project's `.editorconfig` sets the indentation a file opens with
+/// and what saving does to it, over Settings.
+#[gpui_kit::test]
+fn follows_the_projects_editorconfig(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*.txt]\nindent_style = tab\ntab_width = 3\n\
+         trim_trailing_whitespace = true\ninsert_final_newline = true\nend_of_line = lf\n",
+    )
+    .unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "a  \r\n  b").unwrap();
+    let (window, workspace) = open(cx, &path);
+    let indentation = cx.update(|cx| workspace.read(cx).tab().indentation);
+    assert_eq!((indentation.tab_size, indentation.hard_tabs), (3, true));
+    press(cx, window, "secondary-s");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\n  b\n");
+}
+
 /// buffer on stdin: on save, and with Format Document.
 #[cfg(unix)]
 #[gpui_kit::test]
