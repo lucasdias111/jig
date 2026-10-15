@@ -1,8 +1,8 @@
 use super::*;
 
 fn flow(source: &str) -> Graph {
-    let functions = functions(source);
-    graph(source, &functions[0]).expect("the function is there")
+    let functions = functions(source, Lang::Rust);
+    graph(source, Lang::Rust, &functions[0]).expect("the function is there")
 }
 
 fn titles(graph: &Graph) -> Vec<&str> {
@@ -26,7 +26,10 @@ fn lists_functions_with_their_owners() {
                   impl<T> Wrapper<T> { fn get(&self) {} }\n\
                   trait Named { fn name(&self) -> String { String::new() } fn bare(&self); }\n\
                   mod inner { fn hidden() {} }\n";
-    let names: Vec<_> = functions(source).into_iter().map(|f| f.name).collect();
+    let names: Vec<_> = functions(source, Lang::Rust)
+        .into_iter()
+        .map(|f| f.name)
+        .collect();
     assert_eq!(
         names,
         ["free", "Wrapper::get", "Named::name", "inner::hidden"]
@@ -36,7 +39,7 @@ fn lists_functions_with_their_owners() {
 #[test]
 fn picks_the_innermost_function_at_the_cursor() {
     let source = "fn a() {}\nfn b() { let x = 1; }\n";
-    let found = functions(source);
+    let found = functions(source, Lang::Rust);
     assert_eq!(at(&found, source.find("let").unwrap()), Some(1));
     // Between functions, the first.
     assert_eq!(at(&found, 9), Some(0));
@@ -319,7 +322,7 @@ fn call_blocks_know_what_they_call() {
 #[test]
 fn functions_know_where_their_name_is() {
     let source = "impl A {\n    pub fn save(&self) {}\n}\n";
-    let save = &functions(source)[0];
+    let save = &functions(source, Lang::Rust)[0];
     assert_eq!(&source[save.name_at..save.name_at + 4], "save");
 }
 
@@ -329,9 +332,9 @@ fn finds_callers_in_the_file() {
                   fn on_click() {\n    save();\n}\n\
                   impl Doc {\n    fn close(&self) {\n        self.save();\n        other();\n    }\n}\n\
                   fn save_as() {}\n";
-    let found = functions(source);
+    let found = functions(source, Lang::Rust);
     let save = found.iter().find(|f| f.name == "save").unwrap();
-    let callers: Vec<_> = callers_in(source, save)
+    let callers: Vec<_> = callers_in(source, Lang::Rust, save)
         .into_iter()
         .map(|(name, at)| (name, &source[at..at + 4]))
         .collect();
@@ -359,7 +362,7 @@ fn functions_are_grouped_by_what_they_are_in() {
                   impl fmt::Display for Wrapper<u8> { fn fmt(&self) {} }\n\
                   trait Named { fn name(&self) {} }\n\
                   mod tests { struct S; impl S { fn check() {} } fn helper() {} }\n";
-    let listed: Vec<_> = functions(source)
+    let listed: Vec<_> = functions(source, Lang::Rust)
         .into_iter()
         .map(|f| (f.section, f.short, f.name))
         .collect();

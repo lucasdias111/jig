@@ -22,7 +22,7 @@ use gpui_kit::*;
 use super::debug::{self, DebugMarks, OnBlocks};
 use super::layout::{self, Layout, Rect};
 use super::live::Firing;
-use super::{Caller, Function, Graph, Kind, Node};
+use super::{Caller, Function, Graph, Kind, Lang, Node};
 
 const LIST_WIDTH: f32 = 210.;
 const MIN_ZOOM: f32 = 0.25;
@@ -71,8 +71,9 @@ pub enum BlueprintEvent {
 
 pub struct BlueprintView {
     focus: FocusHandle,
-    /// The text the functions were read from.
+    /// The text the functions were read from, and its language.
     source: String,
+    lang: Lang,
     functions: Vec<Function>,
     current: Option<usize>,
     graph: Graph,
@@ -112,10 +113,11 @@ impl Focusable for BlueprintView {
 
 impl BlueprintView {
     /// The flow of the function around `cursor` in `source`.
-    pub fn new(source: String, cursor: usize, cx: &mut Context<Self>) -> Self {
+    pub fn new(source: String, cursor: usize, lang: Lang, cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             focus: cx.focus_handle(),
             source: String::new(),
+            lang,
             functions: Vec::new(),
             current: None,
             graph: Graph::default(),
@@ -147,7 +149,7 @@ impl BlueprintView {
             .current_function()
             .map(|function| function.name.clone());
         self.source = source;
-        self.functions = super::functions(&self.source);
+        self.functions = super::functions(&self.source, self.lang);
         for function in &self.functions {
             if self.seen_sections.insert(function.section.clone())
                 && function.section.as_deref().is_some_and(is_test_section)
@@ -171,6 +173,10 @@ impl BlueprintView {
             }
         }
         cx.notify();
+    }
+
+    pub fn lang(&self) -> Lang {
+        self.lang
     }
 
     pub fn current_function(&self) -> Option<&Function> {
@@ -204,7 +210,7 @@ impl BlueprintView {
         let Some(function) = self.functions.get(ix) else {
             return;
         };
-        self.graph = super::graph(&self.source, function).unwrap_or_default();
+        self.graph = super::graph(&self.source, self.lang, function).unwrap_or_default();
         self.layout = layout::layout(&self.graph, self.data_wires);
         let shown = function.clone();
         // Its section opens, so it shows as picked.

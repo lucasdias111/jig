@@ -775,3 +775,140 @@ fn asks_to_hear_each_block_fire_and_lights_it(cx: &mut TestAppContext) {
     assert!(!showing(cx, &workspace));
     assert!(logpoints(cx).is_empty());
 }
+
+/// JavaScript with js-debug: the blueprint fires off as the program runs,
+/// as it does for Rust. Needs Node, and `JIG_DEBUGGERS_DIR` where js-debug
+/// is installed.
+#[gpui_kit::test]
+#[ignore]
+fn fires_off_in_javascript_live(cx: &mut TestAppContext) {
+    assert!(
+        std::env::var_os("JIG_DEBUGGERS_DIR").is_some(),
+        "JIG_DEBUGGERS_DIR: where js-debug is installed"
+    );
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".jig")).unwrap();
+    let source = root.join("main.js");
+    std::fs::write(
+        &source,
+        "function main() {\n  for (let item = 0; item < 60; item++) {\n    if (item % 2 === 0) {\n      big(item);\n    } else {\n      small(item);\n    }\n    pause(50);\n  }\n  console.log('done');\n}\n\nfunction big(_) {}\nfunction small(_) {}\nfunction pause(ms) {\n  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n}\n\nmain();\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".jig/run.toml"),
+        "[[run]]\nname = \"App\"\ncommand = \"node main.js\"\n",
+    )
+    .unwrap();
+    let (window, workspace) = open(cx, &root);
+    step(cx, window, |_, cx| {
+        crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+    });
+    open_file(cx, window, &workspace, &source);
+    toggle(cx, window);
+    let view = view(cx, &workspace);
+    assert_eq!(
+        cx.update(|cx| view.read(cx).current_function().unwrap().name.clone()),
+        "main"
+    );
+    let node = |cx: &mut TestAppContext, title: &str| {
+        cx.update(|cx| {
+            view.read(cx)
+                .graph()
+                .nodes
+                .iter()
+                .position(|node| node.title == title)
+                .unwrap()
+        })
+    };
+    let (big, small) = (node(cx, "Call big"), node(cx, "Call small"));
+    use crate::workspace::debug::Phase;
+    let mut seen = std::collections::HashSet::new();
+    let mut tick = |cx: &mut TestAppContext| {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+        let now = std::time::Instant::now();
+        cx.update(|cx| {
+            let firing = view.read(cx).firing();
+            for node in [big, small] {
+                if firing.block(node, now) > 0. {
+                    seen.insert(node);
+                }
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    step(cx, window, |window, cx| window.press("ctrl-d", cx));
+    for _ in 0..1500 {
+        tick(cx);
+        if cx
+            .update(|cx| workspace.read(cx).run_picker_rows(cx))
+            .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
+        {
+            break;
+        }
+    }
+    step(cx, window, |window, cx| window.press("enter", cx));
+    for _ in 0..1500 {
+        tick(cx);
+        if cx.update(|cx| workspace.read(cx).debug_phase()) == Some(Phase::Ended) {
+            break;
+        }
+        assert_ne!(
+            cx.update(|cx| workspace.read(cx).debug_phase()),
+            Some(Phase::Paused),
+            "it never stops"
+        );
+    }
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
+    eprintln!("{texts:#?}");
+    assert!(texts.iter().any(|text| text == "done"));
+    assert!(
+        !texts.iter().any(|text| text.contains("jig-fired")),
+        "the logpoints' messages stay out of the console"
+    );
+    assert_eq!(seen, [big, small].into(), "both ways the `if` went lit up");
+}
+
+/// A TypeScript file's blueprint, from the button's shortcut, with its
+/// class methods listed and a method's flow drawn.
+#[gpui_kit::test]
+fn shows_a_typescript_files_blueprint(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("store.ts");
+    let source = "export class Store {\n  save(item: Item): void {\n    if (!item.ok) {\n      return;\n    }\n    this.items.push(item);\n  }\n}\n\nexport const load = async (id: string) => fetch(id);\n";
+    std::fs::write(&path, source).unwrap();
+    let (window, workspace) = open(cx, &path);
+    let inside = source.find("push").unwrap();
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .editor()
+            .clone()
+            .select(inside..inside, cx)
+    });
+    toggle(cx, window);
+    assert!(showing(cx, &workspace));
+    let view = view(cx, &workspace);
+    let (names, shown, titles) = cx.update(|cx| {
+        let view = view.read(cx);
+        (
+            view.functions()
+                .iter()
+                .map(|f| f.name.clone())
+                .collect::<Vec<_>>(),
+            view.current_function().unwrap().name.clone(),
+            view.graph()
+                .nodes
+                .iter()
+                .map(|node| node.title.clone())
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(names, ["Store.save", "load"]);
+    assert_eq!(shown, "Store.save");
+    assert_eq!(titles, ["Store.save", "Branch", "Return", "Call push"]);
+}

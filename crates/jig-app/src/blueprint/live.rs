@@ -82,7 +82,7 @@ fn strength(at: Option<&Instant>, now: Instant) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::{functions, graph};
+    use crate::blueprint::{Lang, functions, graph};
 
     const SOURCE: &str = "fn go(items: Vec<u8>) {\n    for item in items {\n        if item > 2 {\n            big(item);\n        } else {\n            small(item);\n        }\n    }\n    done();\n}\n";
 
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn lights_the_blocks_and_the_wires_between_them_then_fades() {
-        let graph = graph(SOURCE, &functions(SOURCE)[0]).unwrap();
+        let graph = graph(SOURCE, Lang::Rust, &functions(SOURCE, Lang::Rust)[0]).unwrap();
         let mut firing = Firing::default();
         let start = Instant::now();
         firing.fire(&graph, 0, start);
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn round_the_loop_lights_the_way_back_and_the_start_begins_again() {
-        let graph = graph(SOURCE, &functions(SOURCE)[0]).unwrap();
+        let graph = graph(SOURCE, Lang::Rust, &functions(SOURCE, Lang::Rust)[0]).unwrap();
         let mut firing = Firing::default();
         let now = Instant::now();
         for title in ["For Each", "Branch", "Call big", "Branch", "Call small"] {

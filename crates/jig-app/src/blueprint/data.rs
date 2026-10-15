@@ -56,7 +56,7 @@ pub(super) fn add(graph: &mut Graph, item: SyntaxNode, source: &str) {
 
 /// A wire for each block reading each binding, the binding's pins in the
 /// order it binds them and the reader's in the order it reads them.
-fn connect(graph: &mut Graph, bound: &[(usize, &str)], uses: &[(usize, &str, usize)]) {
+pub(super) fn connect(graph: &mut Graph, bound: &[(usize, &str)], uses: &[(usize, &str, usize)]) {
     let mut reads: Vec<(usize, &str, usize)> = Vec::new();
     for &(from, name, at) in uses {
         let Some(to) = graph

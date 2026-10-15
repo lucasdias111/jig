@@ -122,7 +122,7 @@ fn path(graph: &Graph, from: usize, to: usize) -> Option<Vec<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::{functions, graph};
+    use crate::blueprint::{Lang, functions, graph};
 
     const SOURCE: &str = "fn go(items: Vec<u8>) {\n    let total = 0;\n    for item in items {\n        if item > 2 {\n            big(item);\n        } else {\n            small(item);\n        }\n    }\n    done(total);\n}\n";
 
@@ -131,11 +131,11 @@ mod tests {
     }
 
     fn flow() -> Graph {
-        graph(SOURCE, &functions(SOURCE)[0]).unwrap()
+        graph(SOURCE, Lang::Rust, &functions(SOURCE, Lang::Rust)[0]).unwrap()
     }
 
     fn function() -> Range<usize> {
-        functions(SOURCE)[0].range.clone()
+        functions(SOURCE, Lang::Rust)[0].range.clone()
     }
 
     fn title(graph: &Graph, node: usize) -> &str {

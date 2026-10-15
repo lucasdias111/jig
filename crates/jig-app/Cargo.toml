@@ -45,9 +45,12 @@ minisign-verify = "0.3"
 # `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
 tree-sitter-gdscript = "6"
 tree-sitter = "0.26"
-# Rust's grammar, already linked for highlighting through GPUI Kit, read
-# directly by `blueprint` to draw a function's flow.
+# Rust's, JavaScript's and TypeScript's grammars, already linked for
+# highlighting through GPUI Kit, read directly by `blueprint` to draw a
+# function's flow.
 tree-sitter-rust = "0.24"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
 # More grammars GPUI Kit has no feature for, registered in
 # `languages::grammars`. Each must build on `tree-sitter-language` (or
 # tree-sitter >= 0.21), so it links against the one tree-sitter above.

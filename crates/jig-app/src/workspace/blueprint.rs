@@ -27,7 +27,7 @@ use super::definitions::with_timeout;
 use super::tabs::canonical;
 use super::{ToggleBlueprint, Workspace};
 use crate::blueprint::debug::DebugMarks;
-use crate::blueprint::{self, Caller, Function, view::BlueprintEvent, view::BlueprintView};
+use crate::blueprint::{self, Caller, Function, Lang, view::BlueprintEvent, view::BlueprintView};
 use crate::lsp;
 
 /// How long the language server has to name a function's callers before
@@ -62,7 +62,11 @@ impl Workspace {
             return;
         }
         if !blueprint::reads(&self.editor().language(cx)) {
-            self.show_note("The blueprint view reads Rust for now.".into(), window, cx);
+            self.show_note(
+                "The blueprint view reads Rust, JavaScript and TypeScript for now.".into(),
+                window,
+                cx,
+            );
             return;
         }
         self.open_blueprint(window, cx);
@@ -73,7 +77,10 @@ impl Workspace {
         self.leave_tab(cx);
         let source = self.editor().text(cx);
         let cursor = self.editor().cursor(cx);
-        let view = cx.new(|cx| BlueprintView::new(source, cursor, cx));
+        let Some(lang) = Lang::of(&self.editor().language(cx)) else {
+            return;
+        };
+        let view = cx.new(|cx| BlueprintView::new(source, cursor, lang, cx));
         let events = cx.subscribe_in(&view, window, |this, view, event, window, cx| match event {
             BlueprintEvent::Open(range) => this.open_from_blueprint(range.clone(), window, cx),
             BlueprintEvent::Close => this.close_blueprint(window, cx),
@@ -211,7 +218,8 @@ impl Workspace {
         let tab = &self.tabs[ix];
         let source = tab.editor.text(cx);
         let path = tab.document.path.clone();
-        let here: Vec<Caller> = blueprint::callers_in(&source, function)
+        let lang = view.read(cx).lang();
+        let here: Vec<Caller> = blueprint::callers_in(&source, lang, function)
             .into_iter()
             .map(|(name, at)| Caller {
                 place: place(path.as_deref(), &source, at),
@@ -270,7 +278,7 @@ impl Workspace {
         .detach();
     }
 
-    /// In the title bar, left of the Jig button: swaps a Rust file's code
+    /// In the title bar, left of the Jig button: swaps a readable file's code
     /// for its blueprint and back, pressed while the blueprint shows.
     pub(super) fn render_blueprint_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.home || !blueprint::reads(&self.editor().language(cx)) {
@@ -451,7 +459,11 @@ fn callers_from(
                 .buffer_text(&call.path, cx)
                 .or_else(|| std::fs::read_to_string(&call.path).ok())?;
             let at = lsp::offset(&text, call.at, encoding);
-            let functions = blueprint::functions(&text);
+            let language =
+                crate::languages::language_for(&call.path, &workspace.settings.languages);
+            let functions = Lang::of(language)
+                .map(|lang| blueprint::functions(&text, lang))
+                .unwrap_or_default();
             let name = functions
                 .iter()
                 .filter(|function| function.range.contains(&at))

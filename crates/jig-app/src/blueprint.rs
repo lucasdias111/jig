@@ -1,13 +1,15 @@
-//! The blueprint view's model: a Rust function read as blocks joined by
-//! the order they run in, like an Unreal Blueprint's exec wires. Each
-//! statement is a block; `if`, `match` and loops branch, and `return`,
-//! `continue` and panics end a path. Read with tree-sitter, so it works on
-//! code that doesn't build yet.
+//! The blueprint view's model: a function read as blocks joined by the
+//! order they run in, like an Unreal Blueprint's exec wires. Each statement
+//! is a block; `if`, `match` and loops branch, and `return`, `continue` and
+//! panics end a path. Read with tree-sitter, so it works on code that
+//! doesn't build yet. Rust is read here; JavaScript and TypeScript in
+//! `script`.
 
 mod data;
 pub mod debug;
 pub mod layout;
 pub mod live;
+mod script;
 pub mod view;
 
 use std::ops::Range;
@@ -112,25 +114,58 @@ pub struct Graph {
     pub data: Vec<Data>,
 }
 
-/// Whether the blueprint view can read files in `language`.
-pub fn reads(language: &str) -> bool {
-    language == "rust"
+/// A language the blueprint view reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lang {
+    Rust,
+    JavaScript,
+    TypeScript,
+    Tsx,
 }
 
-fn parse(source: &str) -> Option<Tree> {
+impl Lang {
+    /// The one for Jig's language name, if the view reads it.
+    pub fn of(language: &str) -> Option<Lang> {
+        Some(match language {
+            "rust" => Lang::Rust,
+            "javascript" => Lang::JavaScript,
+            "typescript" => Lang::TypeScript,
+            "tsx" => Lang::Tsx,
+            _ => return None,
+        })
+    }
+
+    fn grammar(self) -> tree_sitter::Language {
+        match self {
+            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        }
+    }
+}
+
+/// Whether the blueprint view can read files in `language`.
+pub fn reads(language: &str) -> bool {
+    Lang::of(language).is_some()
+}
+
+fn parse(source: &str, lang: Lang) -> Option<Tree> {
     let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .ok()?;
+    parser.set_language(&lang.grammar()).ok()?;
     parser.parse(source, None)
 }
 
 /// The file's functions with bodies, in the order they're written,
-/// including those in impls, traits' default methods and modules.
-pub fn functions(source: &str) -> Vec<Function> {
-    let Some(tree) = parse(source) else {
+/// including those in impls, traits' default methods and modules (in
+/// JavaScript and TypeScript, classes and namespaces).
+pub fn functions(source: &str, lang: Lang) -> Vec<Function> {
+    let Some(tree) = parse(source, lang) else {
         return Vec::new();
     };
+    if lang != Lang::Rust {
+        return script::functions(tree.root_node(), source);
+    }
     let mut found = Vec::new();
     collect_functions(tree.root_node(), source, &Scope::default(), &mut found);
     found
@@ -222,8 +257,11 @@ pub fn at(functions: &[Function], offset: usize) -> Option<usize> {
 
 /// The flow of the function at `function.range`, or `None` if it's no
 /// longer there.
-pub fn graph(source: &str, function: &Function) -> Option<Graph> {
-    let tree = parse(source)?;
+pub fn graph(source: &str, lang: Lang, function: &Function) -> Option<Graph> {
+    let tree = parse(source, lang)?;
+    if lang != Lang::Rust {
+        return script::graph(tree.root_node(), source, function);
+    }
     let item = tree
         .root_node()
         .descendant_for_byte_range(function.range.start, function.range.end)?;
@@ -662,12 +700,15 @@ fn callee_name_node(callee: SyntaxNode) -> Option<SyntaxNode> {
 /// The calls to `function` in `source`, each with the function making it,
 /// for when no language server says. Calls are matched by name, so a
 /// method of another type with the same name counts too.
-pub fn callers_in(source: &str, function: &Function) -> Vec<(String, usize)> {
-    let Some(tree) = parse(source) else {
+pub fn callers_in(source: &str, lang: Lang, function: &Function) -> Vec<(String, usize)> {
+    let Some(tree) = parse(source, lang) else {
         return Vec::new();
     };
+    if lang != Lang::Rust {
+        return script::callers_in(tree.root_node(), source, function);
+    }
     let short = function.name.rsplit("::").next().unwrap_or(&function.name);
-    let functions = functions(source);
+    let functions = functions(source, lang);
     let mut calls = Vec::new();
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {

@@ -200,10 +200,10 @@ fn wanted_y(graph: &Graph, rects: &[Rect], placed: &[bool], heights: &[f32], ix:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::{functions, graph};
+    use crate::blueprint::{Lang, functions, graph};
 
     fn laid_out(source: &str) -> (Graph, Layout) {
-        let graph = graph(source, &functions(source)[0]).unwrap();
+        let graph = graph(source, Lang::Rust, &functions(source, Lang::Rust)[0]).unwrap();
         let layout = layout(&graph, true);
         (graph, layout)
     }
@@ -299,7 +299,8 @@ mod tests {
     fn hiding_data_drops_its_rows() {
         let graph = graph(
             "fn go(a: u8) { use_it(a); }",
-            &functions("fn go(a: u8) { use_it(a); }")[0],
+            Lang::Rust,
+            &functions("fn go(a: u8) { use_it(a); }", Lang::Rust)[0],
         )
         .unwrap();
         let shown = layout(&graph, true);
