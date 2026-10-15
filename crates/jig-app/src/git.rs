@@ -322,8 +322,14 @@ impl Repo {
                 .stderr(Stdio::piped())
                 .spawn()
                 .context("Couldn't run git. Is it installed?")?;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(input.as_bytes())?;
+            // Git may stop before reading its paths (another git holding the
+            // index's lock, say); its exit and stderr then say why, not the
+            // broken pipe.
+            if let Some(mut stdin) = child.stdin.take()
+                && let Err(error) = stdin.write_all(input.as_bytes())
+                && error.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(error.into());
             }
             Ok(child.wait_with_output()?)
         })
