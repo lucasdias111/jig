@@ -53,6 +53,26 @@ impl Workspace {
         }
     }
 
+    /// Move tabs off servers a marker file has since made wrong, such as a
+    /// `Cargo.toml` written after rust-analyzer started in its folder, which
+    /// it would never find. Checked on saving and when the window comes
+    /// forward, after files may have been made outside Jig.
+    pub(super) fn move_to_current_servers(&mut self, cx: &mut Context<Self>) {
+        for ix in 0..self.tabs.len() {
+            let tab = &self.tabs[ix];
+            let (Some(path), Some(lsp)) = (tab.document.path.clone(), &tab.lsp) else {
+                continue;
+            };
+            let language = tab.document.language(&self.settings.languages);
+            if lsp::is_current(&lsp.client, &path, language, cx) {
+                continue;
+            }
+            let text = tab.editor.text(cx);
+            self.tabs[ix].lsp = None;
+            self.tabs[ix].lsp = TabLsp::open(&path, language, &text, cx);
+        }
+    }
+
     /// A server stopped before it started: say why, if it was one of this
     /// window's, since hover, go to definition and problems quietly go
     /// without it.
@@ -77,8 +97,14 @@ impl Workspace {
         }
     }
 
-    /// The current tab was saved, maybe under a new name.
+    /// The current tab was saved, maybe under a new name, maybe as the
+    /// `Cargo.toml` that makes its folder a project.
     pub(super) fn lsp_saved(&mut self, cx: &mut Context<Self>) {
+        self.tell_server_saved(cx);
+        self.move_to_current_servers(cx);
+    }
+
+    fn tell_server_saved(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.document().path.clone() else {
             return;
         };

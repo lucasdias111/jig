@@ -347,6 +347,7 @@ impl Workspace {
                 this.reload_changed_files(None, window, cx);
                 this.refresh_tree(cx);
                 this.refresh_git(window, cx);
+                this.move_to_current_servers(cx);
             }
         })
         .detach();

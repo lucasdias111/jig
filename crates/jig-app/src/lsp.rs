@@ -10,7 +10,7 @@ mod client;
 pub mod diagnostics;
 pub mod install;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -118,10 +118,18 @@ pub fn root_for(server: &Server, file: &Path) -> PathBuf {
     found.map_or_else(|| crate::project::root_for(file), Path::to_path_buf)
 }
 
+/// A server and the root it runs in.
+type Key = (&'static str, PathBuf);
+
 /// The running servers, one per server and root.
 #[derive(Default)]
 pub struct Registry {
-    clients: HashMap<(&'static str, PathBuf), Arc<Client>>,
+    clients: HashMap<Key, Arc<Client>>,
+    /// Servers started in a folder without their markers, as when a file
+    /// opens in a project before `cargo init` has run. rust-analyzer never
+    /// finds a project that appears after it starts, so these are started
+    /// again once their markers show up ([`Registry::outgrown`]).
+    unmarked: HashSet<Key>,
     /// Where every server's problems go, on their way to
     /// [`diagnostics::Diagnostics`].
     diagnostics: Option<futures::channel::mpsc::UnboundedSender<diagnostics::Published>>,
@@ -131,6 +139,23 @@ pub struct Registry {
 }
 
 impl Global for Registry {}
+
+impl Registry {
+    /// Whether the server at `key` started without its markers and its root
+    /// has them now.
+    fn outgrown(&self, server: &Server, key: &Key) -> bool {
+        self.unmarked.contains(key) && server.marks(&key.1)
+    }
+
+    fn insert(&mut self, server: &Server, key: Key, client: Arc<Client>) {
+        if server.marks(&key.1) {
+            self.unmarked.remove(&key);
+        } else {
+            self.unmarked.insert(key.clone());
+        }
+        self.clients.insert(key, client);
+    }
+}
 
 /// Bumped when a server stops before it has started, for workspaces to say
 /// why ([`Client::failure`]) rather than quietly go without it.
@@ -144,9 +169,9 @@ impl Global for Failures {}
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
     client.on_diagnostics(diagnostics_sink(cx));
     client.on_failure(failures_sink(cx));
+    let server = server_named(server).expect("a known server");
     cx.default_global::<Registry>()
-        .clients
-        .insert((server, root), client);
+        .insert(server, (&server.name, root), client);
 }
 
 /// The channel servers' threads send problems down, read on the main thread
@@ -195,7 +220,11 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     let root = root_for(server, &file);
     let key = (server.name.as_str(), root.clone());
     let registry = cx.default_global::<Registry>();
-    if let Some(client) = registry.clients.get(&key) {
+    if registry.outgrown(server, &key) {
+        // Its tabs let go of it as they move to the new one, and the last
+        // to go shuts it down.
+        registry.clients.remove(&key);
+    } else if let Some(client) = registry.clients.get(&key) {
         return (!client.is_dead()).then(|| client.clone());
     }
     // Tests use fake servers, never what happens to be installed, unless
@@ -210,10 +239,30 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     let client = Client::start(&server.name, root, init_options, move || {
         command_for(server, &command_root)
     });
-    registry.clients.insert(key, client.clone());
+    registry.insert(server, key, client.clone());
     client.on_diagnostics(diagnostics_sink(cx));
     client.on_failure(failures_sink(cx));
     (!client.is_dead()).then_some(client)
+}
+
+/// Whether `client` is still the one [`client_for`] gives `file`: not when
+/// a marker has since appeared, giving the file another root or its
+/// server's root the markers it started without.
+pub fn is_current(client: &Arc<Client>, file: &Path, language: &str, cx: &App) -> bool {
+    let Some(server) = server_for(language) else {
+        return false;
+    };
+    let Ok(file) = std::path::absolute(file) else {
+        return true;
+    };
+    let key = (server.name.as_str(), root_for(server, &file));
+    cx.try_global::<Registry>().is_some_and(|registry| {
+        !registry.outgrown(server, &key)
+            && registry
+                .clients
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, client))
+    })
 }
 
 /// Why `file`'s server stopped before it started, if it did.
@@ -241,9 +290,11 @@ impl Global for ServersChanged {}
 /// A server was installed or uninstalled: forget the ones that weren't
 /// found when last looked for, and tell the workspaces.
 pub fn servers_changed(cx: &mut App) {
-    cx.default_global::<Registry>()
-        .clients
-        .retain(|_, client| !client.is_dead());
+    let Registry {
+        clients, unmarked, ..
+    } = cx.default_global::<Registry>();
+    clients.retain(|_, client| !client.is_dead());
+    unmarked.retain(|key| clients.contains_key(key));
     cx.default_global::<ServersChanged>().0 += 1;
 }
 

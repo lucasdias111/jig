@@ -15,6 +15,7 @@ mod home;
 mod jigs;
 mod occurrences;
 mod quick;
+mod servers;
 mod session;
 mod tabs;
 mod tasks;
