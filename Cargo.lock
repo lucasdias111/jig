@@ -3577,7 +3577,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jig-ai"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "jig-process",
@@ -3592,7 +3592,7 @@ dependencies = [
 
 [[package]]
 name = "jig-app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "jig-commands"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -3669,14 +3669,14 @@ dependencies = [
 
 [[package]]
 name = "jig-editor"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "gpui-kit",
 ]
 
 [[package]]
 name = "jig-process"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "libc",
 ]
