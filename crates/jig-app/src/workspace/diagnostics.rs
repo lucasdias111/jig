@@ -8,6 +8,7 @@
 
 use std::ops::Range;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::base::input::{DiagnosticEntry, DiagnosticSeverity};
 use gpui_kit::component::input::EditorState;
@@ -16,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::EditorHandle;
 
+use super::quick_fix::PanelFixes;
 use super::{NextProblem, PreviousProblem, Workspace};
 use crate::lsp::diagnostics::{self, Diagnostics};
 
@@ -27,6 +29,9 @@ const WARNING_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox=
 const INFO_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>"#;
 
 const PANEL_MAX_WIDTH: f32 = 480.;
+/// How long a panel stays once the pointer leaves what it's about, so the
+/// pointer can reach it.
+pub(super) const LINGER: Duration = Duration::from_millis(350);
 
 /// A tab's problems: which file they're kept under and which report it
 /// shows.
@@ -44,10 +49,11 @@ impl Problems {
     pub(super) fn new(
         state: &Entity<EditorState>,
         path: Option<&std::path::Path>,
+        workspace: WeakEntity<Workspace>,
         cx: &mut App,
     ) -> Self {
         state.update(cx, |state, _| state.set_own_diagnostic_popover(true));
-        let hover = cx.new(|cx| ProblemHover::new(state.clone(), cx));
+        let hover = cx.new(|cx| ProblemHover::new(state.clone(), workspace, cx));
         let mut problems = Self {
             key: path.map(diagnostics::path_key),
             shown: None,
@@ -69,6 +75,15 @@ impl Problems {
             self.key = Some(key);
             self.show(state, true, cx);
         }
+    }
+
+    /// What the server last reported for the file, as it sent it.
+    pub(super) fn reported(&self, cx: &App) -> Vec<lsp_types::Diagnostic> {
+        cx.try_global::<Diagnostics>()
+            .zip(self.key.as_deref())
+            .and_then(|(store, key)| store.get(key))
+            .map(|stored| stored.published.items.clone())
+            .unwrap_or_default()
     }
 
     /// Give the editor the latest report, if it hasn't got it. Returns
@@ -360,22 +375,88 @@ pub(super) fn problem_row(entry: &DiagnosticEntry, cx: &App) -> Div {
 }
 
 /// The message of the problem under the pointer, or the one the keys went
-/// to, in a small panel below it. A view of its own, so hovering repaints
-/// only this.
+/// to, in a small panel below it, with ways to fix it. A view of its own,
+/// so hovering repaints only this.
 pub(super) struct ProblemHover {
     editor: Entity<EditorState>,
     /// Shown by the keys, while the cursor stays where they put it.
     pinned: Option<(usize, Rc<DiagnosticEntry>)>,
+    /// The problem the pointer was last on. It stays a moment after the
+    /// pointer leaves, and while the pointer is over the panel, so the
+    /// fixes can be reached.
+    last: Option<Rc<DiagnosticEntry>>,
+    /// The pointer is over the panel.
+    held: bool,
+    /// The pointer has left; `last` goes when this finishes.
+    leaving: Option<Task<()>>,
+    /// The hover panel shows the problem, above what the server says about
+    /// the symbol there.
+    under_hover: bool,
+    fixes: Entity<PanelFixes>,
     _observe: Subscription,
 }
 
 impl ProblemHover {
-    fn new(editor: Entity<EditorState>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&editor, |_, _, cx| cx.notify());
+    fn new(
+        editor: Entity<EditorState>,
+        workspace: WeakEntity<Workspace>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let observe = cx.observe(&editor, |this, _, cx| this.editor_changed(cx));
+        let fixes = cx.new(|_| PanelFixes::new(workspace, editor.entity_id()));
         Self {
             editor,
             pinned: None,
+            last: None,
+            held: false,
+            leaving: None,
+            under_hover: false,
+            fixes,
             _observe: observe,
+        }
+    }
+
+    /// Follow the pointer onto problems, and let the last one linger as it
+    /// leaves.
+    fn editor_changed(&mut self, cx: &mut Context<Self>) {
+        if !self.held {
+            match self.editor.read(cx).hovered_diagnostic() {
+                Some(entry) => {
+                    self.last = Some(entry);
+                    self.leaving = None;
+                }
+                None => self.leave(cx),
+            }
+        }
+        cx.notify();
+    }
+
+    /// The pointer left the problem or its panel: put it away after a
+    /// moment, unless the pointer comes back.
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        if self.last.is_none() || self.leaving.is_some() {
+            return;
+        }
+        self.leaving = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(LINGER).await;
+            this.update(cx, |this, cx| {
+                this.leaving = None;
+                if !this.held && this.editor.read(cx).hovered_diagnostic().is_none() {
+                    this.last = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    fn set_held(&mut self, held: bool, cx: &mut Context<Self>) {
+        if self.held == held {
+            return;
+        }
+        self.held = held;
+        if !held {
+            self.editor_changed(cx);
         }
     }
 
@@ -392,7 +473,42 @@ impl ProblemHover {
         pinned
     }
 
-    /// What's shown: the hovered problem, else the pinned one.
+    /// Put the panel away: a fix was taken.
+    pub(super) fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.pinned = None;
+        self.last = None;
+        self.held = false;
+        self.leaving = None;
+        self.editor
+            .update(cx, |editor, cx| editor.clear_diagnostic_popover(cx));
+        cx.notify();
+    }
+
+    pub(super) fn set_under_hover(&mut self, under: bool, cx: &mut Context<Self>) {
+        if self.under_hover != under {
+            self.under_hover = under;
+            cx.notify();
+        }
+    }
+
+    /// Whether the pointer is over the panel, which keeps the hover of
+    /// whatever is under it away.
+    pub(super) fn is_held(&self) -> bool {
+        self.held
+    }
+
+    /// The problem the pointer is on, or was on a moment ago.
+    pub(super) fn pointed_at(&self, cx: &App) -> Option<Rc<DiagnosticEntry>> {
+        if self.held {
+            return self.last.clone();
+        }
+        self.editor
+            .read(cx)
+            .hovered_diagnostic()
+            .or_else(|| self.last.clone())
+    }
+
+    /// What's shown: the pointer's problem, else the pinned one.
     fn shown(&mut self, cx: &App) -> Option<Rc<DiagnosticEntry>> {
         let state = self.editor.read(cx);
         if let Some((at, _)) = &self.pinned
@@ -400,14 +516,18 @@ impl ProblemHover {
         {
             self.pinned = None;
         }
-        state
-            .hovered_diagnostic()
+        self.pointed_at(cx)
             .or_else(|| self.pinned.as_ref().map(|(_, entry)| entry.clone()))
     }
 
     #[cfg(test)]
     pub(super) fn message(&mut self, cx: &App) -> Option<String> {
         self.shown(cx).map(|entry| entry.message.to_string())
+    }
+
+    #[cfg(test)]
+    pub(super) fn fix_titles(&self, cx: &App) -> Vec<String> {
+        self.fixes.read(cx).titles()
     }
 }
 
@@ -418,7 +538,7 @@ impl Render for ProblemHover {
         };
         let state = self.editor.read(cx);
         // The hover shows it, above what the server says about the symbol.
-        if state.hovered_symbol().is_some() {
+        if !self.held && (self.under_hover || state.hovered_symbol().is_some()) {
             return Empty.into_any_element();
         }
         let start = entry.range.start;
@@ -430,6 +550,8 @@ impl Render for ProblemHover {
         else {
             return Empty.into_any_element();
         };
+        self.fixes
+            .update(cx, |fixes, cx| fixes.offer_for(&entry, cx));
         let panel = jig_commands::surface::panel(cx)
             .id("problem")
             .debug_selector(|| "problem".into())
@@ -437,7 +559,13 @@ impl Render for ProblemHover {
             .px_2p5()
             .py_1p5()
             .text_size(px(12.5))
-            .child(problem_row(&entry, cx));
+            .on_hover(cx.listener(|this, held: &bool, _, cx| this.set_held(*held, cx)))
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(problem_row(&entry, cx))
+                    .child(self.fixes.clone()),
+            );
         deferred(
             anchored()
                 .position(point(line.left() - px(10.), line.bottom() + px(4.)))

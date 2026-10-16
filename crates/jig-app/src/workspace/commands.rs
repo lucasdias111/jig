@@ -655,7 +655,8 @@ impl Workspace {
             self.find_in_files = None;
             cx.stop_propagation();
             cx.notify();
-        } else if self.keys_elsewhere(window, cx) {
+        } else if self.keys_elsewhere(window, cx) || self.quick_fix_open(cx) {
+            // The Quick Fix list closes itself.
             cx.propagate();
         } else if self.reject_preview(window, cx)
             || self.settle_agent_request(false, window, cx)

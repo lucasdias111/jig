@@ -119,6 +119,7 @@ impl Workspace {
         });
         super::definitions::install(&state, cx);
         let offers = super::completions::install(&state, cx);
+        super::quick_fix::install(&state, cx);
         let events = cx.subscribe_in(
             &state,
             window,
@@ -147,7 +148,12 @@ impl Workspace {
         let cursor = cx.new(|cx| CursorPosition::new(state.clone(), cx));
         let marks = self.install_marks(&state, &document, cx);
         self.install_git(&state, &document, cx);
-        let problems = super::diagnostics::Problems::new(&state, document.path.as_deref(), cx);
+        let problems = super::diagnostics::Problems::new(
+            &state,
+            document.path.as_deref(),
+            cx.entity().downgrade(),
+            cx,
+        );
         let hover = super::hover::install(&state, &problems.hover, cx);
         let structure = self.install_structure(&state, cx);
         let occurrences = super::occurrences::Occurrences::new(&state, cx);

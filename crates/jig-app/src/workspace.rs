@@ -27,6 +27,7 @@ mod navigation;
 mod occurrences;
 mod planner;
 mod preferences;
+mod quick_fix;
 mod rename;
 mod run;
 mod selection_button;

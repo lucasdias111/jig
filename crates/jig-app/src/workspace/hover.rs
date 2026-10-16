@@ -24,7 +24,8 @@ use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 use serde_json::json;
 
 use super::definitions::with_timeout;
-use super::diagnostics::{ProblemHover, problem_row};
+use super::diagnostics::{LINGER, ProblemHover, problem_row};
+use super::quick_fix::PanelFixes;
 use super::{ShowHover, Workspace};
 use crate::hover::{self, Signature};
 use crate::lsp::{self, Client};
@@ -93,6 +94,15 @@ impl Workspace {
             .any(|floating| floating.intersects(&area))
     }
 
+    /// Whether the pointer is over a problem or hover panel of the tab of
+    /// `editor`, which keeps the hover of the code under it away.
+    fn pointer_on_panel(&self, editor: EntityId, cx: &App) -> bool {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == editor)
+            .is_some_and(|tab| tab.problems.hover.read(cx).is_held() || tab.hover.read(cx).held)
+    }
+
     /// The tab of the editor `editor`, and its server and URI there.
     fn hover_server(&self, editor: EntityId) -> Option<(Arc<Client>, String)> {
         if self.modal_open() || self.previewing() {
@@ -157,7 +167,9 @@ impl HoverProvider for Hovers {
         let Some((client, uri)) = self
             .workspace
             .upgrade()
-            .and_then(|workspace| workspace.read(cx).hover_server(self.editor))
+            .map(|workspace| workspace.read(cx))
+            .filter(|workspace| !workspace.pointer_on_panel(self.editor, cx))
+            .and_then(|workspace| workspace.hover_server(self.editor))
         else {
             return Task::ready(Ok(None));
         };
@@ -217,6 +229,10 @@ struct Pinned {
     problems: Vec<DiagnosticEntry>,
 }
 
+/// What the hover shows: the symbol's range, the server's Markdown and the
+/// problems there.
+type Shown = (Range<usize>, Option<SharedString>, Vec<DiagnosticEntry>);
+
 /// The signature shown, and where the call it's for opens.
 struct Call {
     open: usize,
@@ -230,6 +246,15 @@ pub(super) struct CodeHover {
     editor: Entity<EditorState>,
     problems: Entity<ProblemHover>,
     pinned: Option<Pinned>,
+    /// What the pointer's hover last showed. It stays a moment after the
+    /// pointer leaves, and while the pointer is over the panel, so its
+    /// fixes and text can be reached.
+    last: Option<Shown>,
+    /// The pointer is over the panel.
+    held: bool,
+    /// The pointer has left; `last` goes when this finishes.
+    leaving: Option<Task<()>>,
+    fixes: Entity<PanelFixes>,
     call: Option<Call>,
     /// The cursor when last looked at, to tell when it moves.
     cursor: usize,
@@ -252,12 +277,17 @@ impl CodeHover {
             Some(workspace) => cx.observe(&workspace, |_, _, cx| cx.notify()),
             None => Subscription::new(|| {}),
         };
+        let fixes = cx.new(|_| PanelFixes::new(workspace.clone(), editor.entity_id()));
         Self {
             cursor: editor.read(cx).cursor(),
             workspace,
             editor,
             problems,
             pinned: None,
+            last: None,
+            held: false,
+            leaving: None,
+            fixes,
             call: None,
             hover_task: Task::ready(()),
             signature_task: Task::ready(()),
@@ -276,6 +306,7 @@ impl CodeHover {
     /// The cursor moved or the text changed: put away what no longer
     /// applies, and follow the call to the parameter now being typed.
     fn editor_changed(&mut self, cx: &mut Context<Self>) {
+        self.follow_pointer(cx);
         let cursor = self.editor.read(cx).cursor();
         if cursor == self.cursor {
             return;
@@ -300,9 +331,66 @@ impl CodeHover {
         }
     }
 
+    /// Keep what the pointer's hover shows, and let it linger as the
+    /// pointer leaves.
+    fn follow_pointer(&mut self, cx: &mut Context<Self>) {
+        self.follow(cx);
+        self.tell_problems(cx);
+    }
+
+    fn follow(&mut self, cx: &mut Context<Self>) {
+        if self.held {
+            return;
+        }
+        match self.pointer_shown(cx) {
+            Some(shown) => {
+                self.last = Some(shown);
+                self.leaving = None;
+            }
+            None if self.last.is_some() && self.leaving.is_none() => {
+                self.leaving = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(LINGER).await;
+                    this.update(cx, |this, cx| {
+                        this.leaving = None;
+                        if !this.held {
+                            this.follow(cx);
+                            if this.leaving.is_none() && this.pointer_shown(cx).is_none() {
+                                this.last = None;
+                            }
+                            this.tell_problems(cx);
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                }));
+            }
+            None => {}
+        }
+    }
+
+    /// The problem panel stays out of the way while this shows the problem.
+    fn tell_problems(&self, cx: &mut Context<Self>) {
+        let showing = self.last.is_some()
+            && (self.held || self.leaving.is_some() || self.pointer_shown(cx).is_some());
+        self.problems
+            .update(cx, |problems, cx| problems.set_under_hover(showing, cx));
+    }
+
+    fn set_held(&mut self, held: bool, cx: &mut Context<Self>) {
+        if self.held == held {
+            return;
+        }
+        self.held = held;
+        if !held {
+            self.follow_pointer(cx);
+        }
+        cx.notify();
+    }
+
     /// `text` was typed: `(` and `,` ask for the call's signature, `)` puts
     /// it away; anything puts away the hover.
     fn typed(&mut self, text: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        self.forget_pointer(cx);
         if self.pinned.take().is_some() {
             self.hover_task = Task::ready(());
             cx.notify();
@@ -419,13 +507,24 @@ impl CodeHover {
         });
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Drop what the pointer's hover showed, at once.
+    fn forget_pointer(&mut self, cx: &mut Context<Self>) {
+        self.last = None;
+        self.leaving = None;
+        self.held = false;
+        self.tell_problems(cx);
+    }
+
+    pub(super) fn close(&mut self, cx: &mut Context<Self>) -> bool {
         let hovering = self.editor.read(cx).hovered_symbol().is_some();
         if hovering {
             self.editor
                 .update(cx, |editor, cx| editor.clear_hover_state(cx));
         }
-        let closed = self.pinned.take().is_some() | self.call.take().is_some() | hovering;
+        let lingering = self.last.is_some() && (self.held || self.leaving.is_some());
+        self.forget_pointer(cx);
+        let closed =
+            self.pinned.take().is_some() | self.call.take().is_some() | hovering | lingering;
         self.hover_task = Task::ready(());
         self.signature_task = Task::ready(());
         if closed {
@@ -434,23 +533,34 @@ impl CodeHover {
         closed
     }
 
-    /// What the hover shows: the symbol's range, the server's Markdown and
-    /// the problems there. The pointer's first, else the keys'.
-    fn shown(
-        &self,
-        cx: &App,
-    ) -> Option<(Range<usize>, Option<SharedString>, Vec<DiagnosticEntry>)> {
-        let state = self.editor.read(cx);
-        if let Some(symbol) = state.hovered_symbol() {
-            let markdown = match &symbol.hover.contents {
-                HoverContents::Markup(markup) => markup.value.clone(),
-                other => hover::markdown(&serde_json::to_value(other).ok()?)?,
-            };
-            let problems = state
-                .hovered_diagnostic()
-                .map(|entry| vec![(*entry).clone()])
-                .unwrap_or_default();
-            return Some((symbol.symbol_range.clone(), Some(markdown.into()), problems));
+    /// What the pointer's hover shows: the symbol under it, with the
+    /// problem there.
+    fn pointer_shown(&self, cx: &App) -> Option<Shown> {
+        let symbol = self.editor.read(cx).hovered_symbol()?;
+        let markdown = match &symbol.hover.contents {
+            HoverContents::Markup(markup) => markup.value.clone(),
+            other => hover::markdown(&serde_json::to_value(other).ok()?)?,
+        };
+        // The problem lingers as the pointer leaves it, as its own panel
+        // does.
+        let problems = self
+            .problems
+            .read(cx)
+            .pointed_at(cx)
+            .map(|entry| vec![(*entry).clone()])
+            .unwrap_or_default();
+        Some((symbol.symbol_range.clone(), Some(markdown.into()), problems))
+    }
+
+    /// What the hover shows: the pointer's first, else the keys'.
+    fn shown(&self, cx: &App) -> Option<Shown> {
+        if (self.held || (self.leaving.is_some() && self.pointer_shown(cx).is_none()))
+            && let Some(last) = &self.last
+        {
+            return Some(last.clone());
+        }
+        if let Some(shown) = self.pointer_shown(cx) {
+            return Some(shown);
         }
         let pinned = self.pinned.as_ref()?;
         Some((
@@ -491,7 +601,7 @@ impl CodeHover {
             .is_none_or(|workspace| workspace.read(cx).covers(area))
     }
 
-    fn render_hover(&self, window: &Window, cx: &App) -> Option<AnyElement> {
+    fn render_hover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (range, markdown, problems) = self.shown(cx)?;
         let state = self.editor.read(cx);
         let at = state
@@ -513,6 +623,10 @@ impl CodeHover {
         };
         if self.covered(area, cx) {
             return None;
+        }
+        if let Some(first) = problems.first() {
+            self.fixes
+                .update(cx, |fixes, cx| fixes.offer_for(first, cx));
         }
         let theme = cx.theme();
         let has_problems = !problems.is_empty();
@@ -539,10 +653,12 @@ impl CodeHover {
             .px_2p5()
             .py_1p5()
             .text_size(px(12.5))
+            .on_hover(cx.listener(|this, held: &bool, _, cx| this.set_held(*held, cx)))
             .child(
                 v_flex()
                     .gap_1p5()
                     .children(problems.iter().map(|entry| problem_row(entry, cx)))
+                    .when(has_problems, |this| this.child(self.fixes.clone()))
                     .when(has_problems && docs.is_some(), |this| {
                         this.child(div().h(px(1.)).bg(theme.border))
                     })

@@ -155,8 +155,6 @@ impl Workspace {
         self.show_note(note, window, cx);
     }
 
-    /// Make the server's `WorkspaceEdit` in each file's buffer, opening
-    /// tabs, without showing them, for files that aren't open.
     fn apply_rename(
         &mut self,
         edit: &Value,
@@ -165,9 +163,33 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (files, uses) = self.apply_workspace_edit(edit, encoding, cursor, window, cx);
+        let note = if files > 1 {
+            format!(
+                "Renamed {} in {files} files. Save to keep them.",
+                count(uses, "use")
+            )
+        } else {
+            format!("Renamed {}.", count(uses, "use"))
+        };
+        self.show_note(note, window, cx);
+    }
+
+    /// Make a server's `WorkspaceEdit` in each file's buffer, one undo step
+    /// per file, opening tabs, without showing them, for files that aren't
+    /// open. `cursor` in the current tab follows the edits. Returns how
+    /// many files and edits it changed.
+    pub(super) fn apply_workspace_edit(
+        &mut self,
+        edit: &Value,
+        encoding: Encoding,
+        cursor: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (usize, usize) {
         let current = self.tab().id();
         let mut files = 0;
-        let mut uses = 0;
+        let mut changed = 0;
         for (path, edits) in workspace_edits(edit) {
             let ix = match self.tab_for(&path) {
                 Some(ix) => ix,
@@ -190,19 +212,11 @@ impl Workspace {
             }
             if moved.is_some() {
                 files += 1;
-                uses += count;
+                changed += count;
             }
         }
         self.editor().focus(window, cx);
-        let note = if files > 1 {
-            format!(
-                "Renamed {} in {files} files. Save to keep them.",
-                count(uses, "use")
-            )
-        } else {
-            format!("Renamed {}.", count(uses, "use"))
-        };
-        self.show_note(note, window, cx);
+        (files, changed)
     }
 
     /// The field, under the name.
@@ -246,7 +260,7 @@ fn word_edits(text: &str, old: &str, new: &str) -> Edits {
 
 /// A `WorkspaceEdit`'s text edits by file, in the server's positions. File
 /// creations, renames and deletions are left out.
-fn workspace_edits(edit: &Value) -> Vec<(PathBuf, Vec<(lsp_types::Range, String)>)> {
+pub(super) fn workspace_edits(edit: &Value) -> Vec<(PathBuf, Vec<(lsp_types::Range, String)>)> {
     let text_edits = |edits: &Value| -> Vec<(lsp_types::Range, String)> {
         edits
             .as_array()

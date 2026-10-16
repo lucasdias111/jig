@@ -1,6 +1,6 @@
 //! The macOS menu bar: Jig, File, Edit, View, Run and Git.
 
-use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, ToggleCodeActions, Undo};
 use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
@@ -86,6 +86,7 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Find All References", FindReferences),
                 MenuItem::action("Next Problem", NextProblem),
                 MenuItem::action("Previous Problem", PreviousProblem),
+                MenuItem::action("Quick Fix…", ToggleCodeActions),
                 MenuItem::action("Rename Symbol…", RenameSymbol),
                 MenuItem::action("Toggle Line Comment", ToggleLineComment),
                 MenuItem::action("Format Document", FormatDocument),

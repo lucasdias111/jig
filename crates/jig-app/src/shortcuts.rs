@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use gpui_kit::component::input::{GoToDefinition, Replace, Search};
+use gpui_kit::component::input::{GoToDefinition, Replace, Search, ToggleCodeActions};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::*;
 
@@ -173,6 +173,15 @@ pub const ALL: &[Shortcut] = &[
         ["f2"],
         IN_INPUT,
         RenameSymbol
+    ),
+    // ⌘. as in VS Code.
+    shortcut!(
+        "quick_fix",
+        "Quick fix",
+        Editing,
+        ["secondary-."],
+        IN_CODE,
+        ToggleCodeActions
     ),
     shortcut!(
         "format_document",

@@ -1,11 +1,12 @@
 //! Right-clicking the code: the menu VS Code users reach for. Go to
 //! Definition, Find All References and Rename Symbol for the name under the
-//! pointer, a jig, the clipboard, commenting lines out and formatting.
+//! pointer, Quick Fix, a jig, the clipboard, commenting lines out and
+//! formatting.
 
 use std::ops::Range;
 
 use gpui_kit::component::Icon;
-use gpui_kit::component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll};
+use gpui_kit::component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll, ToggleCodeActions};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::*;
 use jig_editor::EditorHandle;
@@ -36,6 +37,7 @@ impl Workspace {
             menu.menu("Go to Definition", Box::new(GoToDefinition))
                 .menu("Find All References", Box::new(FindReferences))
                 .menu_with_disabled("Rename Symbol…", !editable, Box::new(RenameSymbol))
+                .menu_with_disabled("Quick Fix…", !editable, Box::new(ToggleCodeActions))
                 .separator()
                 // The sparkle the title bar's and the selection's Jig buttons wear.
                 .menu_with_icon_disabled(

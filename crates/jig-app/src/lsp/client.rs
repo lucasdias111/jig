@@ -457,6 +457,14 @@ fn connect(
                     "documentHighlight": {},
                     "formatting": {},
                     "rangeFormatting": {},
+                    // Fixes with their edits in them; Jig runs no commands.
+                    "codeAction": {
+                        "codeActionLiteralSupport": {
+                            "codeActionKind": {"valueSet": ["quickfix"]},
+                        },
+                        "isPreferredSupport": true,
+                        "disabledSupport": true,
+                    },
                     "hover": {"contentFormat": ["markdown", "plaintext"]},
                     "signatureHelp": {
                         "signatureInformation": {
