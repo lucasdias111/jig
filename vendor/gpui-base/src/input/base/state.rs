@@ -5,9 +5,10 @@
 use gpui::TextAlign;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
-    Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
+    EventEmitter, FocusHandle, Focusable, HoverListenerMode, InteractiveElement as _,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription,
     UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
@@ -2516,6 +2517,25 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
+    /// Jig patch: put the hover and the diagnostic under the pointer away
+    /// once the pointer is off the editor. Mouse moves only reach the editor
+    /// while the pointer is over it, so [`Self::on_mouse_move`] never sees
+    /// it leave, and the hover stayed until Esc.
+    fn on_pointer_hover(
+        &mut self,
+        hovered: &bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if *hovered {
+            return;
+        }
+        M::clear_hover_state(self, cx);
+        if self.diagnostic_popover.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub(super) fn on_scroll_wheel(
         &mut self,
         event: &ScrollWheelEvent,
@@ -4620,6 +4640,8 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                 window.listener_for(&entity, InputBaseState::on_mouse_up),
             )
             .on_mouse_move(window.listener_for(&entity, InputBaseState::on_mouse_move))
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover(window.listener_for(&entity, InputBaseState::on_pointer_hover))
             .on_scroll_wheel(window.listener_for(&entity, InputBaseState::on_scroll_wheel))
             .when(self.is_multi_line() && !self.disabled, |this| {
                 this.on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))

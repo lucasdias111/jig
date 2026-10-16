@@ -326,6 +326,58 @@ fn hover_shows_what_the_server_says_with_the_problem_there(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn hover_goes_once_the_pointer_leaves_the_code(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    let text = "fn main() {\n    helper();\n}\n";
+    let (window, workspace, _path, _dir) = with_fake_server(cx, text, |method, _| match method {
+        "textDocument/hover" => json!({
+            "contents": {"kind": "markdown", "value": "Helps."},
+            "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 10}},
+        }),
+        _ => serde_json::Value::Null,
+    });
+    let name = text.find("helper").unwrap();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let at = vcx.update(|_, cx| {
+        let state = workspace.read(cx).editor().state().read(cx);
+        state
+            .range_to_bounds(&(name + 1..name + 2))
+            .unwrap()
+            .center()
+    });
+    vcx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    wait_until(&mut vcx, |cx| hover_shown(cx, &workspace).is_some());
+
+    // Onto empty code: it goes after a moment.
+    let blank = gpui_kit::point(at.x + gpui_kit::px(200.), at.y);
+    vcx.simulate_mouse_move(blank, None, gpui_kit::Modifiers::none());
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(1500));
+    vcx.run_until_parked();
+    assert_eq!(hover_shown(&mut vcx, &workspace), None);
+
+    vcx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    wait_until(&mut vcx, |cx| hover_shown(cx, &workspace).is_some());
+
+    // Off the code, onto the file tree beside it: no Esc needed.
+    vcx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(4.), at.y),
+        None,
+        gpui_kit::Modifiers::none(),
+    );
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    vcx.run_until_parked();
+    assert_eq!(hover_shown(&mut vcx, &workspace), None);
+}
+
+#[gpui_kit::test]
 fn hover_without_a_server_shows_nothing(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.txt");

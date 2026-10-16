@@ -353,10 +353,8 @@ impl CodeHover {
                     this.update(cx, |this, cx| {
                         this.leaving = None;
                         if !this.held {
-                            this.follow(cx);
-                            if this.leaving.is_none() && this.pointer_shown(cx).is_none() {
-                                this.last = None;
-                            }
+                            // Following again would only linger again.
+                            this.last = this.pointer_shown(cx);
                             this.tell_problems(cx);
                             cx.notify();
                         }
