@@ -11,6 +11,7 @@
 //!                                     # grade a run's replies again, no model calls
 //!     cargo run -p jig-ai --example eval -- --no-judge        # only the checks (and --compile)
 //!     cargo run -p jig-ai --example eval -- --check-cases     # planted bugs fail, the rest build
+//!     cargo run -p jig-ai --example eval -- --cases <file>    # other cases, e.g. your own projects'
 //!     cargo run -p jig-ai --example eval -- --list-models
 //!
 //! The cases are in `crates/jig-ai/evals/cases.toml`. Their code is read
@@ -44,7 +45,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 struct Cases {
-    /// The commit every case's code is read from.
+    /// The commit every case's code is read from, unless a case says
+    /// `root`.
+    #[serde(default)]
     rev: String,
     /// The judge's `provider/model`, unless `--judge` says otherwise.
     judge: Option<String>,
@@ -57,6 +60,10 @@ struct Case {
     id: String,
     /// A jig's name in `assets/default-jigs.toml`.
     jig: String,
+    /// A folder to read `file` from as it is on disk, with its own
+    /// AGENTS.md, instead of Jig at `rev`: code from other projects, in a
+    /// cases file of its own (`--cases`), kept out of Jig's repository.
+    root: Option<PathBuf>,
     file: String,
     /// `12-40`, counted from 1, both included. The selection runs from the
     /// start of the first line to the end of the last, without its newline,
@@ -245,9 +252,13 @@ fn main() -> Result<()> {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = root.canonicalize()?;
-    let cases: Cases = toml::from_str(&std::fs::read_to_string(
-        root.join("crates/jig-ai/evals/cases.toml"),
-    )?)?;
+    let cases_path = value("--cases")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("crates/jig-ai/evals/cases.toml"));
+    let cases: Cases = toml::from_str(
+        &std::fs::read_to_string(&cases_path)
+            .with_context(|| format!("reading {}", cases_path.display()))?,
+    )?;
     let jigs: Jigs = toml::from_str(&std::fs::read_to_string(
         root.join("assets/default-jigs.toml"),
     )?)?;
@@ -327,8 +338,8 @@ fn main() -> Result<()> {
         }
     );
 
-    let rules = options
-        .rules
+    // A cases file with no commit reads each project's own AGENTS.md.
+    let rules = (options.rules && !cases.rev.is_empty())
         .then(|| git_show(&root, &cases.rev, "AGENTS.md").map(|text| agents_rules(&text)))
         .transpose()?;
 
@@ -525,7 +536,15 @@ fn request_for(
         .iter()
         .find(|jig| jig.name == case.jig)
         .with_context(|| format!("no jig named {}", case.jig))?;
-    let mut text = git_show(root, rev, &case.file)?;
+    let (mut text, rules) = match &case.root {
+        Some(folder) => {
+            let rules = std::fs::read_to_string(folder.join("AGENTS.md"))
+                .ok()
+                .map(|text| agents_rules(&text));
+            (std::fs::read_to_string(folder.join(&case.file))?, rules)
+        }
+        None => (git_show(root, rev, &case.file)?, rules.map(str::to_string)),
+    };
     if let Some(marker) = &case.cut_from {
         let at = text
             .match_indices('\n')
@@ -563,7 +582,7 @@ fn request_for(
     Ok(PromptRequest {
         instruction: jig.prompt.clone(),
         comment: case.note.clone(),
-        project_rules: rules.map(str::to_string),
+        project_rules: rules,
         language: language(&case.file).into(),
         file_name: Some(case.file.clone()),
         text,
@@ -634,7 +653,30 @@ fn language(file: &str) -> &'static str {
         Some("toml") => "toml",
         Some("py") => "python",
         Some("ts") => "typescript",
+        Some("js") => "javascript",
+        Some("swift") => "swift",
         _ => "text",
+    }
+}
+
+/// What starts a function in `file`'s language.
+fn function_words(file: &str) -> &'static [&'static str] {
+    match language(file) {
+        "python" => &["def "],
+        "typescript" | "javascript" => &["function ", "=> "],
+        "swift" | "go" => &["func "],
+        _ => &["fn "],
+    }
+}
+
+/// What marks a test in `file`'s language, in its common frameworks.
+fn test_words(file: &str) -> &'static [&'static str] {
+    match language(file) {
+        "python" => &["def test", "assert"],
+        "typescript" | "javascript" => &["test(", "it(", "assert"],
+        "swift" => &["func test", "@Test", "XCTAssert", "#expect"],
+        "go" => &["func Test"],
+        _ => &["#[test]"],
     }
 }
 
@@ -651,9 +693,45 @@ fn is_comment_line(line: &str, marker: &str) -> bool {
     line.starts_with(marker) && !line.starts_with("#!")
 }
 
+/// Which lines of `text` are comments or docs: line comments, and also
+/// `/* … */` blocks where comments start with `//` (JSDoc, Swift's and
+/// C's docs), and docstrings where they start with `#` (Python).
+fn doc_lines(text: &str, marker: &str) -> Vec<bool> {
+    let mut flags = Vec::new();
+    let mut closing: Option<&str> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(end) = closing {
+            flags.push(true);
+            if trimmed.contains(end) {
+                closing = None;
+            }
+            continue;
+        }
+        let opens = match marker {
+            "//" if trimmed.starts_with("/*") => Some(("/*", "*/")),
+            "#" if trimmed.starts_with("\"\"\"") => Some(("\"\"\"", "\"\"\"")),
+            "#" if trimmed.starts_with("'''") => Some(("'''", "'''")),
+            _ => None,
+        };
+        if let Some((open, end)) = opens {
+            flags.push(true);
+            if !trimmed[open.len()..].contains(end) {
+                closing = Some(end);
+            }
+            continue;
+        }
+        flags.push(is_comment_line(line, marker));
+    }
+    flags
+}
+
 fn strip_comment_lines(text: &str, marker: &str) -> String {
+    let flags = doc_lines(text, marker);
     text.split_inclusive('\n')
-        .filter(|line| !is_comment_line(line, marker))
+        .zip(flags)
+        .filter(|(_, doc)| !doc)
+        .map(|(line, _)| line)
         .collect::<String>()
         .trim_end_matches('\n')
         .to_string()
@@ -664,8 +742,9 @@ fn strip_comment_lines(text: &str, marker: &str) -> String {
 /// what has to stay the same when only docs were meant to change.
 fn code_only(text: &str, marker: &str) -> Vec<String> {
     text.lines()
-        .filter(|line| !is_comment_line(line, marker))
-        .map(|line| without_trailing_comment(line, marker).trim().to_string())
+        .zip(doc_lines(text, marker))
+        .filter(|(_, doc)| !doc)
+        .map(|(line, _)| without_trailing_comment(line, marker).trim().to_string())
         .filter(|line| !line.is_empty())
         .collect()
 }
@@ -692,8 +771,9 @@ fn without_trailing_comment<'a>(line: &'a str, marker: &str) -> &'a str {
 }
 
 fn comment_lines(text: &str, marker: &str) -> usize {
-    text.lines()
-        .filter(|line| is_comment_line(line, marker))
+    doc_lines(text, marker)
+        .into_iter()
+        .filter(|doc| *doc)
         .count()
 }
 
@@ -750,10 +830,15 @@ fn checks(case: &Case, outcome: &Outcome, marker: &str) -> BTreeMap<String, Opti
     }
     match case.jig.as_str() {
         "Extract function" => {
+            let count = |text: &str| -> usize {
+                function_words(&case.file)
+                    .iter()
+                    .map(|word| text.matches(word).count())
+                    .sum()
+            };
             checks.insert(
                 "a function is added".into(),
-                (new.matches("fn ").count() <= old.matches("fn ").count())
-                    .then(|| "no new fn".into()),
+                (count(new) <= count(old)).then(|| "no new function".into()),
             );
         }
         "Fix" => {
@@ -766,20 +851,11 @@ fn checks(case: &Case, outcome: &Outcome, marker: &str) -> BTreeMap<String, Opti
         "Add tests" => {
             checks.insert(
                 "tests added".into(),
-                (!new.contains("#[test]")).then(|| "no #[test]".into()),
+                (!test_words(&case.file).iter().any(|word| new.contains(word)))
+                    .then(|| "no test".into()),
             );
         }
         _ => {}
-    }
-    // A rough count, fooled by brackets in strings and character literals:
-    // only for cases that aren't built, where nothing better says.
-    let edits = ["Simplify", "Extract function", "Fix", "Add tests"];
-    if case.krate.is_none() && edits.contains(&case.jig.as_str()) {
-        checks.insert(
-            "brackets balance".into(),
-            (bracket_balance(old) != bracket_balance(new))
-                .then(|| "brackets don't balance as they did".into()),
-        );
     }
     checks
 }
@@ -796,22 +872,6 @@ fn first_difference(before: &[String], after: &[String]) -> String {
         before.get(at).map_or("(none)", String::as_str),
         after.get(at).map_or("(none)", String::as_str)
     )
-}
-
-fn bracket_balance(text: &str) -> [i64; 3] {
-    let mut balance = [0; 3];
-    for c in text.chars() {
-        match c {
-            '(' => balance[0] += 1,
-            ')' => balance[0] -= 1,
-            '[' => balance[1] += 1,
-            ']' => balance[1] -= 1,
-            '{' => balance[2] += 1,
-            '}' => balance[2] -= 1,
-            _ => {}
-        }
-    }
-    balance
 }
 
 const JUDGE_SYSTEM: &str = r#"You grade the output of Jig, a code editor's AI tool. The user selected some code and ran a command ("jig") on it. For an edit, the tool replies with the new text for the selection and a message of at most 20 words saying what it changed. For an explanation, it replies with an answer of at most 80 words and the code stays as it was.
@@ -846,7 +906,19 @@ fn grade(
         "\n<context_before>\n{}\n</context_before>",
         context(request, true)
     )?;
-    writeln!(user, "\n<selection>\n{}\n</selection>", outcome.original)?;
+    // For tests, the selection is the code they're for; the reply goes
+    // at the end of the file.
+    match &request.subject {
+        Some(subject) => {
+            writeln!(
+                user,
+                "\n<selection>\n{}\n</selection>",
+                &request.text[subject.clone()]
+            )?;
+            writeln!(user, "(The reply is inserted at the end of the file.)")?;
+        }
+        None => writeln!(user, "\n<selection>\n{}\n</selection>", outcome.original)?,
+    }
     writeln!(
         user,
         "\n<context_after>\n{}\n</context_after>",
@@ -966,12 +1038,67 @@ fn build_and_test(root: &Path, rev: &str, case: &Case, file: &str) -> Result<Opt
     Ok(Some(lines.join(" | ")))
 }
 
-/// Build each edit's file with the reply in it and run its tests.
+/// Whether `text` still parses as `file`'s language, for code with no
+/// crate to build: `None` when there's no checker for the language here,
+/// else as [`build_and_test`] says it.
+fn syntax_check(root: &Path, case: &Case, text: &str) -> Result<Option<Option<String>>> {
+    let ext = Path::new(&case.file)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+    let dir = root.join("target/jig-evals/syntax");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.{ext}", case.id));
+    std::fs::write(&path, text)?;
+    let mut command = match ext {
+        "py" => {
+            let mut command = Command::new("python3");
+            command.args(["-m", "py_compile"]);
+            command
+        }
+        "js" => {
+            let mut command = Command::new("node");
+            command.arg("--check");
+            command
+        }
+        // Node parses TypeScript when it strips the types, and fails on
+        // what doesn't parse.
+        "ts" => {
+            let mut command = Command::new("node");
+            command.args([
+                "--no-warnings",
+                "-e",
+                "require('node:module').stripTypeScriptTypes(require('fs').readFileSync(process.argv[1], 'utf8'))",
+            ]);
+            command
+        }
+        "swift" => {
+            let mut command = Command::new("swiftc");
+            command.arg("-parse");
+            command
+        }
+        _ => return Ok(None),
+    };
+    let output = command.arg(&path).output()?;
+    if output.status.success() {
+        return Ok(Some(None));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let problem = stderr
+        .lines()
+        .find(|line| line.contains("rror"))
+        .unwrap_or("doesn't parse")
+        .trim()
+        .to_string();
+    Ok(Some(Some(problem)))
+}
+
+/// Build each edit's file with the reply in it and run its tests, or for
+/// other languages, check it still parses.
 fn compile_all(source: &Source, cases: &[Case], outcomes: &mut [Outcome]) -> Result<()> {
     for (case, outcome) in cases.iter().zip(outcomes.iter_mut()) {
         let edits = ["Simplify", "Extract function", "Fix", "Add tests"];
-        if case.krate.is_none()
-            || !edits.contains(&case.jig.as_str())
+        if !edits.contains(&case.jig.as_str())
             || outcome.error.is_some()
             || outcome.replace == outcome.original
         {
@@ -984,8 +1111,19 @@ fn compile_all(source: &Source, cases: &[Case], outcomes: &mut [Outcome]) -> Res
             outcome.replace,
             &request.text[request.target.end..]
         );
-        print!("compile  {:<28} ", case.id);
-        let problem = build_and_test(source.root, source.rev, case, &file)?;
+        let problem = if case.krate.is_some() {
+            print!("compile  {:<28} ", case.id);
+            build_and_test(source.root, source.rev, case, &file)?
+        } else {
+            print!("parse    {:<28} ", case.id);
+            match syntax_check(source.root, case, &file)? {
+                Some(problem) => problem,
+                None => {
+                    println!("no checker");
+                    continue;
+                }
+            }
+        };
         println!("{}", problem.as_deref().unwrap_or("ok"));
         outcome.compiled = Some(problem);
     }

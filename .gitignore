@@ -1,3 +1,4 @@
 target/
 .DS_Store
 .jig/tasks/
+crates/jig-ai/evals/local*.toml
