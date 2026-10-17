@@ -1317,11 +1317,15 @@ impl Render for CommandPalette {
                 .chain(self.context.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let answers = matches!(
-                self.rows.get(self.selected),
-                Some(Row::Preset(preset)) if self.presets[*preset].answer
-            );
-            let does = if answers { "Answers about" } else { "Edits" };
+            let preset = match self.rows.get(self.selected) {
+                Some(Row::Preset(preset)) => Some(&self.presets[*preset]),
+                _ => None,
+            };
+            let does = match preset {
+                Some(preset) if preset.answer => "Answers about",
+                Some(preset) if preset.scope == crate::Scope::Tests => "Adds tests for",
+                _ => "Edits",
+            };
             format!("{does} {target} · sees {sees}")
         };
 

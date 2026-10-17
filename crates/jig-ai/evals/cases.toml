@@ -631,64 +631,6 @@ must_not = ["Changes when minutes are used"]
 crate = "jig-process"
 test = "timed::"
 
-# Add tests: the module's tests are cut; the new ones must build, run and pass.
-
-[[case]]
-id = "tests-fuzzy"
-jig = "Add tests"
-file = "crates/jig-app/src/fuzzy.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["A test module covering match_paths: file-name matches first, ties in order, no match for a non-subsequence, case and spaces ignored"]
-must_not = ["Assertions that only pass by chance or test nothing", "Tests of functions that don't exist"]
-crate = "jig-app"
-test = "fuzzy::"
-
-[[case]]
-id = "tests-lines"
-jig = "Add tests"
-file = "crates/jig-app/src/lines.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["A test module covering several of the line edits (move, duplicate, delete, select, open) and offset_of, including the top and bottom of the file"]
-must_not = ["Assertions that only pass by chance or test nothing"]
-crate = "jig-app"
-test = "lines::"
-
-[[case]]
-id = "tests-response"
-jig = "Add tests"
-file = "crates/jig-ai/src/response.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["Tests for parse: prose around the JSON, a missing message, markers refused, the trailing newline matched"]
-must_not = ["Assertions that only pass by chance or test nothing"]
-crate = "jig-ai"
-test = "response::"
-
-[[case]]
-id = "tests-brackets"
-jig = "Add tests"
-file = "crates/jig-app/src/brackets.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["Tests for matching: the bracket before and after the cursor, nesting, brackets in strings and comments ignored, a mismatched pair"]
-must_not = ["Assertions that only pass by chance or test nothing"]
-crate = "jig-app"
-test = "brackets::"
-
-[[case]]
-id = "tests-timed"
-jig = "Add tests"
-file = "crates/jig-process/src/timed.rs"
-lines = "end"
-cut_from = "#[cfg(all(test, unix))]"
-must = ["Tests that output is collected, that a command past its limit stops with TimedOut, and describe's wording"]
-must_not = ["Tests that take long, such as waiting the whole of a long sleep", "Assertions that only pass by chance"]
-crate = "jig-process"
-test = "timed::"
-
-# More Extract function
 
 [[case]]
 id = "extract-common-lines"
@@ -788,58 +730,110 @@ must_not = ["Changes the sort"]
 crate = "jig-app"
 test = "fuzzy::"
 
+# Add tests: tests for the selected function, put in the file's tests
+# (its module when it has one; five cases have it cut). They must build,
+# run and pass.
+
 [[case]]
-id = "tests-diff"
+id = "tests-match-paths"
+jig = "Add tests"
+file = "crates/jig-app/src/fuzzy.rs"
+lines = "30-56"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: a file-name match ranks above one spread over folders, ties keep the given order, a query that isn't a subsequence matches nothing, case and spaces are ignored, limit cuts the list)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
+crate = "jig-app"
+test = "fuzzy::"
+
+[[case]]
+id = "tests-move-lines"
+jig = "Add tests"
+file = "crates/jig-app/src/lines.rs"
+lines = "40-67"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: move_lines up and down, including None at the top and bottom and the selection moving with the lines)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
+crate = "jig-app"
+test = "lines::"
+
+[[case]]
+id = "tests-parse-reply"
+jig = "Add tests"
+file = "crates/jig-ai/src/response.rs"
+lines = "51-70"
+cut_from = "#[cfg(test)]"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: prose around the JSON, a missing message, the region markers refused, the trailing newline matched to the original)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
+crate = "jig-ai"
+test = "response::"
+
+[[case]]
+id = "tests-bracket-matching"
+jig = "Add tests"
+file = "crates/jig-app/src/brackets.rs"
+lines = "11-44"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: the bracket before the cursor and after it, nesting, brackets in strings and comments ignored, a mismatched pair giving None)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
+crate = "jig-app"
+test = "brackets::"
+
+[[case]]
+id = "tests-describe-limit"
+jig = "Add tests"
+file = "crates/jig-process/src/timed.rs"
+lines = "56-63"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: seconds under 120, minutes for whole minutes from 120 s, seconds for 150 s)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
+crate = "jig-process"
+test = "timed::"
+
+[[case]]
+id = "tests-changed-range"
 jig = "Add tests"
 file = "crates/jig-app/src/diff.rs"
-lines = "end"
+lines = "83-104"
 cut_from = "#[cfg(test)]"
-must = ["Tests for line_diff, changed_range and preview_edit: added and removed lines, a final newline that doesn't count as a change, multibyte characters"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: a change in the middle, equal texts, an insertion, multibyte characters kept whole)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-app"
 test = "diff::"
 
 [[case]]
-id = "tests-text-edits"
+id = "tests-shift"
 jig = "Add tests"
 file = "crates/jig-app/src/text_edits.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["Tests for splice, shift, carry, applied and line_edits, including overlapping edits refused and an offset inside an edit"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+lines = "34-45"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: an offset before, after and inside an edit, and at an edit's end)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-app"
 test = "text_edits::"
 
 [[case]]
-id = "tests-editorconfig"
+id = "tests-tab-size"
 jig = "Add tests"
 file = "crates/jig-app/src/editorconfig.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["Tests for the glob patterns (*, **, braces, ranges, classes) and the properties read, ideally with for_file on a temporary folder"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+lines = "80-103"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: indent_style tab and space, indent_size = tab, tab_width as the fallback, a size of 0 ignored)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-app"
 test = "editorconfig::"
 
 [[case]]
-id = "tests-indentation"
+id = "tests-detect-indentation"
 jig = "Add tests"
 file = "crates/jig-app/src/indentation.rs"
-lines = "end"
+lines = "23-67"
 cut_from = "#[cfg(test)]"
-must = ["Tests for detect (tabs, two and four spaces, block comments, no indentation) and active_guide"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: tabs, two and four spaces, a tie, block-comment stars ignored, no indentation giving the default)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-app"
 test = "indentation::"
 
 [[case]]
-id = "tests-links"
+id = "tests-link-target"
 jig = "Add tests"
 file = "crates/jig-app/src/planner/links.rs"
-lines = "end"
-cut_from = "#[cfg(test)]"
-must = ["Tests for target (web links, line fragments, symbols from the link text) and locate (nearest use, declaration without a line)"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+lines = "27-48"
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: web and mailto links, #L42 fragments, a symbol from the link text, a link named after its file, an empty path)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-app"
 test = "planner::links::"
 
@@ -847,9 +841,9 @@ test = "planner::links::"
 id = "tests-apply-diff"
 jig = "Add tests"
 file = "crates/jig-ai/src/agent.rs"
-lines = "end"
+lines = "325-399"
 cut_from = "#[cfg(test)]"
-must = ["Tests for apply_diff: a hunk where its header says, one that moved, no newline at end of file, and one that no longer fits"]
-must_not = ["Assertions that only pass by chance or test nothing"]
+must = ["Two to four tests of this function, each asserting a value that is right for the code, at least one of them an edge case (such as: a hunk where its header says, one that moved down, no newline at end of file, one that no longer fits giving an error)"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of other functions"]
 crate = "jig-ai"
 test = "agent::"

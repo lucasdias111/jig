@@ -117,6 +117,8 @@ struct Jig {
     name: String,
     prompt: String,
     #[serde(default)]
+    scope: String,
+    #[serde(default)]
     answer: bool,
 }
 
@@ -545,6 +547,13 @@ fn request_for(
     } else {
         line_range(&text, &case.lines)?
     };
+    // As the app does for `scope = "tests"`: about the selection, put at
+    // the end of the file.
+    let subject = (jig.scope == "tests").then(|| target.clone());
+    if subject.is_some() {
+        let at = jig_ai::prompt::tests_insertion(&text);
+        target = at..at;
+    }
     if case.strip_comments {
         let marker = comment_marker(&case.file);
         let stripped = strip_comment_lines(&text[target.clone()], marker);
@@ -570,6 +579,7 @@ fn request_for(
             .collect(),
         task: None,
         answer: jig.answer,
+        subject,
     })
 }
 

@@ -8,7 +8,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::{PromptRequest, Reply};
-use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent};
+use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent, Scope};
 use jig_editor::EditorHandle;
 
 use super::agent::AgentRun;
@@ -263,7 +263,15 @@ impl Workspace {
             invocation
                 .scope
                 .target(&text, self.editor().selection(cx), self.editor().cursor(cx));
-        let anchor = self.bubble_anchor(target.clone(), window, cx);
+        // Tests are about the selection and go at the end of the file.
+        let (target, subject) = if invocation.scope == Scope::Tests && !invocation.agent {
+            let at = jig_ai::prompt::tests_insertion(&text);
+            (at..at, Some(target))
+        } else {
+            (target, None)
+        };
+        let worked_on = subject.clone().unwrap_or_else(|| target.clone());
+        let anchor = self.bubble_anchor(worked_on.clone(), window, cx);
         self.next_run_id += 1;
         let id = self.next_run_id;
 
@@ -292,6 +300,7 @@ impl Workspace {
             task: invocation.task.clone(),
             // The agent may answer or edit as it sees fit.
             answer: invocation.answer && !invocation.agent,
+            subject,
             diagnostics: if invocation.diagnostics {
                 self.problems_on_lines(&text, target.clone(), cx)
             } else {
@@ -359,7 +368,7 @@ impl Workspace {
         let label = invocation.name.unwrap_or_else(|| "Working".into());
         // Tint the code being worked on until the reply arrives.
         self.editor()
-            .highlight(vec![(target.clone(), working_color(cx))], cx);
+            .highlight(vec![(worked_on, working_color(cx))], cx);
         self.run = Some(CommandRun {
             id,
             bubble: Bubble::Running {
@@ -446,6 +455,11 @@ impl Workspace {
         );
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
             preview.range = range.clone();
+        }
+        // Inserted code may be far from where the run started, as tests
+        // at the end of the file are: bring it into view.
+        if original.is_empty() {
+            self.editor().select(range.start..range.start, cx);
         }
         // Beside the new code, which may reach further right than the old,
         // once it's laid out.

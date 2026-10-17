@@ -63,6 +63,7 @@ pub fn check(provider: &dyn Provider) -> anyhow::Result<Reply> {
         target: 0..text.len(),
         diagnostics: Vec::new(),
         answer: false,
+        subject: None,
     };
     run(provider, &request)
 }

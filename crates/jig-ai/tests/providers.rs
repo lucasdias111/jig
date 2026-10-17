@@ -89,6 +89,7 @@ fn request() -> PromptRequest {
         project_rules: None,
         diagnostics: Vec::new(),
         answer: false,
+        subject: None,
     }
 }
 

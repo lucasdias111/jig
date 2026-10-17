@@ -162,6 +162,29 @@ fn unchanged_reply_only_shows_the_message(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn tests_for_the_selection_go_at_the_end(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    let source = "fn a() {}\n\nfn b() {}\n";
+    std::fs::write(&path, source).unwrap();
+    let (window, workspace) = open(cx, &path);
+    use_provider(
+        cx,
+        &workspace,
+        Ok(
+            r#"{"replace": "\n#[cfg(test)]\nmod a_tests {\n    use super::*;\n}\n", "message": "Tests a."}"#,
+        ),
+    );
+    run_preset(cx, window, &workspace, 0..9, "add tests");
+    step(cx, window, |window, cx| window.press("tab", cx));
+    assert_eq!(
+        text(cx, &workspace),
+        "fn a() {}\n\nfn b() {}\n\n#[cfg(test)]\nmod a_tests {\n    use super::*;\n}\n",
+        "after everything, the function left as it was"
+    );
+}
+
+#[gpui_kit::test]
 fn an_answer_never_changes_the_code(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lib.rs");

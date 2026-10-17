@@ -2,7 +2,8 @@
 # a jig there with the same name replaces the built-in one.
 #
 # scope: "selection" (falls back to the current line), "cursor" (insert at
-# the cursor) or "file" (the whole file).
+# the cursor), "file" (the whole file) or "tests" (about the selection, and
+# inserted at the end of the file).
 # comment: "none" (default), "optional" or "required". Asks for a note that
 # is sent along with the prompt, e.g. the entity a controller is for.
 # comment_hint: placeholder text for that note.
@@ -45,5 +46,5 @@ answer = true
 
 [[jig]]
 name = "Add tests"
-scope = "cursor"
-prompt = "Insert a unit test module at the cursor that covers the code in this file."
+scope = "tests"
+prompt = "Write two to four unit tests for the selected code, to go at the cursor at the end of the file, in a test module of their own named after that code (not `tests`, which the file may already have). The selected code stays where it is: don't repeat it. Test only the selected code, call only what this file defines or imports, and work out each expected value by tracing the code."

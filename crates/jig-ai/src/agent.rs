@@ -453,6 +453,7 @@ mod tests {
             text,
             diagnostics: Vec::new(),
             answer: false,
+            subject: None,
         };
         assert_eq!(
             prompt(&request),

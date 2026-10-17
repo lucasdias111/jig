@@ -17,6 +17,7 @@ const SYSTEM: &str = r#"You are Jig, a precise code-editing tool inside a text e
 You receive a file in which the region to change is marked:
 - <<<SELECTION>>> ... <<<END>>> surrounds code to replace, or
 - <<<CURSOR>>> marks where new code is inserted.
+When both appear, the selection is the code the instruction is about and stays exactly as it is; your reply is the new code inserted at the cursor.
 
 Apply the instruction to that region only. A Note, when present, is the user's detail for this run (a name, a constraint, a choice); follow it. Diagnostics, when present, are the problems a language server reports on the region's lines, by line number in the file; they are what to fix. Project rules, when present, are the project's conventions; follow them unless the instruction or Note says otherwise. A task, when present, is the plan the instruction is one step of; it's context, so do only that step, in the marked region. Reply with exactly one JSON object and nothing else:
 {"replace": "<new text for the region>", "message": "<one short sentence>"}
@@ -69,6 +70,10 @@ pub struct PromptRequest {
     /// Ask for an answer about the region rather than its new text, for
     /// jigs like Explain. The buffer is never changed.
     pub answer: bool,
+    /// The code the instruction is about, when the reply goes somewhere
+    /// else: Add tests is about the selection and inserts at `target`,
+    /// in the file's tests. Marked as the selection, and left as it is.
+    pub subject: Option<Range<usize>>,
 }
 
 /// One problem a language server reports.
@@ -110,8 +115,23 @@ impl PromptRequest {
                 self.text.len()
             );
         }
+        if let Some(subject) = &self.subject {
+            let inside = subject.start <= subject.end && self.text.get(subject.clone()).is_some();
+            // The reply goes in beside the subject, never into it.
+            let apart = self.target.end <= subject.start || subject.end <= self.target.start;
+            if !inside || !apart {
+                anyhow::bail!("The code to work on and the place for the reply overlap.");
+            }
+        }
         Ok(())
     }
+}
+
+/// Where tests for code in `text` go: at the end of the file, in a test
+/// module of their own. Inside an existing module the model closes it a
+/// second time, or clashes with its name.
+pub fn tests_insertion(text: &str) -> usize {
+    text.len()
 }
 
 /// Files longer than this are sent as a window around the region: a model
@@ -152,18 +172,39 @@ fn window(text: &str, range: &Range<usize>) -> Range<usize> {
 pub fn build(request: &PromptRequest) -> (String, String) {
     let text = &request.text;
     let range = request.target.clone();
-    let shown = window(text, &range);
+    // The window holds the subject too, when there is one.
+    let around = match &request.subject {
+        Some(subject) => range.start.min(subject.start)..range.end.max(subject.end),
+        None => range.clone(),
+    };
+    let shown = window(text, &around);
     let above = text[..shown.start].matches('\n').count();
     let below = text[shown.end..].matches('\n').count();
-    let (before, after) = (&text[shown.start..range.start], &text[range.end..shown.end]);
-    let marked = if range.is_empty() {
-        format!("{before}{CURSOR}{after}")
-    } else {
-        format!(
-            "{before}{SELECTION_START}{}{SELECTION_END}{after}",
-            &text[range.clone()]
-        )
+    // Each marker at its offset; where they meet, the selection's end
+    // comes first and its start last, so the cursor is outside it.
+    let mut marks: Vec<(usize, &str)> = match &request.subject {
+        Some(subject) => vec![
+            (subject.start, SELECTION_START),
+            (subject.end, SELECTION_END),
+            (range.start, CURSOR),
+        ],
+        None if range.is_empty() => vec![(range.start, CURSOR)],
+        None => vec![(range.start, SELECTION_START), (range.end, SELECTION_END)],
     };
+    let rank = |marker: &str| match marker {
+        SELECTION_END => 0,
+        CURSOR => 1,
+        _ => 2,
+    };
+    marks.sort_by_key(|&(at, marker)| (at, rank(marker)));
+    let mut marked = String::new();
+    let mut at = shown.start;
+    for (offset, marker) in marks {
+        marked.push_str(&text[at..offset]);
+        marked.push_str(marker);
+        at = offset;
+    }
+    marked.push_str(&text[at..shown.end]);
     let marked = format!(
         "{}{marked}{}",
         if above > 0 {
@@ -231,6 +272,7 @@ mod tests {
             project_rules: None,
             diagnostics: Vec::new(),
             answer: false,
+            subject: None,
         }
     }
 
@@ -373,6 +415,27 @@ mod tests {
         assert!(user.ends_with(ANSWER_REMINDER));
         // An edit still asks for the new text.
         assert!(build(&request(10..19)).0.contains("\"replace\""));
+    }
+
+    #[test]
+    fn marks_the_subject_and_where_the_reply_goes() {
+        let mut tests = request(19..19);
+        tests.text = "fn a() {}\nfn b() {}\n".into();
+        tests.target = 20..20;
+        tests.subject = Some(0..9);
+        tests.check_target().unwrap();
+        let (system, user) = build(&tests);
+        assert!(system.contains("When both appear, the selection is the code"));
+        assert!(user.contains("<<<SELECTION>>>fn a() {}<<<END>>>\nfn b() {}\n<<<CURSOR>>>"));
+        // A subject the reply would land inside is refused.
+        tests.target = 4..4;
+        assert!(tests.check_target().is_err());
+    }
+
+    #[test]
+    fn tests_go_at_the_end_of_the_file() {
+        let text = "fn a() {}\n\n#[cfg(test)]\nmod tests {\n}\n";
+        assert_eq!(tests_insertion(text), text.len());
     }
 
     #[test]

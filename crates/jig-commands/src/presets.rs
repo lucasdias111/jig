@@ -20,6 +20,10 @@ pub enum Scope {
     Cursor,
     /// The whole file.
     File,
+    /// The selection (or the current line) is what it's about, and the
+    /// reply goes at the end of the file, as tests do. For Add tests; set
+    /// in the jigs file, not offered in the add-jig form.
+    Tests,
 }
 
 impl Scope {
@@ -30,14 +34,18 @@ impl Scope {
             Scope::Selection => "selection",
             Scope::Cursor => "cursor",
             Scope::File => "file",
+            Scope::Tests => "tests",
         }
     }
 
-    /// The byte range this scope targets in `text`.
+    /// The byte range this scope targets in `text`. For [`Scope::Tests`],
+    /// the code the tests are for; where they go is the app's to find.
     pub fn target(self, text: &str, selection: Range<usize>, cursor: usize) -> Range<usize> {
         match self {
-            Scope::Selection if selection.is_empty() => line_at(text, selection.start),
-            Scope::Selection => selection,
+            Scope::Selection | Scope::Tests if selection.is_empty() => {
+                line_at(text, selection.start)
+            }
+            Scope::Selection | Scope::Tests => selection,
             Scope::Cursor => cursor..cursor,
             Scope::File => 0..text.len(),
         }
@@ -230,7 +238,8 @@ pub const USER_FILE_HEADER: &str = "\
 # A jig with the same name as a built-in one replaces it.
 #
 # scope: \"selection\" (falls back to the current line), \"cursor\" (insert at
-# the cursor) or \"file\" (the whole file).
+# the cursor), \"file\" (the whole file) or \"tests\" (about the selection,
+# inserted at the end of the file).
 # comment: \"none\" (default), \"optional\" or \"required\": ask for a note
 # that is sent along with the prompt. comment_hint: placeholder for it.
 # agent = true: hand the jig to the coding agent (OpenCode), which may
@@ -410,7 +419,9 @@ mod tests {
                 .iter()
                 .any(|p| p.name == "Add docs" && p.scope == Scope::Selection)
         );
-        assert!(presets.iter().any(|p| p.scope == Scope::Cursor));
+        // Add tests writes tests for the selection, in the file's tests.
+        let tests = presets.iter().find(|p| p.name == "Add tests").unwrap();
+        assert_eq!(tests.scope, Scope::Tests);
         // Fix sends the language server's problems; the others don't.
         let fix = presets.iter().find(|p| p.name == "Fix").unwrap();
         assert!(fix.diagnostics);
