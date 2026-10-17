@@ -1601,11 +1601,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Where the conversation was last drawn, while the run is an agent's.
-    pub(super) fn agent_chat_bounds(&self) -> Option<Bounds<Pixels>> {
-        Some(self.chat.as_ref()?.agent.as_ref()?.frame.bounds.get())
-    }
-
     /// The conversation, while the run is an agent's.
     pub(super) fn render_agent_chat(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let run = self.chat.as_ref()?;

@@ -378,6 +378,45 @@ fn hover_goes_once_the_pointer_leaves_the_code(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn hover_shows_over_the_agent_conversation(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    let text = "fn main() {\n    helper();\n}\n";
+    let (window, workspace, _path, _dir) = with_fake_server(cx, text, |method, _| match method {
+        "textDocument/hover" => json!({
+            "contents": {"kind": "markdown", "value": "Helps."},
+            "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 10}},
+        }),
+        _ => serde_json::Value::Null,
+    });
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            // Beside the code, below the name: where the panel would reach.
+            this.chat.as_mut().unwrap().anchor = gpui_kit::point(px(360.), px(260.));
+        })
+    });
+    let name = text.find("helper").unwrap();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-chat-header").is_some());
+    let at = vcx.update(|_, cx| {
+        let state = workspace.read(cx).editor().state().read(cx);
+        state
+            .range_to_bounds(&(name + 1..name + 2))
+            .unwrap()
+            .center()
+    });
+    vcx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+    vcx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    wait_until(&mut vcx, |cx| hover_shown(cx, &workspace).is_some());
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("code-hover").is_some(), "the panel shows");
+}
+
+#[gpui_kit::test]
 fn hover_without_a_server_shows_nothing(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.txt");

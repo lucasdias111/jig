@@ -38,11 +38,9 @@ const HOVER_TIMEOUT: Duration = Duration::from_secs(3);
 const SIGNATURE_TIMEOUT: Duration = Duration::from_secs(2);
 const PANEL_MAX_WIDTH: f32 = 520.;
 const HOVER_MAX_HEIGHT: f32 = 320.;
-/// About the room each panel takes, to tell whether something covers it.
-const HOVER_AREA: Size<Pixels> = size(px(PANEL_MAX_WIDTH), px(200.));
-const SIGNATURE_AREA: Size<Pixels> = size(px(PANEL_MAX_WIDTH), px(60.));
-/// About the room a quick run's reply bubble takes at its anchor.
-const BUBBLE_AREA: Size<Pixels> = size(px(360.), px(80.));
+/// Above the agent's conversation and a jig's bubble, which are drawn
+/// after: the pointer is on the code, so what it asks about comes first.
+const PANEL_PRIORITY: usize = 1;
 
 /// Give a tab's editor hover and signature help. Returns the view that
 /// shows them.
@@ -78,20 +76,11 @@ pub(super) fn install(
 }
 
 impl Workspace {
-    /// Whether the palette, a change under review or the run's bubble or
-    /// conversation is over `area`, or would be in the way of it.
-    pub(super) fn covers(&self, area: Bounds<Pixels>) -> bool {
-        if self.modal_open() || self.previewing() {
-            return true;
-        }
-        let bubble = self
-            .run
-            .as_ref()
-            .map(|run| Bounds::new(run.anchor, BUBBLE_AREA));
-        bubble
-            .into_iter()
-            .chain(self.agent_chat_bounds())
-            .any(|floating| floating.intersects(&area))
+    /// Whether the palette or another sheet is open, or a change is under
+    /// review, which the panels would get in the way of. The agent's
+    /// conversation and a jig's bubble don't: the panels show over them.
+    pub(super) fn hides_code_hover(&self) -> bool {
+        self.modal_open() || self.previewing()
     }
 
     /// Whether the pointer is over a problem or hover panel of the tab of
@@ -593,10 +582,10 @@ impl CodeHover {
         })
     }
 
-    fn covered(&self, area: Bounds<Pixels>, cx: &App) -> bool {
+    fn hidden(&self, cx: &App) -> bool {
         self.workspace
             .upgrade()
-            .is_none_or(|workspace| workspace.read(cx).covers(area))
+            .is_none_or(|workspace| workspace.read(cx).hides_code_hover())
     }
 
     fn render_hover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -607,19 +596,18 @@ impl CodeHover {
             .or_else(|| state.range_to_bounds(&(range.start..range.start)))?;
         // Below the name, or above it low in the window.
         let above = at.top() > window.viewport_size().height * 0.6;
-        let (position, corner, area) = if above {
-            let position = point(at.left() - px(10.), at.top() - px(4.));
-            let origin = position - point(px(0.), HOVER_AREA.height);
+        let (position, corner) = if above {
             (
-                position,
+                point(at.left() - px(10.), at.top() - px(4.)),
                 Anchor::BottomLeft,
-                Bounds::new(origin, HOVER_AREA),
             )
         } else {
-            let position = point(at.left() - px(10.), at.bottom() + px(4.));
-            (position, Anchor::TopLeft, Bounds::new(position, HOVER_AREA))
+            (
+                point(at.left() - px(10.), at.bottom() + px(4.)),
+                Anchor::TopLeft,
+            )
         };
-        if self.covered(area, cx) {
+        if self.hidden(cx) {
             return None;
         }
         if let Some(first) = problems.first() {
@@ -670,6 +658,7 @@ impl CodeHover {
                     .snap_to_window_with_margin(px(8.))
                     .child(panel),
             )
+            .with_priority(PANEL_PRIORITY)
             .into_any_element(),
         )
     }
@@ -680,11 +669,7 @@ impl CodeHover {
         let cursor = state.cursor();
         let at = state.range_to_bounds(&(cursor..cursor))?;
         let position = point(at.left() - px(10.), at.top() - px(4.));
-        let area = Bounds::new(
-            position - point(px(0.), SIGNATURE_AREA.height),
-            SIGNATURE_AREA,
-        );
-        if self.covered(area, cx) {
+        if self.hidden(cx) {
             return None;
         }
         let theme = cx.theme();
@@ -740,6 +725,7 @@ impl CodeHover {
                     .snap_to_window_with_margin(px(8.))
                     .child(panel),
             )
+            .with_priority(PANEL_PRIORITY)
             .into_any_element(),
         )
     }
