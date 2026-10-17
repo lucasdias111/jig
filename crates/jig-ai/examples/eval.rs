@@ -477,13 +477,15 @@ fn judged(
     outcome: &Outcome,
 ) -> Option<Verdict> {
     let judge = judge?;
-    Some(
-        grade(judge, case, request, outcome).unwrap_or_else(|error| Verdict {
-            verdict: "ungraded".into(),
-            note: format!("judge: {error:#}"),
-            ..Verdict::default()
-        }),
-    )
+    // A judge's reply now and then comes back cut short; once more is
+    // usually enough.
+    let verdict =
+        grade(judge, case, request, outcome).or_else(|_| grade(judge, case, request, outcome));
+    Some(verdict.unwrap_or_else(|error| Verdict {
+        verdict: "ungraded".into(),
+        note: format!("judge: {error:#}"),
+        ..Verdict::default()
+    }))
 }
 
 /// The provider's key as Jig finds it, else, on macOS, through `security`:

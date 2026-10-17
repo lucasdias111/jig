@@ -687,3 +687,169 @@ must = ["Tests that output is collected, that a command past its limit stops wit
 must_not = ["Tests that take long, such as waiting the whole of a long sleep", "Assertions that only pass by chance"]
 crate = "jig-process"
 test = "timed::"
+
+# More Extract function
+
+[[case]]
+id = "extract-common-lines"
+jig = "Extract function"
+file = "crates/jig-app/src/text_edits.rs"
+lines = "116-122"
+must = ["Moves counting the common leading and trailing lines into a function returning both counts, the suffix kept from overlapping the prefix"]
+must_not = ["Lets the suffix count lines the prefix already counted"]
+crate = "jig-app"
+test = "text_edits::"
+
+[[case]]
+id = "extract-section-header"
+jig = "Extract function"
+file = "crates/jig-app/src/editorconfig.rs"
+lines = "162-168"
+must = ["Moves recognising a [section] line into a function, and the loop still skips to the next line after one"]
+must_not = ["Loses the `continue`, so a section line is also read as a property"]
+crate = "jig-app"
+test = "editorconfig::"
+
+[[case]]
+id = "extract-pipe-readers"
+jig = "Extract function"
+file = "crates/jig-process/src/timed.rs"
+lines = "23-33"
+must = ["Moves starting the threads that read stdout and stderr into a function, still reading both before the wait"]
+must_not = ["Reads the pipes on this thread, so a full pipe can block"]
+crate = "jig-process"
+test = "timed::"
+
+[[case]]
+id = "extract-hunk-start"
+jig = "Extract function"
+file = "crates/jig-ai/src/agent.rs"
+lines = "334-338"
+must = ["Moves reading a hunk header's old start line into a function returning a Result, and a bad header is still an error"]
+must_not = ["Turns a malformed header into a panic or a default"]
+crate = "jig-ai"
+test = "agent::"
+
+[[case]]
+id = "extract-scan-window"
+jig = "Extract function"
+file = "crates/jig-app/src/brackets.rs"
+lines = "22-26"
+must = ["Moves working out the scan's start (a line start before the reach) and end into a function returning both"]
+must_not = ["Starts the scan inside a line", "Slices text in a way that can split a character"]
+crate = "jig-app"
+test = "brackets::"
+
+# More Fix
+
+[[case]]
+id = "fix-tabs-on-a-tie"
+jig = "Fix"
+file = "crates/jig-app/src/indentation.rs"
+lines = "23-67"
+plant = [["    if tab_lines > space_lines {", "    if tab_lines >= space_lines {"]]
+must = ["Uses tabs only when more lines start with a tab than with spaces, as the doc comment says"]
+must_not = ["Changes how the step is chosen"]
+crate = "jig-app"
+test = "indentation::"
+
+[[case]]
+id = "fix-flag-true"
+jig = "Fix"
+file = "crates/jig-app/src/editorconfig.rs"
+lines = "126-132"
+plant = [["            Some(\"true\") => Some(true),", "            Some(\"true\") => Some(false),"]]
+must = ["Reads `true` as true again"]
+must_not = ["Changes how false or other values are read"]
+crate = "jig-app"
+test = "editorconfig::"
+
+[[case]]
+id = "fix-suffix-type"
+jig = "Fix"
+file = "crates/jig-app/src/diff.rs"
+lines = "83-104"
+plant = [["    let max_suffix = old.len().min(new.len()) - prefix;", "    let max_suffix = old.len().min(new.len()) - prefix as i32;"]]
+diagnostics = [{ line = 92, message = "cannot subtract `i32` from `usize`" }]
+must = ["Subtracts prefix as a usize again"]
+must_not = ["Casts the lengths to i32"]
+crate = "jig-app"
+test = "diff::"
+
+[[case]]
+id = "fix-truncate-type"
+jig = "Fix"
+file = "crates/jig-app/src/fuzzy.rs"
+lines = "30-56"
+plant = [["    matches.truncate(limit);", "    matches.truncate(limit as u32);"]]
+diagnostics = [{ line = 54, message = "mismatched types: expected `usize`, found `u32`" }]
+must = ["Passes limit as a usize again"]
+must_not = ["Changes the sort"]
+crate = "jig-app"
+test = "fuzzy::"
+
+[[case]]
+id = "tests-diff"
+jig = "Add tests"
+file = "crates/jig-app/src/diff.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for line_diff, changed_range and preview_edit: added and removed lines, a final newline that doesn't count as a change, multibyte characters"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "diff::"
+
+[[case]]
+id = "tests-text-edits"
+jig = "Add tests"
+file = "crates/jig-app/src/text_edits.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for splice, shift, carry, applied and line_edits, including overlapping edits refused and an offset inside an edit"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "text_edits::"
+
+[[case]]
+id = "tests-editorconfig"
+jig = "Add tests"
+file = "crates/jig-app/src/editorconfig.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for the glob patterns (*, **, braces, ranges, classes) and the properties read, ideally with for_file on a temporary folder"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "editorconfig::"
+
+[[case]]
+id = "tests-indentation"
+jig = "Add tests"
+file = "crates/jig-app/src/indentation.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for detect (tabs, two and four spaces, block comments, no indentation) and active_guide"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "indentation::"
+
+[[case]]
+id = "tests-links"
+jig = "Add tests"
+file = "crates/jig-app/src/planner/links.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for target (web links, line fragments, symbols from the link text) and locate (nearest use, declaration without a line)"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "planner::links::"
+
+[[case]]
+id = "tests-apply-diff"
+jig = "Add tests"
+file = "crates/jig-ai/src/agent.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for apply_diff: a hunk where its header says, one that moved, no newline at end of file, and one that no longer fits"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-ai"
+test = "agent::"
