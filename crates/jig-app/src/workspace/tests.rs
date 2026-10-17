@@ -12,9 +12,8 @@ mod files;
 mod format;
 mod git;
 mod home;
-mod jigs;
+mod input;
 mod occurrences;
-mod quick;
 mod quick_fix;
 mod servers;
 mod session;
@@ -23,14 +22,12 @@ mod tasks;
 mod update;
 
 use std::path::Path;
-use std::sync::Arc;
 
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AnyWindowHandle, AppContext, Bounds, Entity, Focusable, Point, TestAppContext, WindowBounds,
     WindowOptions, px, size,
 };
-use jig_ai::Provider;
 use jig_commands::{Bubble, ChatEntry};
 use jig_editor::EditorHandle;
 
@@ -43,61 +40,14 @@ const END_OF_FILE: &str = if cfg!(target_os = "macos") {
     "ctrl-end"
 };
 
-/// Answers every request with a fixed reply.
-struct FakeProvider(Result<&'static str, &'static str>);
-
-impl Provider for FakeProvider {
-    fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
-        assert!(user.contains("<<<SELECTION>>>"), "the target is marked");
-        self.0.map(str::to_string).map_err(|e| anyhow::anyhow!(e))
-    }
-}
-
-fn use_provider(
-    cx: &mut TestAppContext,
-    workspace: &Entity<Workspace>,
-    reply: Result<&'static str, &'static str>,
-) {
-    cx.update(|cx| {
-        workspace.update(cx, |this, _| {
-            this.provider = Ok(Arc::new(FakeProvider(reply)))
-        })
-    });
-}
-
-/// Select `range`, then run the preset matching `query` through Cmd+K.
-fn run_preset(
-    cx: &mut TestAppContext,
-    window: AnyWindowHandle,
-    workspace: &Entity<Workspace>,
-    range: std::ops::Range<usize>,
-    query: &str,
-) {
-    let workspace = workspace.clone();
-    let query = query.to_string();
-    step(cx, window, move |window, cx| {
-        window.render_frame(cx);
-        workspace.update(cx, |this, cx| {
-            this.editor()
-                .state()
-                .update(cx, |s, cx| s.set_selected_range(range, cx))
-        });
-        window.press("secondary-k", cx);
-    });
-    step(cx, window, move |window, cx| {
-        window.render_frame(cx);
-        window.input(&query, cx);
-        window.press("enter", cx);
-    });
-}
-
-fn bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<Bubble> {
+/// The note beside the code, if one is showing.
+fn note(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<Bubble> {
     cx.update(|cx| {
         workspace
             .read(cx)
-            .run
+            .note
             .as_ref()
-            .map(|run| run.bubble.clone())
+            .map(|note| note.bubble.clone())
     })
 }
 
@@ -145,14 +95,36 @@ fn reload_changed_files(
     });
 }
 
-const DOCS_REPLY: &str =
-    r#"{"replace": "/// Does a.\nfn a() {}", "message": "Added a doc comment."}"#;
-
 const ORIGINAL: &str = "fn a() {}\n";
 
 const DOCUMENTED: &str = "/// Does a.\nfn a() {}\n";
 
-/// Open `lib.rs`, run "Add docs" on `fn a() {}` and wait for the preview.
+/// As if the agent, in a conversation without OpenCode behind it, wanted
+/// the file on screen to read `new`: the edit waits under review.
+fn review_agent_edit(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    workspace: &Entity<Workspace>,
+    new: &str,
+) {
+    let (ws, new) = (workspace.clone(), new.to_string());
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            let path = this.document().path.clone().expect("a saved file");
+            this.open_test_conversation(window, cx);
+            let edit = jig_ai::agent::EditRequest {
+                id: "per_edit".into(),
+                path,
+                change: jig_ai::agent::EditChange::Write(new),
+            };
+            this.test_agent_request(jig_ai::agent::AgentEvent::Edit(edit), window, cx);
+        })
+    });
+    assert!(cx.update(|cx| workspace.read(cx).previewing()));
+}
+
+/// Open `lib.rs` with `fn a() {}`, and have the agent want to add a doc
+/// comment to it.
 fn preview_docs(
     cx: &mut TestAppContext,
 ) -> (tempfile::TempDir, AnyWindowHandle, Entity<Workspace>) {
@@ -160,53 +132,12 @@ fn preview_docs(
     let path = dir.path().join("lib.rs");
     std::fs::write(&path, ORIGINAL).unwrap();
     let (window, workspace) = open(cx, &path);
-    use_provider(cx, &workspace, Ok(DOCS_REPLY));
-    run_preset(cx, window, &workspace, 0..9, "docs");
+    review_agent_edit(cx, window, &workspace, DOCUMENTED);
     (dir, window, workspace)
 }
 
 fn text(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> String {
     cx.update(|cx| workspace.read(cx).editor().text(cx))
-}
-
-/// A workspace whose commands file lives in a temp dir.
-fn open_with_commands(
-    cx: &mut TestAppContext,
-) -> (
-    tempfile::TempDir,
-    AnyWindowHandle,
-    Entity<Workspace>,
-    std::path::PathBuf,
-) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("lib.rs");
-    std::fs::write(&path, ORIGINAL).unwrap();
-    let (window, workspace) = open(cx, &path);
-    let commands = dir.path().join("config").join("jigs.toml");
-    let commands_for_ws = commands.clone();
-    cx.update(|cx| workspace.update(cx, |this, _| this.commands_path = Some(commands_for_ws)));
-    (dir, window, workspace, commands)
-}
-
-fn preset_names(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
-    cx.update(|cx| {
-        workspace
-            .read(cx)
-            .presets
-            .iter()
-            .map(|p| p.name.clone())
-            .collect()
-    })
-}
-
-/// Records the user message of each request.
-struct RecordingProvider(std::sync::Mutex<Vec<String>>);
-
-impl Provider for RecordingProvider {
-    fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
-        self.0.lock().unwrap().push(user.to_string());
-        Ok(r#"{"replace": "struct User;", "message": "Added."}"#.into())
-    }
 }
 
 fn tree_focused(cx: &mut TestAppContext, window: AnyWindowHandle, ws: &Entity<Workspace>) -> bool {

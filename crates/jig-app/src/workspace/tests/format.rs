@@ -94,13 +94,7 @@ fn format_document_leaves_a_change_under_review_alone(cx: &mut TestAppContext) {
             _ => serde_json::Value::Null,
         },
     );
-    use_provider(
-        cx,
-        &workspace,
-        Ok(r#"{"replace": "B", "message": "Capitalised."}"#),
-    );
-    run_preset(cx, window, &workspace, 2..3, "Simplify");
-    assert!(cx.update(|cx| workspace.read(cx).previewing()));
+    review_agent_edit(cx, window, &workspace, "a\nB\n");
     press(cx, window, "alt-shift-f");
     std::thread::sleep(std::time::Duration::from_millis(50));
     cx.run_until_parked();

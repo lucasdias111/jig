@@ -2,6 +2,7 @@
 //! sidebar.
 
 mod agent;
+mod agents_file;
 mod blueprint;
 mod brackets;
 mod breakpoints;
@@ -36,25 +37,21 @@ mod sidebar;
 mod snippets;
 mod status_bar;
 mod tabs;
-mod user_commands;
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::sync::Arc;
 
 use gpui_kit::component::input::Editor;
 use gpui_kit::component::{ActiveTheme as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jig_ai::Provider;
-use jig_commands::{CommandPalette, Preset, presets};
+use jig_commands::CommandPalette;
 use jig_editor::EditorHandle;
 
 use crate::document::Document;
 use crate::file_tree::FileTree;
 use crate::settings::{self, Settings};
 use crate::theme;
-use commands::CommandRun;
+use commands::{CommandRun, Note};
 use tabs::Tab;
 
 actions!(
@@ -68,9 +65,6 @@ actions!(
         OpenCommand,
         OpenAgentConversations,
         EditAgents,
-        AddCommand,
-        EditCommands,
-        ReloadJigs,
         EditAgentsFile,
         EditModelConfig,
         ToggleSidebar,
@@ -156,17 +150,13 @@ pub struct Workspace {
     /// tab behind it is blank.
     home: bool,
     home_focus: FocusHandle,
-    presets: Rc<Vec<Preset>>,
     palette: Option<OpenPalette>,
-    /// Jig mode's model picked in ⌘K for this window, as `provider/model`;
-    /// `None` follows the settings.
-    jig_pick: Option<String>,
-    /// Jig mode's and the agent's default models when last seen, to tell
-    /// when Settings changes them.
-    model_defaults: Option<Option<(Option<String>, Option<String>)>>,
-    /// How many times the palette has opened, for the Jig button's glow.
+    /// The agent's default model when last seen, to tell when Settings
+    /// changes it.
+    model_defaults: Option<Option<Option<String>>>,
+    /// How many times the palette has opened, for the Agent button's glow.
     palette_openings: usize,
-    /// What the window keeps for Agent mode between conversations.
+    /// What the window keeps for the agent between conversations.
     agent: agent::AgentState,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
@@ -183,20 +173,15 @@ pub struct Workspace {
     file_index: Option<go_to_file::FileIndex>,
     /// Files shown in this window, most recent first, for Go to File.
     recent_files: Vec<PathBuf>,
-    new_command: Option<user_commands::OpenForm>,
-    /// The user's jigs file, `~/.config/jig/jigs.toml`.
-    commands_path: Option<PathBuf>,
-    /// The configured model, or why it couldn't be set up.
-    provider: Result<Arc<dyn Provider>, String>,
     /// The AI providers file, `~/.config/jig/config.toml`.
     config_path: Option<PathBuf>,
     /// The settings as last applied, to tell what a change touched.
     settings: Settings,
-    run: Option<CommandRun>,
-    /// The agent conversation, apart from ⌘K's runs: a jig can run while
-    /// it's open. Its `agent` is always set.
+    /// A note beside the code, such as why nothing can run yet.
+    note: Option<Note>,
+    /// The agent conversation. Its `agent` is set once it's set up.
     chat: Option<CommandRun>,
-    /// The button beside the selection that opens the command input.
+    /// The button beside the selection that opens the agent input.
     selection_button: Entity<selection_button::SelectionButton>,
     next_run_id: u64,
     /// Run configurations, and the one running.
@@ -228,7 +213,7 @@ struct OpenPalette {
     view: Entity<CommandPalette>,
     /// Window position of the palette's top-left corner, fixed when it opens.
     anchor: Point<Pixels>,
-    /// Which opening it is, so the Jig button's glow plays afresh.
+    /// Which opening it is, so the Agent button's glow plays afresh.
     serial: usize,
     _events: Subscription,
 }
@@ -251,11 +236,6 @@ impl Workspace {
             None => (Document::default(), None),
         };
         let settings = settings::get(cx);
-        let (presets, presets_error) = match presets::load(presets::user_jigs_path().as_deref()) {
-            Ok(presets) => (presets, None),
-            Err(error) => (presets::defaults(), Some(error)),
-        };
-        let presets = preferences::visible_presets(presets, &settings);
         let workspace = cx.entity();
         let selection_button = cx.new(|cx| selection_button::SelectionButton::new(&workspace, cx));
         let mut this = Self {
@@ -267,10 +247,8 @@ impl Workspace {
             sidebar: sidebar::SidebarState::default(),
             home: path.is_none() || folder.is_some(),
             home_focus: cx.focus_handle(),
-            presets: Rc::new(presets),
             palette: None,
             palette_openings: 0,
-            jig_pick: None,
             model_defaults: None,
             agent: agent::AgentState::default(),
             quick_open: None,
@@ -282,12 +260,9 @@ impl Workspace {
             last_find_query: String::new(),
             file_index: None,
             recent_files: Vec::new(),
-            new_command: None,
-            commands_path: presets::user_jigs_path(),
-            provider: crate::providers::build(cx),
             config_path: jig_ai::Config::user_path(),
             settings,
-            run: None,
+            note: None,
             chat: None,
             next_run_id: 0,
             runs: run::RunState::new(cx),
@@ -352,9 +327,6 @@ impl Workspace {
             }
         })
         .detach();
-        if let Some(error) = presets_error {
-            this.show_error(&format!("Using the built-in jigs. {error:#}"), window, cx);
-        }
 
         window.on_window_should_close(cx, {
             let workspace = cx.entity().downgrade();
@@ -593,9 +565,6 @@ impl Workspace {
         self.tab_mut().dirty = false;
         self.lsp_saved(cx);
         self.update_title(window);
-        if self.is_commands_file() {
-            self.reload_presets(window, cx);
-        }
         if self.is_config_file() {
             crate::providers::reload(cx);
         }
@@ -649,7 +618,6 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
         .chain(crate::find_panel::key_bindings())
-        .chain(jig_commands::new_command::key_bindings())
         .collect()
 }
 
@@ -677,7 +645,7 @@ impl Workspace {
                     .bordered(false)
                     // The column behind it is the surface.
                     .bg(transparent_black())
-                    // Locked while a command's change awaits review. The
+                    // Locked while the agent's edit awaits review. The
                     // element re-applies this every frame.
                     .readonly(self.previewing())
                     .context_menu(self.code_menu(cx))
@@ -689,7 +657,6 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport = window.viewport_size();
         let theme = cx.theme();
         self.step_sidebar_motion(window);
         let sidebar = self.render_sidebar(cx);
@@ -712,11 +679,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_command))
             .on_action(cx.listener(Self::open_agent_conversations))
             .on_action(cx.listener(Self::edit_agents))
-            .on_action(cx.listener(Self::add_command))
-            .on_action(cx.listener(Self::edit_commands))
-            .on_action(
-                cx.listener(|this, _: &ReloadJigs, window, cx| this.reload_presets(window, cx)),
-            )
             .on_action(cx.listener(Self::edit_agents_file))
             .on_action(cx.listener(Self::edit_model_config))
             .on_action(cx.listener(Self::toggle_sidebar))
@@ -840,16 +802,6 @@ impl Render for Workspace {
             )
             .children(self.render_sidebar_handle(cx))
             .children(self.render_floating_settings(cx))
-            .when_some(self.new_command.as_ref(), |this, form| {
-                // Centred near the top, like a sheet.
-                let left = ((viewport.width - px(460.)) / 2.).max(px(8.));
-                this.child(deferred(
-                    anchored()
-                        .position(gpui_kit::point(left, px(TITLE_BAR_HEIGHT + 8.)))
-                        .snap_to_window_with_margin(px(8.))
-                        .child(form.view.clone()),
-                ))
-            })
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
                     anchored()
@@ -871,8 +823,7 @@ impl Render for Workspace {
                     .child(self.tab().hover.clone())
             })
             .child(self.selection_button.clone())
-            // The agent conversation, unless it's docked, and a jig's bubble:
-            // apart, so a jig can run while the conversation is open.
+            // The agent conversation, unless it's docked, and a note.
             .when_some(
                 self.chat
                     .as_ref()
@@ -887,12 +838,12 @@ impl Render for Workspace {
                     ))
                 },
             )
-            .when_some(self.run.as_ref(), |this, run| {
+            .when_some(self.note.as_ref(), |this, note| {
                 this.child(deferred(
                     anchored()
-                        .position(run.anchor)
+                        .position(note.anchor)
                         .snap_to_window_with_margin(px(8.))
-                        .child(run.bubble.clone()),
+                        .child(note.bubble.clone()),
                 ))
             })
     }

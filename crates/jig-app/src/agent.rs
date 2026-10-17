@@ -1,4 +1,4 @@
-//! The agent behind Agent mode: OpenCode's server or an ACP agent's
+//! The agent behind Jig's AI: OpenCode's server or an ACP agent's
 //! process, started on first use, shared by every window, and stopped when
 //! Jig quits.
 
@@ -37,7 +37,7 @@ impl Pick {
         let model = match agent.kind {
             Kind::OpenCode => crate::providers::config(cx)
                 .ok()
-                .and_then(|config| config.agent.clone().or_else(|| config.quick_model())),
+                .and_then(|config| config.agent.clone().filter(|id| !id.is_empty())),
             Kind::Acp => crate::settings::get(cx)
                 .agent
                 .models
@@ -105,7 +105,7 @@ pub fn choice_for(pick: Option<&Pick>, cx: &App) -> Result<Choice, String> {
             name: agent.name.clone(),
             command: agent
                 .command_line()
-                .map_err(|missing| format!("{missing} Install it in Settings > Agent mode."))?,
+                .map_err(|missing| format!("{missing} Install it in Settings > Agent."))?,
             model: pick.model,
         }),
     }

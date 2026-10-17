@@ -45,12 +45,11 @@ pub enum TaskPlannerEvent {
     },
     /// Open the form for this task, or `None` for a new one.
     Edit(Option<String>),
-    /// Hand todo `todo` of `task` to Jig mode, or with `agent`, to the
-    /// agent, the whole task coming along as context.
+    /// Hand todo `todo` of `task` to the agent, the whole task coming along
+    /// as context.
     Delegate {
         task: Task,
         todo: usize,
-        agent: bool,
     },
     /// Hand all of `task` to the agent, to work through its todos.
     Implement(Task),
@@ -208,12 +207,11 @@ impl TaskPlanner {
         }
     }
 
-    /// Hand todo `todo` of task `id`, as it is on disk now, to Jig mode or
-    /// the agent.
-    fn delegate(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
+    /// Hand todo `todo` of task `id`, as it is on disk now, to the agent.
+    fn delegate(&mut self, id: &str, todo: usize, cx: &mut Context<Self>) {
         match tasks::load(&self.project, id) {
             Ok(task) if todo < task.todos.len() => {
-                cx.emit(TaskPlannerEvent::Delegate { task, todo, agent })
+                cx.emit(TaskPlannerEvent::Delegate { task, todo })
             }
             // Gone since it was shown.
             Ok(_) => {
@@ -313,8 +311,8 @@ impl TaskPlanner {
     }
 
     #[cfg(test)]
-    pub fn delegate_todo(&mut self, id: &str, todo: usize, agent: bool, cx: &mut Context<Self>) {
-        self.delegate(id, todo, agent, cx);
+    pub fn delegate_todo(&mut self, id: &str, todo: usize, cx: &mut Context<Self>) {
+        self.delegate(id, todo, cx);
     }
 
     #[cfg(test)]
@@ -412,7 +410,7 @@ impl TaskPlanner {
         // A finished task has nothing left to implement.
         let implement = (!finished).then(|| {
             let id = id.clone();
-            let accent = jig_commands::surface::lane_accent(true, cx);
+            let accent = jig_commands::surface::agent_accent(cx);
             div()
                 .id(("task-implement", ix))
                 .flex_none()
@@ -423,7 +421,7 @@ impl TaskPlanner {
                 .rounded(px(5.))
                 .text_color(accent)
                 .hover(move |s| s.bg(accent.opacity(0.15)))
-                .child(jig_commands::surface::lane_icon(true).size(px(12.)))
+                .child(jig_commands::surface::agent_icon().size(px(12.)))
                 .tooltip(|window, cx| {
                     Tooltip::new("Implement the task with the agent").build(window, cx)
                 })
@@ -547,20 +545,12 @@ impl TaskPlanner {
         };
         let todos = task.todos.iter().enumerate().map(|(todo_ix, todo)| {
             let group = SharedString::from(format!("todo-{ix}-{todo_ix}"));
-            // Hand the step to Jig mode or the agent, the task with it.
-            let delegate = |agent: bool| {
+            // Hand the step to the agent, the task with it.
+            let delegate = {
                 let id = id.clone();
-                let accent = jig_commands::surface::lane_accent(agent, cx);
-                let tooltip = if agent {
-                    "Delegate to the agent"
-                } else {
-                    "Run with Jig"
-                };
+                let accent = jig_commands::surface::agent_accent(cx);
                 div()
-                    .id(SharedString::from(format!(
-                        "todo-{}-{ix}-{todo_ix}",
-                        if agent { "agent" } else { "jig" }
-                    )))
+                    .id(SharedString::from(format!("todo-agent-{ix}-{todo_ix}")))
                     .flex_none()
                     .size(px(20.))
                     .flex()
@@ -569,11 +559,9 @@ impl TaskPlanner {
                     .rounded(px(5.))
                     .text_color(accent)
                     .hover(move |s| s.bg(accent.opacity(0.15)))
-                    .child(jig_commands::surface::lane_icon(agent).size(px(12.)))
-                    .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.delegate(&id, todo_ix, agent, cx)),
-                    )
+                    .child(jig_commands::surface::agent_icon().size(px(12.)))
+                    .tooltip(|window, cx| Tooltip::new("Delegate to the agent").build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| this.delegate(&id, todo_ix, cx)))
             };
             let id = id.clone();
             h_flex()
@@ -610,8 +598,7 @@ impl TaskPlanner {
                             .flex_none()
                             .invisible()
                             .group_hover(group, |s| s.visible())
-                            .child(delegate(false))
-                            .child(delegate(true)),
+                            .child(delegate),
                     )
                 })
         });

@@ -1,12 +1,11 @@
 //! The Settings window (⌘,), laid out like a Mac app's: a sidebar of pages
-//! (Appearance, Editor, Languages, Keyboard, Updates, and Models, Jigs and Agent
+//! (Appearance, Editor, Languages, Keyboard, Updates, and Providers and Agent
 //! under AI) with a search field, and the chosen page as titled cards of
 //! rows. Languages and theme colors open pages of their own, with a back
 //! button in the title bar.
 
 mod agent_page;
 mod appearance_page;
-mod jigs_page;
 mod languages_page;
 mod models_page;
 mod shortcuts_page;
@@ -42,7 +41,6 @@ const CODE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 
 const KEYBOARD: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01"/><path d="M10 9h.01"/><path d="M14 9h.01"/><path d="M18 9h.01"/><path d="M6 13h.01"/><path d="M18 13h.01"/><path d="M10 13h4"/><path d="M7 16h10"/></svg>"#;
 const SPARKLES: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg>"#;
 const DOWNLOAD: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8"/><path d="m8 12 4 4 4-4"/></svg>"#;
-const COMMAND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>"#;
 
 /// The bar across the top, holding the traffic lights and the page's title.
 const TITLE_BAR_HEIGHT: f32 = 52.;
@@ -59,20 +57,18 @@ pub enum Page {
     Keyboard,
     Updates,
     Providers,
-    JigMode,
     AgentMode,
 }
 
 impl Page {
     /// In sidebar order; the pages from `Providers` on sit under "AI".
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 7] = [
         Page::Appearance,
         Page::Editor,
         Page::Languages,
         Page::Keyboard,
         Page::Updates,
         Page::Providers,
-        Page::JigMode,
         Page::AgentMode,
     ];
 
@@ -84,8 +80,7 @@ impl Page {
             Page::Keyboard => "Keyboard",
             Page::Updates => "Updates",
             Page::Providers => "Providers",
-            Page::JigMode => "Jig mode",
-            Page::AgentMode => "Agent mode",
+            Page::AgentMode => "Agent",
         }
     }
 
@@ -97,13 +92,12 @@ impl Page {
             Page::Keyboard => KEYBOARD,
             Page::Updates => DOWNLOAD,
             Page::Providers => SPARKLES,
-            Page::JigMode => COMMAND,
             Page::AgentMode => jig_commands::surface::AGENT_ICON,
         }
     }
 
     fn is_ai(self) -> bool {
-        matches!(self, Page::Providers | Page::JigMode | Page::AgentMode)
+        matches!(self, Page::Providers | Page::AgentMode)
     }
 }
 
@@ -237,20 +231,7 @@ pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
     });
 }
 
-/// Send `action` to every editor window, leaving Settings in front.
-fn send_to_every_workspace(action: impl Fn() -> Box<dyn Action> + 'static, cx: &mut App) {
-    cx.defer(move |cx| {
-        for target in cx.windows() {
-            if crate::is_editor_window(target, cx) {
-                target
-                    .update(cx, |_, window, cx| window.dispatch_action(action(), cx))
-                    .ok();
-            }
-        }
-    });
-}
-
-/// Work Settings started: installing something, or testing a model.
+/// Work Settings started, such as installing something.
 enum Fetch<T> {
     /// What's happening, e.g. "Installing…".
     Running(SharedString),
@@ -262,10 +243,6 @@ pub struct SettingsWindow {
     nav: Nav,
     search: Entity<InputState>,
     scroll: ScrollHandle,
-    /// The user's own jigs, then the built-in ones they haven't replaced.
-    user_commands: Vec<jigs_page::CommandRow>,
-    built_in_commands: Vec<jigs_page::CommandRow>,
-    commands_error: Option<SharedString>,
     /// A masked key field per provider that takes a key, in `TEMPLATES`
     /// order. A key is saved as it's typed and never read back in.
     key_inputs: Vec<(&'static ProviderTemplate, Entity<InputState>)>,
@@ -274,16 +251,12 @@ pub struct SettingsWindow {
     installs: HashMap<String, Fetch<SharedString>>,
     /// Agents asked which models they offer, by key, and how that went.
     model_lookups: HashMap<String, Fetch<SharedString>>,
-    /// From Test: how long the Jig model took to answer.
-    check: Option<Fetch<SharedString>>,
     /// Why the last change to the providers didn't work.
     providers_error: Option<SharedString>,
     /// One per entry of `theme::EDITABLE`, in the same order.
     color_pickers: Vec<Entity<ColorPickerState>>,
     /// The shortcut taking new keys, on the Keyboard page.
     recording: Option<shortcuts_page::Recording>,
-    /// The Add Jig form, shown over the window.
-    new_jig: Option<jigs_page::NewJig>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -296,10 +269,9 @@ impl SettingsWindow {
             cx.observe_global::<settings::AppSettings>(|_, cx| cx.notify()),
             cx.observe_global::<providers::Providers>(|_, cx| cx.notify()),
             cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify()),
-            // Jigs or providers may have been edited in the meantime.
-            cx.observe_window_activation(window, |this, window, cx| {
+            // The providers may have been edited in the meantime.
+            cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
-                    this.reload_commands();
                     providers::reload(cx);
                     providers::load_all_models(true, cx);
                     cx.notify();
@@ -355,24 +327,18 @@ impl SettingsWindow {
         let nav = START.get();
         #[cfg(not(any(test, feature = "snapshots")))]
         let nav = Nav::page(Page::Appearance);
-        let mut this = Self {
+        let this = Self {
             nav,
             search,
             scroll: ScrollHandle::new(),
-            user_commands: Vec::new(),
-            built_in_commands: Vec::new(),
-            commands_error: None,
             key_inputs,
             installs: HashMap::new(),
             model_lookups: HashMap::new(),
-            check: None,
             providers_error: None,
             color_pickers,
             recording: None,
-            new_jig: None,
             _subscriptions: subscriptions,
         };
-        this.reload_commands();
         providers::load_all_models(true, cx);
         this
     }
@@ -413,7 +379,6 @@ impl SettingsWindow {
             (Page::Keyboard, _) => self.shortcuts_sections(cx),
             (Page::Updates, _) => self.updates_sections(cx),
             (Page::Providers, _) => self.providers_sections(cx),
-            (Page::JigMode, _) => self.jig_mode_sections(cx),
             (Page::AgentMode, _) => self.agent_sections(cx),
         }
     }
@@ -565,26 +530,6 @@ impl SettingsWindow {
             )
     }
 
-    /// The Add Jig form as a sheet near the top, over a dimmed window that
-    /// takes no clicks while it's open.
-    fn render_new_jig(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
-        let form = self.new_jig.as_ref()?.view.clone();
-        let backdrop = cx.theme().overlay;
-        Some(deferred(
-            div()
-                .id("new-jig-backdrop")
-                .absolute()
-                .inset_0()
-                .occlude()
-                .bg(backdrop)
-                .flex()
-                .justify_center()
-                .items_start()
-                .pt(px(TITLE_BAR_HEIGHT + 8.))
-                .child(div().child(form)),
-        ))
-    }
-
     /// Show a failed change to the providers until the next one works.
     fn report(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
         self.providers_error = result.err().map(SharedString::from);
@@ -663,7 +608,6 @@ impl Render for SettingsWindow {
                         .child(self.render_title(cx)),
                 ),
             )
-            .children(self.render_new_jig(cx))
     }
 }
 
@@ -673,7 +617,7 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, AppContext as _, Context, TestAppContext, Window};
 
     use super::{
-        Detail, Fetch, Nav, OpenWindow, Page, START, SettingsWindow, appearance_page, init,
+        Detail, Nav, OpenWindow, Page, START, SettingsWindow, appearance_page, init,
         is_settings_window, open,
     };
     use crate::providers;
@@ -825,24 +769,6 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn add_jig_opens_its_form_over_settings(cx: &mut TestAppContext) {
-        let _dir = providers::init_temp(cx);
-        let handle = open_on(Nav::page(Page::JigMode), cx);
-        update(handle, cx, |this, window, cx| this.open_new_jig(window, cx));
-        draw(handle, cx);
-        update(handle, cx, |this, _, _| assert!(this.new_jig.is_some()));
-        assert_eq!(cx.update(|cx| cx.windows().len()), 1, "no other window");
-
-        update(handle, cx, |this, _, cx| {
-            let form = this.new_jig.as_ref().unwrap().view.clone();
-            form.update(cx, |_, cx| cx.emit(jig_commands::NewCommandEvent::Cancel));
-        });
-        cx.run_until_parked();
-        update(handle, cx, |this, _, _| assert!(this.new_jig.is_none()));
-        draw(handle, cx);
-    }
-
-    #[gpui_kit::test]
     fn the_agent_page_draws_with_every_choice(cx: &mut TestAppContext) {
         let handle = open_on(Nav::page(Page::AgentMode), cx);
         draw(handle, cx);
@@ -868,7 +794,6 @@ mod tests {
         draw(handle, cx);
 
         update(handle, cx, |this, _, _| {
-            this.check = Some(Fetch::Failed("401 Unauthorized".into()));
             this.providers_error = Some("Couldn't write config.toml.".into());
         });
         draw(handle, cx);
@@ -878,8 +803,7 @@ mod tests {
             let anthropic = jig_ai::template_named("anthropic").unwrap();
             providers::connect(anthropic, Some("sk-test"), cx).unwrap();
             providers::connect(jig_ai::template_named("ollama").unwrap(), None, cx).unwrap();
-            providers::set_quick("anthropic/claude-haiku-4-5", cx).unwrap();
-            providers::set_agent(Some("anthropic/claude-sonnet-5-5"), cx).unwrap();
+            providers::set_agent("anthropic/claude-sonnet-5-5", cx).unwrap();
         });
         draw(handle, cx);
         cx.update(|cx| providers::disconnect("ollama", cx).unwrap());

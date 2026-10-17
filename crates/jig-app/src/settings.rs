@@ -19,13 +19,10 @@ pub const MAX_TRANSLUCENCY: f32 = 40.;
 pub struct Settings {
     pub appearance: Appearance,
     pub editor: EditorSettings,
-    /// Written as `jigs`; files from before the rename say `commands`.
-    #[serde(rename = "jigs", alias = "commands")]
-    pub commands: CommandSettings,
     pub languages: LanguageSettings,
     pub debugging: DebugSettings,
     pub formatting: FormatSettings,
-    /// Which agent Agent mode runs, and what it may do without asking.
+    /// Which agent runs, and what it may do without asking.
     pub agent: AgentSettings,
     pub colors: ColorSettings,
     /// Changed keyboard shortcuts, by name: GPUI keystrokes, `""` for none.
@@ -123,29 +120,6 @@ impl Default for UpdateSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CommandSettings {
-    /// Commands left out of the command input, by name.
-    pub hidden: Vec<String>,
-}
-
-impl CommandSettings {
-    pub fn is_hidden(&self, name: &str) -> bool {
-        self.hidden
-            .iter()
-            .any(|hidden| hidden.eq_ignore_ascii_case(name))
-    }
-
-    pub fn set_hidden(&mut self, name: &str, hidden: bool) {
-        self.hidden
-            .retain(|other| !other.eq_ignore_ascii_case(name));
-        if hidden {
-            self.hidden.push(name.to_string());
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LanguageSettings {
@@ -237,7 +211,7 @@ impl DebugSettings {
     }
 }
 
-/// Agent mode: the agent, by its key in `agents.toml`, and its permissions,
+/// The agent, by its key in `agents.toml`, and its permissions,
 /// all under `[agent]`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -434,7 +408,6 @@ mod tests {
         let mut settings = Settings::default();
         settings.appearance.theme = ThemeChoice::Dark;
         settings.editor.soft_wrap = false;
-        settings.commands.set_hidden("Explain", true);
         settings.languages.set_off("java", true);
         settings.formatting.set_on_save("rust", true);
         settings.formatting.final_newline = true;
@@ -473,17 +446,6 @@ mod tests {
             AgentSettings::default(),
             "OpenCode, and everything asks"
         );
-    }
-
-    #[test]
-    fn hidden_commands_match_any_case() {
-        let mut commands = CommandSettings::default();
-        commands.set_hidden("Add docs", true);
-        assert!(commands.is_hidden("add DOCS"));
-        commands.set_hidden("ADD DOCS", true);
-        assert_eq!(commands.hidden.len(), 1);
-        commands.set_hidden("add docs", false);
-        assert!(!commands.is_hidden("Add docs"));
     }
 
     #[test]

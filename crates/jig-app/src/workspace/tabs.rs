@@ -328,17 +328,13 @@ impl Workspace {
         self.enter_tab(window, cx);
     }
 
-    /// Settle anything floating over the current tab before it goes out of
-    /// view: a jig's change under review is kept, a running jig cancelled.
-    /// The agent conversation belongs to the project, not the tab: it stays,
+    /// Clear anything floating over the current tab before it goes out of
+    /// view. The agent conversation belongs to the project, not the tab: it stays,
     /// working, and an edit it proposed waits in its file's tab.
     pub(super) fn leave_tab(&mut self, cx: &mut Context<Self>) {
         self.palette = None;
         self.close_find_panel(cx);
-        self.accept_quick_preview(cx);
-        if self.run.take().is_some() {
-            self.editor().clear_highlights(cx);
-        }
+        self.note = None;
     }
 
     fn enter_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

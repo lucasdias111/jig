@@ -11,12 +11,12 @@ use gpui_kit::*;
 use jig_editor::EditorHandle as _;
 use notify::Watcher as _;
 
+use super::commands::Ask;
 use super::sidebar::SidebarView;
 use super::{NewTask, ToggleTaskPlanner, Workspace};
 use crate::planner::form::{TaskForm, TaskFormEvent};
 use crate::planner::links::{self, CodeLink};
 use crate::planner::{TaskPlanner, TaskPlannerEvent};
-use jig_commands::presets::{Invocation, Scope};
 
 /// An agent writes a task in one go, but saves come as several events.
 const SETTLE: Duration = Duration::from_millis(100);
@@ -121,9 +121,9 @@ impl Workspace {
                 let id = id.clone();
                 this.open_task_form(id.as_deref(), window, cx);
             }
-            TaskPlannerEvent::Delegate { task, todo, agent } => {
-                let (task, todo, agent) = (task.clone(), *todo, *agent);
-                this.delegate_todo(&task, todo, agent, window, cx);
+            TaskPlannerEvent::Delegate { task, todo } => {
+                let (task, todo) = (task.clone(), *todo);
+                this.delegate_todo(&task, todo, window, cx);
             }
             TaskPlannerEvent::Implement(task) => {
                 let task = task.clone();
@@ -234,7 +234,6 @@ impl Workspace {
             Err(error) => return self.show_error(&format!("{error:#}"), window, cx),
         };
         self.palette = None;
-        self.new_command = None;
         // `@` with nothing typed lists the names in the file on screen.
         let current = (!self.home)
             .then(|| self.document().path.clone())
@@ -301,10 +300,6 @@ impl Workspace {
         self.planner.form.as_ref().map(|form| form.view.clone())
     }
 
-    /// Hand todo `todo` of `task` to Jig mode or the agent, the whole task
-    /// as context. Jig works on the code the step links to, in another
-    /// file, else on the selection or the whole file; the agent starts a
-    /// conversation about it.
     /// Hand all of `task` to the agent: a conversation that works through
     /// its open todos in order, checking each off as it's done.
     pub(super) fn implement_task(
@@ -320,14 +315,16 @@ impl Workspace {
                 cx,
             );
         }
-        self.run_command(implement_invocation(task), window, cx);
+        self.start_conversation(implement_ask(task), window, cx);
     }
 
+    /// Hand todo `todo` of `task` to the agent, the whole task as context:
+    /// a conversation about the code the step links to, opened first, or
+    /// else the selection.
     pub(super) fn delegate_todo(
         &mut self,
         task: &jig_ai::tasks::Task,
         todo: usize,
-        agent: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -346,7 +343,6 @@ impl Workspace {
             .view
             .as_ref()
             .map(|view| view.read(cx).project().to_path_buf());
-        let mut whole_file = false;
         if let Some((link, path)) = links::first_code_link(&step.text)
             .zip(project)
             .map(|(link, project)| {
@@ -357,36 +353,17 @@ impl Workspace {
             && !self.showing(&path)
         {
             self.open_code_link(&path, &link, window, cx);
-            whole_file = true;
         }
-        if self.home && !agent {
-            return self.show_error(
-                "Open the file this step is about first, for Jig to work in.",
-                window,
-                cx,
-            );
-        }
-        let selected = !self.editor().selection(cx).is_empty();
-        let scope = if agent || (selected && !whole_file) {
-            Scope::Selection
-        } else {
-            Scope::File
-        };
         let mut name: String = step.text.chars().take(40).collect();
         if step.text.chars().count() > 40 {
             name.push('…');
         }
-        let invocation = Invocation {
+        let ask = Ask {
             name: Some(name),
-            instruction: step.text.clone(),
-            scope,
-            comment: None,
-            agent,
-            diagnostics: false,
-            answer: false,
             task: Some(task.step_context(todo)),
+            ..Ask::new(step.text.clone())
         };
-        self.run_command(invocation, window, cx);
+        self.start_conversation(ask, window, cx);
     }
 
     /// Open the code a task links to, remembering where we were for Go Back.
@@ -421,7 +398,7 @@ impl Workspace {
 
 /// What the agent is asked to implement all of `task`: the conversation is
 /// named after it, and the whole task comes along as context.
-pub(super) fn implement_invocation(task: &jig_ai::tasks::Task) -> Invocation {
+pub(super) fn implement_ask(task: &jig_ai::tasks::Task) -> Ask {
     let instruction = if task.todos.is_empty() {
         format!("Implement the task “{}”.", task.title)
     } else {
@@ -430,14 +407,9 @@ pub(super) fn implement_invocation(task: &jig_ai::tasks::Task) -> Invocation {
             task.title
         )
     };
-    Invocation {
+    Ask {
         name: Some(task.title.clone()),
-        instruction,
-        scope: Scope::Selection,
-        comment: None,
-        agent: true,
-        diagnostics: false,
-        answer: false,
         task: Some(task.context()),
+        ..Ask::new(instruction)
     }
 }

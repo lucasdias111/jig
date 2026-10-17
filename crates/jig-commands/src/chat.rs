@@ -298,7 +298,7 @@ impl RenderOnce for Conversation {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let entries = transcript_rows(self.entries, window, cx);
         let theme = cx.theme();
-        let accent = crate::surface::lane_accent(true, cx);
+        let accent = crate::surface::agent_accent(cx);
         let pinned = self.frame.pinned;
         let on_grab = self.on_grab.filter(|_| !pinned);
         let header_button =
@@ -382,7 +382,7 @@ impl RenderOnce for Conversation {
                         .child("▾"),
                 )
             }))
-            .child(crate::surface::lane_tag(true, cx))
+            .child(crate::surface::agent_tag(cx))
             .child(history)
             .child(pin);
         // The models, under the header while their list is open.
@@ -721,7 +721,7 @@ fn decide_button(
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let accent = crate::surface::lane_accent(true, cx);
+    let accent = crate::surface::agent_accent(cx);
     let on_decide = on_decide.clone();
     h_flex()
         .id(("jig-agent-decide", index))
@@ -817,7 +817,7 @@ fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div
                 .appearance(false)
                 .cleanable(false)
                 .prefix(
-                    crate::surface::lane_icon(true)
+                    crate::surface::agent_icon()
                         .size(px(13.))
                         .text_color(accent),
                 ),
@@ -989,7 +989,7 @@ fn subagent(
     let is_open = *open.read(cx);
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let accent = crate::surface::lane_accent(true, cx);
+    let accent = crate::surface::agent_accent(cx);
     let working = report.is_none();
     let count = match calls.len() {
         0 => String::new(),
@@ -1118,7 +1118,7 @@ fn diff_view(index: usize, diff: Vec<DiffLine>, cx: &App) -> impl IntoElement {
 fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
     let theme = cx.theme();
     match entry {
-        // The user's words sit on the right, tinted with the lane.
+        // The user's words sit on the right, tinted with the agent's colour.
         ChatEntry::User(text) => h_flex()
             .justify_end()
             .child(
@@ -1127,7 +1127,7 @@ fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
                     .px_2p5()
                     .py_1p5()
                     .rounded(px(9.))
-                    .bg(crate::surface::lane_accent(true, cx).opacity(0.12))
+                    .bg(crate::surface::agent_accent(cx).opacity(0.12))
                     .child(text),
             )
             .into_any_element(),

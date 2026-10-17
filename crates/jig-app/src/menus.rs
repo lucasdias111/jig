@@ -6,14 +6,14 @@ use gpui_kit::*;
 use crate::settings_window::OpenSettings;
 use crate::update::CheckForUpdates;
 use crate::workspace::{
-    AddCommand, ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine,
-    DuplicateLine, EditAgents, EditAgentsFile, EditCommands, EditDebuggers, EditRunConfigurations,
-    Find, FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack,
-    GoForward, GoToFile, GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask,
-    NextProblem, NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab,
-    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto,
-    StepOut, StepOver, StopRun, SwitchBranch, ToggleBlueprint, ToggleBreakpoint, ToggleGitPanel,
-    ToggleLineComment, ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
+    ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine, DuplicateLine,
+    EditAgents, EditAgentsFile, EditDebuggers, EditRunConfigurations, Find, FindAndReplace,
+    FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack, GoForward, GoToFile,
+    GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask, NextProblem, NextTab, Open,
+    OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
+    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
+    SwitchBranch, ToggleBlueprint, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment,
+    ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -97,11 +97,9 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Delete Line", DeleteLine),
                 MenuItem::action("Select Line", SelectLine),
                 MenuItem::separator(),
-                MenuItem::action("Run Jig…", OpenCommand),
+                MenuItem::action("Ask the Agent…", OpenCommand),
                 MenuItem::action("Agent Conversations…", OpenAgentConversations),
                 MenuItem::action("Edit Agents", EditAgents),
-                MenuItem::action("Add Jig…", AddCommand),
-                MenuItem::action("Edit Jigs File", EditCommands),
                 MenuItem::action("Edit AGENTS.md", EditAgentsFile),
             ],
         ),

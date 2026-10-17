@@ -278,7 +278,7 @@ impl Workspace {
         .detach();
     }
 
-    /// In the title bar, left of the Jig button: swaps a readable file's code
+    /// In the title bar, left of the Agent button: swaps a readable file's code
     /// for its blueprint and back, pressed while the blueprint shows.
     pub(super) fn render_blueprint_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.home || !blueprint::reads(&self.editor().language(cx)) {

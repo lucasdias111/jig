@@ -22,7 +22,7 @@ pub enum Group {
     File,
     Editing,
     Navigation,
-    Jigs,
+    Agent,
     View,
     Run,
 }
@@ -32,7 +32,7 @@ impl Group {
         Group::Editing,
         Group::Navigation,
         Group::File,
-        Group::Jigs,
+        Group::Agent,
         Group::View,
         Group::Run,
     ];
@@ -42,7 +42,7 @@ impl Group {
             Group::File => "Files and tabs",
             Group::Editing => "Editing",
             Group::Navigation => "Navigation",
-            Group::Jigs => "Jigs",
+            Group::Agent => "Agent",
             Group::View => "View",
             Group::Run => "Run and debug",
         }
@@ -303,7 +303,7 @@ pub const ALL: &[Shortcut] = &[
         ANYWHERE,
         PreviousProblem
     ),
-    // ⌘I as in VS Code's ⌘K ⌘I, without the ⌘K that runs jigs here.
+    // ⌘I as in VS Code's ⌘K ⌘I, without the ⌘K that asks the agent here.
     shortcut!(
         "show_hover",
         "Show hover",
@@ -382,19 +382,20 @@ pub const ALL: &[Shortcut] = &[
         OpenSettings
     ),
     shortcut!("quit", "Quit", File, ["secondary-q"], ANYWHERE, Quit),
-    // Jigs.
+    // Agent.
     shortcut!(
+        // Named before jigs went, so changed keys carry over.
         "run_jig",
-        "Run jig",
-        Jigs,
+        "Ask the agent",
+        Agent,
         ["secondary-k"],
         ANYWHERE,
         OpenCommand
     ),
     shortcut!(
         "pick_model",
-        "Pick model (in the jig input)",
-        Jigs,
+        "Pick agent and model (in the agent input)",
+        Agent,
         ["alt-m"],
         &[Some(jig_commands::palette::CONTEXT)],
         jig_commands::palette::PickModel
@@ -402,18 +403,10 @@ pub const ALL: &[Shortcut] = &[
     shortcut!(
         "agent_conversations",
         "Agent conversations",
-        Jigs,
+        Agent,
         ["secondary-alt-k"],
         ANYWHERE,
         OpenAgentConversations
-    ),
-    shortcut!(
-        "add_jig",
-        "Add jig",
-        Jigs,
-        ["secondary-shift-k"],
-        ANYWHERE,
-        AddCommand
     ),
     // View.
     shortcut!(

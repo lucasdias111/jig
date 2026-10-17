@@ -1,18 +1,16 @@
-//! Models: the model each mode uses, a test of the Jig model, and the
-//! providers they come from, connected with a key or, for a server on this
-//! computer, a switch.
-
-use std::time::Instant;
+//! Providers: where the agent's models come from, connected with a key or,
+//! for a server on this computer, a switch; and the agent's model from
+//! them.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{Disableable as _, Sizable as _, h_flex};
+use gpui_kit::component::{Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named};
 
 use super::ui::{self, Row, Section};
-use super::{Fetch, SettingsWindow, send_to_workspace};
+use super::{SettingsWindow, send_to_workspace};
 use crate::providers::{self, ModelList};
 use crate::workspace::EditModelConfig;
 
@@ -22,7 +20,7 @@ const OPENCODE_OWN: &str = "opencode:";
 
 impl SettingsWindow {
     /// Providers: the accounts and local servers the models come from.
-    /// Picking a model is each mode's own page.
+    /// Picking the agent's model is the Agent page's.
     pub(super) fn providers_sections(&self, cx: &Context<Self>) -> Vec<Section> {
         let config = match providers::config(cx) {
             Ok(config) => config,
@@ -59,71 +57,21 @@ impl SettingsWindow {
         sections
     }
 
-    /// Jig mode: its model, then the jigs.
-    pub(super) fn jig_mode_sections(&self, cx: &Context<Self>) -> Vec<Section> {
-        let model = match providers::config(cx) {
-            Ok(config) => self.models_section(&config, cx),
-            Err(error) => Section::new().row(
-                Row::note(
-                    "providers-error",
-                    format!("Couldn't read your providers. {error}"),
-                )
-                .warning(true),
-            ),
-        };
-        std::iter::once(model)
-            .chain(self.jigs_sections(cx))
-            .collect()
-    }
-
-    /// The model Jig mode uses, from what the connected providers offer.
-    fn models_section(&self, config: &Config, cx: &Context<Self>) -> Section {
-        let this = cx.entity().downgrade();
-        let mut quick_options = offered_models(config, cx);
-        if let Some(id) = config.quick_model() {
-            keep_current(&mut quick_options, &id, config);
-        }
-
-        let quick = if quick_options.is_empty() {
-            Row::note(
-                "no-models",
-                "Connect a provider under Providers. Jig starts on one of its fast models, which you can change here.",
-            )
-        } else {
-            let this = this.clone();
-            Row::new("quick-model", "Model")
-                .description("One fast call at the cursor. Small models answer in a few seconds.")
-                .keywords(["model", "quick", "jig"])
-                .control(ui::dropdown(
-                    "quick-model",
-                    quick_options,
-                    |cx| {
-                        providers::config(cx)
-                            .ok()
-                            .and_then(|config| config.quick_model())
-                            .unwrap_or_default()
-                            .into()
-                    },
-                    move |id, cx| {
-                        let result = providers::set_quick(&id, cx);
-                        this.update(cx, |this, cx| {
-                            this.check = None;
-                            this.report(result, cx);
-                        })
-                        .ok();
-                    },
-                ))
-        };
-        Section::new().row(quick).row(self.check_row(config, cx))
-    }
-
-    /// The model OpenCode runs on in Agent mode, from what the connected
-    /// providers offer; by default the same as Jig mode's.
+    /// The model OpenCode runs on, from what the connected providers offer.
     pub(super) fn opencode_model_row(&self, config: &Config, cx: &Context<Self>) -> Row {
         let this = cx.entity().downgrade();
         let offered = offered_models(config, cx);
-        let mut agent_options = vec![(SharedString::from(""), "Same as Jig mode".into())];
-        let agent = match (&config.agent, &config.agent_model) {
+        if offered.is_empty() && config.agent.as_ref().is_none_or(|id| id.is_empty()) {
+            return Row::note(
+                "no-models",
+                "Connect a provider under Providers. The agent starts on one of its fast models, which you can change here.",
+            );
+        }
+        let mut agent_options = Vec::new();
+        let agent = match (
+            config.agent.as_ref().filter(|id| !id.is_empty()),
+            &config.agent_model,
+        ) {
             (Some(id), _) => id.clone(),
             (None, Some(native)) => {
                 let id = format!("{OPENCODE_OWN}{native}");
@@ -133,12 +81,13 @@ impl SettingsWindow {
                 ));
                 id
             }
-            (None, None) => String::new(),
+            (None, None) => {
+                agent_options.push(("".into(), "Pick a model".into()));
+                String::new()
+            }
         };
         agent_options.extend(offered);
-        if config.agent.is_some() {
-            keep_current(&mut agent_options, &agent, config);
-        }
+        keep_current(&mut agent_options, &agent, config);
 
         Row::new("agent-model", "Model")
             .description("What OpenCode runs on, from your providers.")
@@ -148,84 +97,13 @@ impl SettingsWindow {
                 agent_options,
                 move |_| agent.clone().into(),
                 move |id, cx| {
-                    if id.starts_with(OPENCODE_OWN) {
+                    if id.is_empty() || id.starts_with(OPENCODE_OWN) {
                         return;
                     }
-                    let id = (!id.is_empty()).then_some(id.as_ref());
-                    let result = providers::set_agent(id, cx);
+                    let result = providers::set_agent(&id, cx);
                     this.update(cx, |this, cx| this.report(result, cx)).ok();
                 },
             ))
-    }
-
-    /// Test the Jig model, and refresh every provider's models.
-    fn check_row(&self, config: &Config, cx: &Context<Self>) -> Row {
-        let this = cx.entity().downgrade();
-        let can_test = config.quick_model().is_some();
-        let testing = matches!(self.check, Some(Fetch::Running(_)));
-        let (description, ok) = match &self.check {
-            None => ("Sends the Jig model one small request.".into(), true),
-            Some(Fetch::Running(doing)) => (doing.clone(), true),
-            Some(Fetch::Done(result)) => (result.clone(), true),
-            Some(Fetch::Failed(error)) => (error.clone(), false),
-        };
-        Row::new("test-model", "Test connection")
-            .description(description)
-            .warning(!ok)
-            .keywords(["test", "check", "refresh", "models"])
-            .control(move |_, _| {
-                let test = this.clone();
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("refresh-models")
-                            .label("Refresh Models")
-                            .small()
-                            .ghost()
-                            .on_click(|_, _, cx| providers::load_all_models(false, cx)),
-                    )
-                    .child(
-                        ui::button("test-quick", "Test")
-                            .disabled(testing || !can_test)
-                            .on_click(move |_, _, cx| {
-                                test.update(cx, |this, cx| this.check(cx)).ok();
-                            }),
-                    )
-            })
-    }
-
-    /// Run one small command on the Jig model.
-    fn check(&mut self, cx: &mut Context<Self>) {
-        let provider = match providers::quick(cx) {
-            Ok(provider) => provider,
-            Err(error) => {
-                self.check = Some(Fetch::Failed(error.into()));
-                cx.notify();
-                return;
-            }
-        };
-        let key = providers::api_key(&provider, cx).map(|(key, _)| key);
-        self.check = Some(Fetch::Running("Testing…".into()));
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let started = Instant::now();
-                    jig_ai::check(provider.build_with(key)?.as_ref())?;
-                    anyhow::Ok(started.elapsed())
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.check = Some(match result {
-                    Ok(took) => Fetch::Done(format!("Works · {:.1} s", took.as_secs_f32()).into()),
-                    Err(error) => Fetch::Failed(format!("{error:#}").into()),
-                });
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
     }
 
     /// Every major provider, with a key field or a switch to connect it.
@@ -244,6 +122,7 @@ impl SettingsWindow {
         Section::new()
             .footer("Keys are kept in the system keychain, never in config.toml.")
             .rows(rows)
+            .row(refresh_row())
     }
 }
 
@@ -411,6 +290,21 @@ fn other_provider_row(provider: &ProviderConfig, cx: &Context<SettingsWindow>) -
                 let result = providers::disconnect(&name, cx);
                 this.update(cx, |this, cx| this.report(result, cx)).ok();
             })
+        })
+}
+
+/// Ask every provider for its models again, which also shows whether its
+/// key works.
+fn refresh_row() -> Row {
+    Row::new("refresh-models", "Models")
+        .description("Each provider lists its models once its key works.")
+        .keywords(["test", "check", "refresh", "models", "connection"])
+        .control(|_, _| {
+            Button::new("refresh-models")
+                .label("Refresh Models")
+                .small()
+                .ghost()
+                .on_click(|_, _, cx| providers::load_all_models(false, cx))
         })
 }
 

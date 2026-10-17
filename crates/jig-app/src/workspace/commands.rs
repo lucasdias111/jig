@@ -1,49 +1,49 @@
-//! Running a command: the palette, the AI request, and the reply bubble.
+//! The agent input (⌘K) and its title-bar button, starting a conversation
+//! from it, notes beside the code, and the keys that settle an edit under
+//! review.
 
 use std::ops::Range;
 use std::time::Duration;
 
 use gpui_kit::component::input::{Enter, Escape, Indent, IndentInline, OutdentInline, Undo};
-use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jig_ai::{PromptRequest, Reply};
-use jig_commands::{Bubble, CommandPalette, Invocation, PaletteEvent, Scope};
+use jig_commands::{Bubble, CommandPalette, PaletteEvent};
 use jig_editor::EditorHandle;
 
 use super::agent::AgentRun;
 use super::{OpenCommand, OpenPalette, Workspace};
 
-/// The title bar's button for the command input (Lucide "sparkles").
-pub(super) const COMMAND_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>"#;
+/// The selection's button for the agent input (Lucide "sparkles").
+pub(super) const SPARKLE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>"#;
 
-/// How long an error stays up before it fades on its own.
-const ERROR_TIMEOUT: Duration = Duration::from_secs(4);
+/// How long a note stays up before it fades on its own.
+const NOTE_TIMEOUT: Duration = Duration::from_secs(4);
 /// Longest error text shown in the bubble.
 const MAX_ERROR_CHARS: usize = 180;
 
-/// Background of code a command is working on, while waiting for the model.
+/// Background of code the agent was asked about, while it works.
 fn working_color(cx: &App) -> Hsla {
-    cx.theme().primary.opacity(0.16)
+    cx.theme().info.opacity(0.16)
 }
 
-/// Background of code a command just wrote, while it awaits review.
+/// Background of code the agent just wrote, while it awaits review.
 pub(super) fn added_color(cx: &App) -> Hsla {
     cx.theme().success.opacity(0.18)
 }
 
-/// One command from the moment it's chosen until its bubble goes away.
+/// A conversation with the agent, from the moment it's asked for until
+/// it's closed.
 pub(super) struct CommandRun {
     pub(super) id: u64,
     pub(super) bubble: Bubble,
     pub(super) anchor: Point<Pixels>,
-    /// The buffer when the command started. A reply for a buffer that has
-    /// since changed is discarded.
-    pub(super) snapshot: String,
+    /// The code the conversation started from.
     pub(super) target: Range<usize>,
-    /// Set while the change sits in the buffer awaiting accept or reject.
+    /// Set while an edit sits in the buffer awaiting accept or reject.
     pub(super) preview: Option<Preview>,
-    /// Set for a command handed to the agent.
+    /// `None` only until the conversation is set up.
     pub(super) agent: Option<AgentRun>,
     pub(super) _task: Option<Task<()>>,
 }
@@ -51,6 +51,38 @@ pub(super) struct CommandRun {
 pub(super) struct Preview {
     /// Where the new code is in the buffer.
     pub(super) range: Range<usize>,
+}
+
+/// A short note beside the code, fading after a few seconds.
+pub(super) struct Note {
+    id: u64,
+    pub(super) bubble: Bubble,
+    pub(super) anchor: Point<Pixels>,
+    _task: Task<()>,
+}
+
+/// What a conversation is started with, from ⌘K, Quick Fix or a task.
+pub(super) struct Ask {
+    /// How the conversation is titled, e.g. "Fix"; `None` uses what was
+    /// asked.
+    pub(super) name: Option<String>,
+    pub(super) instruction: String,
+    /// Send the problems the language server reports on the lines asked
+    /// about.
+    pub(super) diagnostics: bool,
+    /// The planned task this is about, as context.
+    pub(super) task: Option<String>,
+}
+
+impl Ask {
+    pub(super) fn new(instruction: impl Into<String>) -> Self {
+        Self {
+            name: None,
+            instruction: instruction.into(),
+            diagnostics: false,
+            task: None,
+        }
+    }
 }
 
 impl Workspace {
@@ -85,14 +117,14 @@ impl Workspace {
             .unwrap_or_else(|| self.floating_anchor(cx))
     }
 
-    /// A button in the title bar that opens the command input, for those
-    /// who reach for the mouse or don't know ⌘K yet. Only with a file open.
+    /// A button in the title bar that opens the agent input, for those who
+    /// reach for the mouse or don't know ⌘K yet. Only with a file open.
     pub(super) fn render_command_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.home {
             return None;
         }
         let theme = cx.theme();
-        let accent = jig_commands::surface::lane_accent(false, cx);
+        let accent = jig_commands::surface::agent_accent(cx);
         // Pressed while the palette is open: it toggles. It glows as the
         // palette opens, so the two read as one.
         let opened = self.palette.as_ref().map(|palette| palette.serial);
@@ -124,7 +156,7 @@ impl Workspace {
                         .size_full()
                         .rounded(px(6.))
                         .with_animation(
-                            ("jig-button-glow", serial),
+                            ("agent-button-glow", serial),
                             Animation::new(Duration::from_millis(420))
                                 .with_easing(ease_out_quint()),
                             move |glow, delta| glow.bg(accent.opacity(0.38 - 0.22 * delta)),
@@ -135,13 +167,12 @@ impl Workspace {
                     s.hover(|s| s.bg(theme.foreground.opacity(0.08)))
                 })
                 .child(
-                    Icon::default()
-                        .data(COMMAND_ICON)
+                    jig_commands::surface::agent_icon()
                         .size(px(13.))
                         .flex_none()
                         .text_color(accent),
                 )
-                .child(div().flex_none().whitespace_nowrap().child("Jig"))
+                .child(div().flex_none().whitespace_nowrap().child("Agent"))
                 .child(
                     div()
                         .flex_none()
@@ -167,74 +198,42 @@ impl Workspace {
         if self.home {
             return;
         }
-        // ⌘K and the Jig button toggle it.
+        // ⌘K and the Agent button toggle it.
         if self.palette.is_some() {
             return self.close_palette(window, cx);
-        }
-        // Two changes under review in one buffer would tangle their undo.
-        if self.agent_edit_here() {
-            return self.show_note(
-                "Accept or reject the agent's edit first.".into(),
-                window,
-                cx,
-            );
         }
         self.quick_open = None;
         self.find_in_files = None;
         // Its matches would muddle the change's highlights.
         self.close_find_panel(cx);
-        // A new command replaces whatever the last one left on screen; a
-        // pending change counts as accepted. The agent's conversation stays.
-        self.accept_quick_preview(cx);
-        if self.run.take().is_some() {
-            self.editor().clear_highlights(cx);
-        }
+        self.note = None;
         let selection = self.editor().selection(cx);
         let has_selection = !selection.is_empty();
-        // Beside the selection, or the cursor's line, which a prompt edits.
+        // Beside the selection, or the cursor's line.
         let anchor = self.beside_anchor(selection, px(jig_commands::palette::WIDTH), window, cx);
-        let presets = self.presets.clone();
-        let context = self.context_names();
-        // A docked conversation is where Agent mode lives meanwhile.
-        let docked = self.floating_agent_chat_pinned();
-        let (jig_models, agent_models) = self.model_menus(cx);
-        let view = cx.new(|cx| {
-            CommandPalette::new(presets, has_selection, window, cx)
-                .with_context(context)
-                .with_agent_docked(docked)
-                .with_models(jig_models, agent_models)
-        });
+        let models = self.model_menu(cx);
+        let view = cx.new(|cx| CommandPalette::new(has_selection, window, cx).with_models(models));
         let events = cx.subscribe_in(
             &view,
             window,
             |this, palette, event: &PaletteEvent, window, cx| {
-                match event {
-                    PaletteEvent::AgentMode => {
-                        return this.load_agent_catalog(Some(palette.clone()), window, cx);
-                    }
-                    PaletteEvent::PickModel(choice) => {
-                        return this.pick_model(choice.clone(), palette.clone(), window, cx);
-                    }
-                    _ => {}
+                if let PaletteEvent::PickModel(choice) = event {
+                    return this.pick_model(choice.clone(), palette.clone(), window, cx);
                 }
                 this.close_palette(window, cx);
                 match event {
-                    PaletteEvent::Run(invocation) => {
-                        this.run_command(invocation.clone(), window, cx)
-                    }
-                    PaletteEvent::SaveAsCommand(text) => {
-                        this.open_add_command(Some(text.clone()), window, cx)
+                    PaletteEvent::Run(text) => {
+                        this.start_conversation(Ask::new(text.clone()), window, cx)
                     }
                     PaletteEvent::Resume(id) => this.resume_agent(id.clone(), window, cx),
                     PaletteEvent::RunAgentCommand { name, arguments } => {
                         this.run_agent_command(name.clone(), arguments.clone(), window, cx)
                     }
-                    PaletteEvent::AgentMode
-                    | PaletteEvent::PickModel(_)
-                    | PaletteEvent::Dismissed => {}
+                    PaletteEvent::PickModel(_) | PaletteEvent::Dismissed => {}
                 }
             },
         );
+        self.load_agent_catalog(Some(view.clone()), window, cx);
         self.palette_openings += 1;
         self.palette = Some(OpenPalette {
             view,
@@ -252,34 +251,34 @@ impl Workspace {
         }
     }
 
-    pub(super) fn run_command(
+    /// Start a conversation about the selection, or the cursor's line, in
+    /// place of the one on screen.
+    pub(super) fn start_conversation(
         &mut self,
-        invocation: Invocation,
+        ask: Ask,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Two changes under review in one buffer would tangle their undo.
+        if self.agent_edit_here() {
+            return self.show_note(
+                "Accept or reject the agent's edit first.".into(),
+                window,
+                cx,
+            );
+        }
         let text = self.editor().text(cx);
-        let target =
-            invocation
-                .scope
-                .target(&text, self.editor().selection(cx), self.editor().cursor(cx));
-        // Tests are about the selection and go at the end of the file.
-        let (target, subject) = if invocation.scope == Scope::Tests && !invocation.agent {
-            let at = jig_ai::prompt::tests_insertion(&text);
-            (at..at, Some(target))
+        let selection = self.editor().selection(cx);
+        let target = if selection.is_empty() {
+            line_at(&text, selection.start)
         } else {
-            (target, None)
+            selection
         };
-        let worked_on = subject.clone().unwrap_or_else(|| target.clone());
-        let anchor = self.bubble_anchor(worked_on.clone(), window, cx);
-        self.next_run_id += 1;
-        let id = self.next_run_id;
-
-        let request = PromptRequest {
-            instruction: invocation.instruction.clone(),
+        let request = jig_ai::agent::Prompt {
+            instruction: ask.instruction,
             language: self.editor().language(cx),
             file_name: self.document().path.as_deref().map(|path| {
-                // Relative to the project, so the model knows where the
+                // Relative to the project, so the agent knows where the
                 // file sits.
                 let root = crate::project::root_for(path);
                 path.strip_prefix(&root)
@@ -287,198 +286,34 @@ impl Workspace {
                     .to_string_lossy()
                     .into_owned()
             }),
-            text: text.clone(),
-            target: target.clone(),
-            comment: invocation.comment.clone(),
-            // The agent reads AGENTS.md itself.
-            project_rules: self
-                .document()
-                .path
-                .as_deref()
-                .filter(|_| !invocation.agent)
-                .and_then(crate::project::agents_for),
-            task: invocation.task.clone(),
-            // The agent may answer or edit as it sees fit.
-            answer: invocation.answer && !invocation.agent,
-            subject,
-            diagnostics: if invocation.diagnostics {
+            diagnostics: if ask.diagnostics {
                 self.problems_on_lines(&text, target.clone(), cx)
             } else {
                 Vec::new()
             },
+            task: ask.task,
+            text,
+            target: target.clone(),
         };
-        if invocation.agent {
-            // A new conversation, in place of the one on screen.
-            self.close_chat(window, cx);
-            self.editor()
-                .highlight(vec![(target.clone(), working_color(cx))], cx);
-            self.chat = Some(CommandRun {
-                id,
-                bubble: Bubble::Message(String::new()),
-                anchor,
-                snapshot: text,
-                target,
-                preview: None,
-                agent: None,
-                _task: None,
-            });
-            self.run_agent(id, invocation.name, request, window, cx);
-            return;
-        }
-        // The model picked in ⌘K for the window, else the settings'.
-        let provider = match &self.jig_pick {
-            Some(id) => crate::providers::build_model(id, cx),
-            None => self.provider.clone(),
-        };
-        let provider = match &provider {
-            Ok(provider) => provider.clone(),
-            Err(error) => {
-                let error = error.clone();
-                self.run = Some(CommandRun {
-                    id,
-                    bubble: Bubble::Running {
-                        label: String::new(),
-                        agent: false,
-                        started: std::time::Instant::now(),
-                        context: Vec::new(),
-                        step: None,
-                    },
-                    anchor,
-                    snapshot: text,
-                    target,
-                    preview: None,
-                    agent: None,
-                    _task: None,
-                });
-                self.fail(id, error, window, cx);
-                return;
-            }
-        };
-
-        let context = self.context_names();
-        let task = cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { jig_ai::run(provider.as_ref(), &request) })
-                .await;
-            this.update_in(cx, |this, window, cx| this.finish(id, result, window, cx))
-                .ok();
-        });
-
-        let label = invocation.name.unwrap_or_else(|| "Working".into());
-        // Tint the code being worked on until the reply arrives.
+        self.close_chat(window, cx);
+        self.next_run_id += 1;
+        let id = self.next_run_id;
         self.editor()
-            .highlight(vec![(worked_on, working_color(cx))], cx);
-        self.run = Some(CommandRun {
+            .highlight(vec![(target.clone(), working_color(cx))], cx);
+        self.chat = Some(CommandRun {
             id,
-            bubble: Bubble::Running {
-                label,
-                agent: false,
-                started: std::time::Instant::now(),
-                context,
-                step: None,
-            },
-            anchor,
-            snapshot: text,
+            bubble: Bubble::Message(String::new()),
+            anchor: self.floating_anchor(cx),
             target,
             preview: None,
             agent: None,
-            _task: Some(task),
+            _task: None,
         });
-        cx.notify();
+        self.run_agent(id, ask.name, request, window, cx);
     }
 
-    fn finish(
-        &mut self,
-        id: u64,
-        result: anyhow::Result<Reply>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(run) = self.run.as_ref().filter(|run| run.id == id) else {
-            return; // Cancelled or replaced while waiting.
-        };
-        if self.editor().text(cx) != run.snapshot {
-            self.fail(
-                id,
-                "The file changed while waiting, so nothing was applied.".into(),
-                window,
-                cx,
-            );
-            return;
-        }
-        match result {
-            Ok(reply) => self.show_reply(reply, window, cx),
-            Err(error) => self.fail(id, format!("{error:#}"), window, cx),
-        }
-    }
-
-    /// Put the reply's code into the buffer for review: highlighted,
-    /// read-only, and one undo step away from the original.
-    fn show_reply(&mut self, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(run) = self.run.as_mut() else { return };
-        let original = run.snapshot[run.target.clone()].to_string();
-        if reply.replace == original {
-            self.editor().clear_highlights(cx);
-            let Some(run) = self.run.as_mut() else { return };
-            run.bubble = Bubble::Message(if reply.message.is_empty() {
-                "No changes.".into()
-            } else {
-                reply.message
-            });
-            cx.notify();
-            return;
-        }
-        // Only what changed: the edit leaves identical text alone, the new
-        // lines are highlighted and only lines really removed are listed.
-        let edit = crate::diff::preview_edit(&original, &reply.replace, run.target.start);
-        // Mark the preview first so the edit's change event doesn't dismiss it.
-        run.preview = Some(Preview {
-            range: edit.range.clone(),
-        });
-        run.bubble = Bubble::Preview {
-            message: reply.message,
-            removed: edit.removed,
-            agent: false,
-        };
-        let range = self
-            .editor()
-            .apply_edit(edit.range, edit.replacement, window, cx);
-        self.editor().set_readonly(true, cx);
-        let color = added_color(cx);
-        self.editor().highlight(
-            edit.highlights
-                .into_iter()
-                .map(|range| (range, color))
-                .collect(),
-            cx,
-        );
-        if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
-            preview.range = range.clone();
-        }
-        // Inserted code may be far from where the run started, as tests
-        // at the end of the file are: bring it into view.
-        if original.is_empty() {
-            self.editor().select(range.start..range.start, cx);
-        }
-        // Beside the new code, which may reach further right than the old,
-        // once it's laid out.
-        cx.on_next_frame(window, move |this, window, cx| {
-            let anchor = this.bubble_anchor(range, window, cx);
-            if let Some(run) = this.run.as_mut().filter(|run| run.preview.is_some()) {
-                run.anchor = anchor;
-                cx.notify();
-            }
-        });
-        cx.notify();
-    }
-
-    /// Where a jig's bubble goes: beside the code it works on.
-    fn bubble_anchor(&self, target: Range<usize>, window: &Window, cx: &App) -> Point<Pixels> {
-        self.beside_anchor(target, px(jig_commands::bubble::MAX_WIDTH), window, cx)
-    }
-
-    /// The project files commands are sent with, e.g. "AGENTS.md", by name.
+    /// The project files the agent reads besides the code, e.g.
+    /// "AGENTS.md", by name.
     pub(super) fn context_names(&self) -> Vec<String> {
         self.document()
             .path
@@ -487,24 +322,18 @@ impl Workspace {
             .unwrap_or_default()
     }
 
-    /// The command input or the new-command form has the keyboard.
+    /// The agent input or a form has the keyboard.
     pub(super) fn modal_open(&self) -> bool {
         self.palette.is_some()
-            || self.new_command.is_some()
             || self.planner.form.is_some()
             || self.quick_open.is_some()
             || self.find_in_files.is_some()
     }
 
-    /// A change is under review in the tab on screen: a jig's, or the
-    /// agent's. An agent's edit in another tab waits there.
+    /// The agent's edit is under review in the tab on screen. One in
+    /// another tab waits there.
     pub(super) fn previewing(&self) -> bool {
-        self.quick_previewing() || self.agent_edit_here()
-    }
-
-    /// A jig's change is under review (always in the tab on screen).
-    fn quick_previewing(&self) -> bool {
-        self.run.as_ref().is_some_and(|run| run.preview.is_some())
+        self.agent_edit_here()
     }
 
     /// The agent's edit is under review in the tab on screen.
@@ -515,39 +344,16 @@ impl Workspace {
             && self.agent_edit_elsewhere().is_none()
     }
 
-    /// Keep the change on screen. It is already in the buffer as one undo
+    /// Keep the edit on screen. It is already in the buffer as one undo
     /// step.
     pub(super) fn accept_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.accept_quick_preview(cx) {
-            return true;
-        }
         self.agent_edit_here() && self.settle_agent_edit(true, Some(window), cx)
     }
 
-    /// Keep a jig's change under review, if there is one.
-    pub(super) fn accept_quick_preview(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.quick_previewing() {
-            return false;
-        }
-        self.run = None;
-        self.editor().clear_highlights(cx);
-        self.editor().set_readonly(false, cx);
-        cx.notify();
-        true
-    }
-
-    /// Drop the change on screen by undoing it, which leaves no trace in
-    /// the history beyond a redo step.
+    /// Drop the edit on screen by undoing it, which leaves no trace in the
+    /// history beyond a redo step.
     fn reject_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.quick_previewing() {
-            return self.agent_edit_here() && self.settle_agent_edit(false, Some(window), cx);
-        }
-        self.run = None;
-        self.editor().clear_highlights(cx);
-        self.editor().set_readonly(false, cx);
-        self.editor().undo(window, cx);
-        cx.notify();
-        true
+        self.agent_edit_here() && self.settle_agent_edit(false, Some(window), cx)
     }
 
     /// Enter accepts or allows; ⌘↩ allows the agent's request always.
@@ -644,66 +450,33 @@ impl Workspace {
     ) {
         self.next_run_id += 1;
         let id = self.next_run_id;
-        self.run = Some(CommandRun {
+        self.note = Some(Note {
             id,
             bubble: Bubble::Message(message),
             anchor: self.floating_anchor(cx),
-            snapshot: String::new(),
-            target: 0..0,
-            preview: None,
-            agent: None,
-            _task: Some(cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor().timer(ERROR_TIMEOUT).await;
+            _task: cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(NOTE_TIMEOUT).await;
                 this.update(cx, |this, cx| {
-                    if this.run.as_ref().is_some_and(|run| run.id == id) {
-                        this.run = None;
+                    if this.note.as_ref().is_some_and(|note| note.id == id) {
+                        this.note = None;
                         cx.notify();
                     }
                 })
                 .ok();
-            })),
+            }),
         });
         cx.notify();
     }
 
-    /// Show `error` in the run's bubble and dismiss it after a few seconds.
-    pub(super) fn fail(
-        &mut self,
-        id: u64,
-        error: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.run.as_ref().is_some_and(|run| run.id == id) {
-            return;
-        }
-        self.editor().clear_highlights(cx);
-        let Some(run) = self.run.as_mut() else { return };
-        run.bubble = Bubble::Error(shorten(&error));
-        run._task = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(ERROR_TIMEOUT).await;
-            this.update(cx, |this, cx| {
-                if this.run.as_ref().is_some_and(|run| run.id == id) {
-                    this.run = None;
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    /// Esc rejects a pending change or what the agent asks to do, cancels a
-    /// running jig or dismisses its bubble, goes back to an agent edit
-    /// waiting in another tab, stops the agent's turn, or closes the agent
-    /// conversation.
+    /// Esc rejects a pending edit or what the agent asks to do, dismisses a
+    /// note, goes back to an agent edit waiting in another tab, stops the
+    /// agent's turn, or closes the conversation.
     /// With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
             // Focus went back to the code (e.g. a click outside the form or
-            // command input), so the floating window can't hear Escape.
+            // the input), so the floating window can't hear Escape.
             self.palette = None;
-            self.new_command = None;
             self.planner.form = None;
             self.quick_open = None;
             self.find_in_files = None;
@@ -720,9 +493,7 @@ impl Workspace {
             || self.close_problem(cx)
         {
             cx.stop_propagation();
-        } else if self.run.take().is_some() {
-            // A jig's bubble, or the jig still running, goes first.
-            self.editor().clear_highlights(cx);
+        } else if self.note.take().is_some() {
             cx.stop_propagation();
             cx.notify();
         } else if self.code_takes_escape(cx) {
@@ -750,17 +521,22 @@ impl Workspace {
                 .is_some_and(|tab| tab.snippet.is_some())
     }
 
-    /// Any edit makes a shown reply stale.
+    /// Any edit makes a note stale.
     pub(super) fn on_buffer_changed(&mut self, cx: &mut Context<Self>) {
-        if self
-            .run
-            .as_ref()
-            .is_some_and(|run| !run.bubble.is_running() && run.preview.is_none())
-        {
-            self.run = None;
+        if self.note.take().is_some() {
             cx.notify();
         }
     }
+}
+
+/// The line containing `offset`, without its trailing newline.
+fn line_at(text: &str, offset: usize) -> Range<usize> {
+    let offset = offset.min(text.len());
+    let start = text[..offset].rfind('\n').map_or(0, |at| at + 1);
+    let end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |at| offset + at);
+    start..end
 }
 
 pub(super) fn shorten(error: &str) -> String {

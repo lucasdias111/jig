@@ -12,8 +12,8 @@ use crate::config::{Config, ProviderKind, split_model};
 /// A major provider Settings offers to connect.
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderTemplate {
-    /// Words in the names of its small, fast models, best first: what Jig
-    /// mode starts on when this is the first provider connected.
+    /// Words in the names of its small, fast models, best first: what the
+    /// agent starts on when this is the first provider connected.
     pub fast: &'static [&'static str],
     pub label: &'static str,
     /// The provider's name in `config.toml`, and in `provider/model`.
@@ -44,7 +44,7 @@ const fn template(
 }
 
 impl ProviderTemplate {
-    /// The model Jig mode starts on, from the ones it offers: the first
+    /// The model the agent starts on, from the ones it offers: the first
     /// with the best of its `fast` words, else the first.
     pub fn suggested_model(&self, models: &[String]) -> Option<String> {
         self.fast
@@ -254,27 +254,15 @@ impl ConfigFile {
         Ok(())
     }
 
-    /// Set the model quick commands use, as `provider/model`.
-    pub fn set_quick(&mut self, id: &str) -> Result<()> {
+    /// Set the model the agent uses, as `provider/model`.
+    pub fn set_agent(&mut self, id: &str) -> Result<()> {
         self.check_model(id)?;
-        self.doc["quick"] = value(id);
-        // An older file's way of saying it would only confuse.
-        self.doc.remove("default");
-        Ok(())
-    }
-
-    /// Set the model agent commands use; `None` follows quick commands.
-    pub fn set_agent(&mut self, id: Option<&str>) -> Result<()> {
-        match id {
-            Some(id) => {
-                self.check_model(id)?;
-                self.doc["agent"] = value(id);
-            }
-            None => {
-                self.doc.remove("agent");
-            }
+        self.doc["agent"] = value(id);
+        // Older files' ways of saying it, and Jig mode's retired model,
+        // would only confuse.
+        for retired in ["agent_model", "quick", "default"] {
+            self.doc.remove(retired);
         }
-        self.doc.remove("agent_model");
         Ok(())
     }
 
@@ -285,7 +273,7 @@ impl ConfigFile {
         Ok(())
     }
 
-    /// Remove a provider. A lane that used it is left without a model, so
+    /// Remove a provider. An agent that used it is left without a model, so
     /// Settings asks for another.
     pub fn remove(&mut self, name: &str) -> Result<()> {
         let providers = self.providers()?;
@@ -295,18 +283,13 @@ impl ConfigFile {
             .with_context(|| format!("There's no provider called \"{name}\"."))?;
         providers.remove(index);
         let prefix = format!("{name}/");
-        for lane in ["quick", "agent"] {
-            if self
-                .doc
-                .get(lane)
-                .and_then(|item| item.as_str())
-                .is_some_and(|id| id.starts_with(&prefix))
-            {
-                self.doc.remove(lane);
-            }
-        }
-        if self.doc.get("default").and_then(|item| item.as_str()) == Some(name) {
-            self.doc.remove("default");
+        if self
+            .doc
+            .get("agent")
+            .and_then(|item| item.as_str())
+            .is_some_and(|id| id.starts_with(&prefix))
+        {
+            self.doc.remove("agent");
         }
         Ok(())
     }
@@ -355,9 +338,11 @@ mod tests {
     fn edits_keep_the_users_comments() {
         let (_dir, path, mut file) = open_temp();
         connect(&mut file, "anthropic");
-        file.set_quick("anthropic/claude-haiku-4-5").unwrap();
+        file.set_agent("anthropic/claude-haiku-4-5").unwrap();
         let config = file.save().unwrap();
-        assert_eq!(config.quick().unwrap().model, "claude-haiku-4-5");
+        assert!(
+            matches!(config.agent().unwrap(), AgentModel::Jig { model, .. } if model == "claude-haiku-4-5")
+        );
         assert!(
             std::fs::read_to_string(&path)
                 .unwrap()
@@ -383,48 +368,45 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_can_differ_or_follow() {
-        let (_dir, _path, mut file) = open_temp();
+    fn picking_the_agents_model_drops_the_retired_ones() {
+        let (_dir, path, mut file) = open_temp();
         connect(&mut file, "anthropic");
-        file.set_quick("anthropic/claude-haiku-4-5").unwrap();
-        file.set_agent(Some("anthropic/claude-sonnet-5-5")).unwrap();
-        let config = file.save().unwrap();
-        assert!(
-            matches!(config.agent().unwrap(), AgentModel::Jig { model, .. } if model == "claude-sonnet-5-5")
-        );
-
-        file.set_agent(None).unwrap();
-        let config = file.save().unwrap();
-        assert!(
-            matches!(config.agent().unwrap(), AgentModel::Jig { model, .. } if model == "claude-haiku-4-5")
-        );
-        assert!(file.set_quick("groq/llama").is_err(), "not connected");
+        std::fs::write(
+            &path,
+            format!("quick = \"anthropic/claude-haiku-4-5\"\n{}", file.doc),
+        )
+        .unwrap();
+        let mut file = ConfigFile::open(&path).unwrap();
+        file.set_agent("anthropic/claude-sonnet-5-5").unwrap();
+        file.save().unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("quick"), "{saved}");
+        assert!(file.set_agent("groq/llama").is_err(), "not connected");
     }
 
     #[test]
-    fn removing_a_provider_clears_the_lanes_using_it() {
+    fn removing_a_provider_clears_the_agents_model_if_it_used_it() {
         let (_dir, _path, mut file) = open_temp();
         connect(&mut file, "anthropic");
         connect(&mut file, "groq");
-        file.set_quick("groq/llama").unwrap();
-        file.set_agent(Some("anthropic/claude-sonnet-5-5")).unwrap();
+        file.set_agent("anthropic/claude-sonnet-5-5").unwrap();
         file.remove("groq").unwrap();
         let config = file.save().unwrap();
-        assert!(config.quick.is_none());
-        assert!(config.quick().is_err());
         assert!(config.agent.is_some(), "the agent didn't use it");
 
         file.remove("anthropic").unwrap();
-        assert!(file.save().unwrap().providers.is_empty());
+        let config = file.save().unwrap();
+        assert!(config.agent.is_none());
+        assert!(config.providers.is_empty());
     }
 
     #[test]
     fn a_broken_file_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "quick = 3\n").unwrap();
+        std::fs::write(&path, "agent = 3\n").unwrap();
         assert!(ConfigFile::open(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "quick = 3\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "agent = 3\n");
     }
 
     #[test]

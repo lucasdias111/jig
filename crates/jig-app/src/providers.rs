@@ -1,17 +1,16 @@
 //! The AI providers (`config.toml`), their saved keys and the models they
-//! offer, as the app sees them. Settings connects providers and picks each
-//! lane's model through here; every workspace observes [`Providers`], so a
-//! change applies to the next command.
+//! offer, as the app sees them. Settings connects providers and picks the
+//! agent's model through here; every workspace observes [`Providers`], so a
+//! change applies to the next conversation.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::{App, BorrowAppContext as _, Global, Task};
 use jig_ai::agent::opencode;
 use jig_ai::{
-    AgentModel, Config, ConfigFile, KeySource, KeyStore, Provider, ProviderConfig, ProviderTemplate,
+    AgentModel, Config, ConfigFile, KeySource, KeyStore, ProviderConfig, ProviderTemplate,
 };
 
 /// How long typing in a key field waits before asking for models, so a
@@ -72,7 +71,7 @@ pub fn reload(cx: &mut App) {
     }
 }
 
-/// The providers and lanes, or why the file couldn't be read.
+/// The providers and the agent's model, or why the file couldn't be read.
 pub fn config(cx: &App) -> Result<Config, String> {
     match cx.try_global::<Providers>() {
         Some(providers) => providers.config.clone(),
@@ -98,29 +97,6 @@ pub fn is_ready(provider: &ProviderConfig, cx: &App) -> bool {
 /// The models `provider` offers, once asked.
 pub fn models(provider: &str, cx: &App) -> Option<ModelList> {
     cx.try_global::<Providers>()?.models.get(provider).cloned()
-}
-
-/// The provider quick commands call, with its model.
-pub fn quick(cx: &App) -> Result<ProviderConfig, String> {
-    config(cx)?.quick().map_err(|error| format!("{error:#}"))
-}
-
-/// The quick model, ready to call.
-pub fn build(cx: &App) -> Result<Arc<dyn Provider>, String> {
-    let provider = quick(cx)?;
-    provider
-        .build_with(api_key(&provider, cx).map(|(key, _)| key))
-        .map_err(|error| format!("{error:#}"))
-}
-
-/// `provider/model`, ready to call, e.g. a model picked in ⌘K for a run.
-pub fn build_model(id: &str, cx: &App) -> Result<Arc<dyn Provider>, String> {
-    let provider = config(cx)?
-        .resolve(id)
-        .map_err(|error| format!("{error:#}"))?;
-    provider
-        .build_with(api_key(&provider, cx).map(|(key, _)| key))
-        .map_err(|error| format!("{error:#}"))
 }
 
 /// Every model the connected providers offer, as `provider/model` and a
@@ -204,13 +180,8 @@ pub fn edit(
     Ok(())
 }
 
-/// Set the quick model, as `provider/model`.
-pub fn set_quick(id: &str, cx: &mut App) -> Result<(), String> {
-    edit(cx, |file| file.set_quick(id))
-}
-
-/// Set the agent model; `None` follows quick commands.
-pub fn set_agent(id: Option<&str>, cx: &mut App) -> Result<(), String> {
+/// Set the agent's model, as `provider/model`.
+pub fn set_agent(id: &str, cx: &mut App) -> Result<(), String> {
     edit(cx, |file| file.set_agent(id))
 }
 
@@ -251,7 +222,7 @@ fn save_key(provider: &str, key: &str, cx: &mut App) -> Result<(), String> {
         store.set(provider, key).map(drop)
     };
     result.map_err(|error| format!("{error:#}"))?;
-    // Nothing in the file changed, but the quick model must be built again.
+    // Nothing in the file changed, but the agent must be set up again.
     cx.update_global::<Providers, _>(|_, _| {});
     Ok(())
 }
@@ -270,14 +241,14 @@ pub fn load_all_models(missing_only: bool, cx: &mut App) {
     }
 }
 
-/// Jig ships with no provider, so the first one connected starts Jig mode
-/// (and the agent, which follows it) on one of its fast models, once it
-/// has listed them. Never over a model already picked.
+/// Jig ships with no provider, so the first one connected starts the agent
+/// on one of its fast models, once it has listed them. Never over a model
+/// already picked.
 fn start_on_a_model(name: &str, cx: &mut App) {
     let Ok(config) = config(cx) else {
         return;
     };
-    if config.quick_model().is_some() {
+    if config.agent.as_ref().is_some_and(|id| !id.is_empty()) {
         return;
     }
     let Some(ModelList::Loaded(models)) = models(name, cx) else {
@@ -288,7 +259,7 @@ fn start_on_a_model(name: &str, cx: &mut App) {
         None => models.first().cloned(),
     };
     if let Some(model) = model {
-        let _ = set_quick(&format!("{name}/{model}"), cx);
+        let _ = set_agent(&format!("{name}/{model}"), cx);
     }
 }
 
@@ -376,16 +347,21 @@ mod tests {
             );
             assert_eq!(models("openai", cx), Some(ModelList::Loading));
 
-            set_quick("openai/gpt-test", cx).unwrap();
-            assert_eq!(quick(cx).unwrap().model, "gpt-test");
-            assert!(build(cx).is_ok());
+            set_agent("openai/gpt-test", cx).unwrap();
+            assert_eq!(
+                agent_target_for(None, cx).unwrap().model,
+                "jig-openai/gpt-test"
+            );
         });
         let file = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-        assert!(file.contains("quick = \"openai/gpt-test\""));
+        assert!(file.contains("agent = \"openai/gpt-test\""));
 
         cx.update(|cx| {
             disconnect("openai", cx).unwrap();
-            assert!(quick(cx).is_err(), "its lane needs a new model");
+            assert!(
+                agent_target_for(None, cx).is_err(),
+                "the agent needs a new model"
+            );
             assert_eq!(models("openai", cx), None);
         });
         let keys = std::fs::read_to_string(dir.path().join("keys.toml")).unwrap();
@@ -393,7 +369,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_first_provider_starts_jig_mode_on_a_fast_model(cx: &mut TestAppContext) {
+    fn the_first_provider_starts_the_agent_on_a_fast_model(cx: &mut TestAppContext) {
         let _dir = init_temp(cx);
         cx.update(|cx| {
             assert!(
@@ -413,14 +389,14 @@ mod tests {
             });
             start_on_a_model("anthropic", cx);
             assert_eq!(
-                config(cx).unwrap().quick_model().as_deref(),
+                config(cx).unwrap().agent.as_deref(),
                 Some("anthropic/claude-haiku-5-5")
             );
             // A model already picked stays.
-            set_quick("anthropic/claude-opus-5-5", cx).unwrap();
+            set_agent("anthropic/claude-opus-5-5", cx).unwrap();
             start_on_a_model("anthropic", cx);
             assert_eq!(
-                config(cx).unwrap().quick_model().as_deref(),
+                config(cx).unwrap().agent.as_deref(),
                 Some("anthropic/claude-opus-5-5")
             );
         });
@@ -431,13 +407,13 @@ mod tests {
         let _dir = init_temp(cx);
         cx.update(|cx| {
             connect(template_named("ollama").unwrap(), None, cx).unwrap();
-            set_quick("ollama/qwen3:8b", cx).unwrap();
+            set_agent("ollama/qwen3:8b", cx).unwrap();
             let target = agent_target_for(None, cx).unwrap();
             assert_eq!(target.model, "jig-ollama/qwen3:8b");
             assert!(target.config.unwrap()["provider"]["jig-ollama"].is_object());
 
             connect(template_named("opencode-go").unwrap(), None, cx).unwrap();
-            set_agent(Some("opencode-go/glm-5.3"), cx).unwrap();
+            set_agent("opencode-go/glm-5.3", cx).unwrap();
             if std::env::var("OPENCODE_API_KEY").is_err() {
                 assert!(
                     agent_target_for(None, cx)

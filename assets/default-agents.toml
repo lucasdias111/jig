@@ -1,4 +1,4 @@
-# The agents Agent mode can run, chosen in Settings > Agent mode. Yours go in
+# The agents Jig can run, chosen in Settings > Agent. Yours go in
 # ~/.config/jig/agents.toml; one with the same key replaces a built-in.
 #
 # key      its name in settings.toml ([agent] use = "...")

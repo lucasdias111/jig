@@ -296,12 +296,12 @@ pub(super) fn editor_sections() -> Vec<Section> {
             .row(
                 editor_switch(
                     "selection-button",
-                    "Jig button on selections",
+                    "Agent button on selections",
                     |e| e.selection_button,
                     |e, on| e.selection_button = on,
                 )
                 .description("A button beside selected code that opens ⌘K.")
-                .keywords(["sparkle", "selection", "jig"]),
+                .keywords(["sparkle", "selection", "agent"]),
             ),
         Section::titled("On Save")
             .footer("Formatting on save is set per language, under Languages.")

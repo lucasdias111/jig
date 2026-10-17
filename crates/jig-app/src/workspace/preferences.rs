@@ -5,17 +5,10 @@ use std::path::PathBuf;
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::*;
-use jig_commands::Preset;
 use jig_editor::EditorHandle as _;
 
 use super::{EditModelConfig, Workspace};
-use crate::settings::{self, EditorSettings, Settings};
-
-/// `presets` without the ones hidden in Settings.
-pub(super) fn visible_presets(mut presets: Vec<Preset>, settings: &Settings) -> Vec<Preset> {
-    presets.retain(|preset| !settings.commands.is_hidden(&preset.name));
-    presets
-}
+use crate::settings::{self, EditorSettings};
 
 fn apply_editor(
     state: &Entity<EditorState>,
@@ -53,9 +46,6 @@ impl Workspace {
             }
             self.reopen_in_servers(true, cx);
         }
-        if new.commands != old.commands {
-            self.reload_presets(window, cx);
-        }
         // New defaults in Settings take over from ⌘K's pick.
         if new.agent.using != old.agent.using || new.agent.models != old.agent.models {
             self.agent.pick = None;
@@ -67,15 +57,13 @@ impl Workspace {
     }
 
     pub(super) fn reload_provider(&mut self, cx: &App) {
-        self.provider = crate::providers::build(cx);
-        // New default models in Settings take over from ⌘K's picks; the
+        // A new default model in Settings takes over from ⌘K's pick; the
         // providers also change as their model lists load, which doesn't.
         let defaults = crate::providers::config(cx)
             .ok()
-            .map(|config| (config.quick_model(), config.agent.clone()));
+            .map(|config| config.agent.clone());
         if self.model_defaults.as_ref() != Some(&defaults) {
             if self.model_defaults.is_some() {
-                self.jig_pick = None;
                 self.agent.pick = None;
             }
             self.model_defaults = Some(defaults);

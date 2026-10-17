@@ -39,9 +39,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.new_command.is_some() {
-            return;
-        }
         if let Some(open) = &self.find_in_files {
             // Already open: back to its search field.
             let view = open.view.clone();

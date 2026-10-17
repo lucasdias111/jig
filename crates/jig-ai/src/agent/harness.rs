@@ -1,4 +1,4 @@
-//! The agent behind Agent mode, whichever it is: OpenCode through Jig's
+//! The agent, whichever it is: OpenCode through Jig's
 //! own client ([`opencode`]), or any agent that speaks the Agent Client
 //! Protocol ([`acp`]). The UI only sees these two types.
 

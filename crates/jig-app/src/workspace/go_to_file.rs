@@ -25,7 +25,7 @@ pub(super) struct FileIndex {
 
 impl Workspace {
     pub(super) fn go_to_file(&mut self, _: &GoToFile, window: &mut Window, cx: &mut Context<Self>) {
-        if self.quick_open.is_some() || self.new_command.is_some() {
+        if self.quick_open.is_some() {
             return;
         }
         let Some(root) = self.project_root(cx) else {

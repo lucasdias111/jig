@@ -1,4 +1,4 @@
-//! Agent mode over the Agent Client Protocol: any agent that speaks ACP
+//! The agent over the Agent Client Protocol: any agent that speaks ACP
 //! (Claude Code and Codex through their adapters, Gemini CLI, OpenCode,
 //! Goose, …) run as a child process and spoken to in JSON-RPC over stdio.
 //!

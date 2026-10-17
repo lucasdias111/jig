@@ -206,14 +206,14 @@ impl Workspace {
             .update(cx, |hover, cx| hover.unpin(cx))
     }
 
-    /// The problems on the lines `target` covers in `text`, for jigs that
+    /// The problems on the lines `target` covers in `text`, for fixes that
     /// fix them.
     pub(super) fn problems_on_lines(
         &self,
         text: &str,
         target: Range<usize>,
         cx: &App,
-    ) -> Vec<jig_ai::prompt::Diagnostic> {
+    ) -> Vec<jig_ai::agent::Diagnostic> {
         on_lines(&self.problem_entries(cx), text, target)
     }
 
@@ -281,7 +281,7 @@ fn on_lines(
     entries: &[DiagnosticEntry],
     text: &str,
     target: Range<usize>,
-) -> Vec<jig_ai::prompt::Diagnostic> {
+) -> Vec<jig_ai::agent::Diagnostic> {
     let start = text[..target.start].rfind('\n').map_or(0, |ix| ix + 1);
     // A selection of whole lines ends after the last one's newline.
     let last = if target.end > target.start && text[..target.end].ends_with('\n') {
@@ -303,7 +303,7 @@ fn on_lines(
             if !origin.is_empty() {
                 message.push_str(&format!(" ({})", origin.join(" ")));
             }
-            jig_ai::prompt::Diagnostic {
+            jig_ai::agent::Diagnostic {
                 line: text[..at].matches('\n').count() + 1,
                 severity: severity_name(e.severity).into(),
                 message,

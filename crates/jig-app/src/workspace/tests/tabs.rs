@@ -230,24 +230,6 @@ fn a_blank_tab_is_reused(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn switching_tabs_keeps_a_change_under_review(cx: &mut TestAppContext) {
-    let (dir, window, workspace) = preview_docs(cx);
-    std::fs::write(dir.path().join("b.rs"), "").unwrap();
-    open_file(cx, window, &workspace, &dir.path().join("b.rs"));
-    assert!(bubble(cx, &workspace).is_none());
-    step(cx, window, |window, cx| {
-        window.render_frame(cx);
-        window.press("secondary-1", cx);
-    });
-    assert_eq!(text(cx, &workspace), DOCUMENTED);
-    cx.update(|cx| {
-        let this = workspace.read(cx);
-        assert!(this.editor().state().read(cx).is_editable());
-        assert!(this.editor().highlighted_ranges(cx).is_empty());
-    });
-}
-
-#[gpui_kit::test]
 fn same_named_files_show_their_folder(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     for folder in ["app", "core"] {
@@ -265,21 +247,10 @@ fn same_named_files_show_their_folder(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn settings_changes_reach_open_tabs_and_commands(cx: &mut TestAppContext) {
+fn settings_changes_reach_open_tabs(cx: &mut TestAppContext) {
     let (dir, window, workspace) = three_files(cx);
-    assert!(preset_names(cx, &workspace).contains(&"Add docs".to_string()));
-
-    cx.update(|cx| {
-        crate::settings::update(cx, |s| {
-            s.editor.soft_wrap = false;
-            s.commands.set_hidden("add docs", true);
-        })
-    });
+    cx.update(|cx| crate::settings::update(cx, |s| s.editor.soft_wrap = false));
     cx.run_until_parked();
-    assert!(
-        !preset_names(cx, &workspace).contains(&"Add docs".to_string()),
-        "hidden commands leave ⌘K"
-    );
     // Tabs opened later start with the new settings too.
     open_file(cx, window, &workspace, &dir.path().join("b.rs"));
     cx.update(|cx| {
@@ -287,10 +258,6 @@ fn settings_changes_reach_open_tabs_and_commands(cx: &mut TestAppContext) {
         assert!(!this.settings.editor.soft_wrap);
         assert_eq!(this.tabs.len(), 2);
     });
-
-    cx.update(|cx| crate::settings::update(cx, |s| s.commands.hidden.clear()));
-    cx.run_until_parked();
-    assert!(preset_names(cx, &workspace).contains(&"Add docs".to_string()));
 }
 
 #[gpui_kit::test]

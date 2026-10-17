@@ -1,5 +1,5 @@
-//! A small button just right of the selection that opens the command input,
-//! so commands are in reach where the eyes already are, without knowing ⌘K.
+//! A small button just right of the selection that opens the agent input,
+//! so the agent is in reach where the eyes already are, without knowing ⌘K.
 
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon};
@@ -35,12 +35,14 @@ impl SelectionButton {
 
     /// Where the button goes, or `None` when it shouldn't show: turned off
     /// in Settings, nothing selected, the editor not focused, the selection
-    /// off screen, or a command, preview or panel already on screen.
+    /// off screen, or a note, an edit under review or a panel already on
+    /// screen.
     fn position(workspace: &Workspace, window: &Window, cx: &App) -> Option<Point<Pixels>> {
         if !crate::settings::get(cx).editor.selection_button
             || workspace.home
             || workspace.modal_open()
-            || workspace.run.is_some()
+            || workspace.note.is_some()
+            || workspace.previewing()
         {
             return None;
         }
@@ -73,7 +75,7 @@ impl Render for SelectionButton {
         };
 
         let theme = cx.theme();
-        let accent = jig_commands::surface::lane_accent(false, cx);
+        let accent = jig_commands::surface::agent_accent(cx);
         let button = div()
             .id("selection-command")
             .debug_selector(|| "selection-command".into())
@@ -89,15 +91,17 @@ impl Render for SelectionButton {
             .shadow_sm()
             .cursor_pointer()
             .hover(|this| this.bg(accent.opacity(0.14)))
-            .tooltip(|window, cx| Tooltip::new("Jigs for the selection").build(window, cx))
+            .tooltip(|window, cx| {
+                Tooltip::new("Ask the agent about the selection").build(window, cx)
+            })
             .child(
                 Icon::default()
-                    .data(super::commands::COMMAND_ICON)
+                    .data(super::commands::SPARKLE_ICON)
                     .size(px(13.))
                     .text_color(accent),
             )
             // Keep the press from reaching the code, which would collapse the
-            // selection the commands are for.
+            // selection the agent is asked about.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| {
                 if let Some(workspace) = this.workspace.upgrade() {

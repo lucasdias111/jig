@@ -265,23 +265,9 @@ fn task_links_open_the_code_and_go_back_and_forth(cx: &mut TestAppContext) {
     );
 }
 
-/// Records each request, and answers with the file unchanged but for a
-/// comment.
-struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
-
-impl Provider for Recorder {
-    fn complete(&self, _: &str, user: &str) -> anyhow::Result<String> {
-        self.0.lock().unwrap().push(user.to_string());
-        Ok(r#"{"replace": "// a\nuse crate::b;\n\nfn run() {\n    b::go();\n}\n", "message": "Done."}"#.into())
-    }
-}
-
 #[gpui_kit::test]
-fn a_todo_runs_with_jig_with_its_whole_task(cx: &mut TestAppContext) {
+fn a_todo_goes_to_the_agent_with_its_whole_task(cx: &mut TestAppContext) {
     let (dir, window, workspace) = project(cx);
-    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let provider = Recorder(asked.clone());
-    cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(Arc::new(provider))));
     jig_ai::tasks::create(
         dir.path(),
         "Tidy up",
@@ -297,37 +283,28 @@ fn a_todo_runs_with_jig_with_its_whole_task(cx: &mut TestAppContext) {
         workspace.update(cx, |this, cx| this.tasks_changed(window, cx))
     });
 
-    // The step links to a.rs, so Jig works there, on the whole file.
+    // The step links to a.rs, so the conversation is about that code.
     let view = planner.clone();
     step(cx, window, move |_, cx| {
-        view.update(cx, |planner, cx| {
-            planner.delegate_todo("tidy-up", 1, false, cx)
-        })
+        view.update(cx, |planner, cx| planner.delegate_todo("tidy-up", 1, cx))
     });
     cx.run_until_parked();
     assert_eq!(current_file(cx, &workspace), "a.rs");
-    let asked = asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1);
-    let user = &asked[0];
+    let sent = cx
+        .update(|cx| workspace.read(cx).agent_prompt())
+        .expect("a conversation");
+    assert!(sent.starts_with("Comment [`run`](src/a.rs#L3)"), "{sent}");
     assert!(
-        user.contains("Instruction: Comment [`run`](src/a.rs#L3)"),
-        "{user}"
+        sent.contains("<task>\n# Tidy up\n\nKeep it small."),
+        "{sent}"
     );
     assert!(
-        user.contains("<task>\n# Tidy up\n\nKeep it small."),
-        "{user}"
+        sent.contains("- [ ] Comment [`run`](src/a.rs#L3) ← this step"),
+        "{sent}"
     );
     assert!(
-        user.contains("- [ ] Comment [`run`](src/a.rs#L3) ← this step"),
-        "{user}"
-    );
-    assert!(
-        user.contains("<<<SELECTION>>>use crate::b;"),
-        "the whole file: {user}"
-    );
-    assert!(
-        cx.update(|cx| workspace.read(cx).previewing()),
-        "the change waits for review"
+        sent.contains("with line 3 selected"),
+        "the linked code: {sent}"
     );
 }
 
@@ -417,14 +394,13 @@ fn a_whole_task_goes_to_the_agent() {
         "tidy-up",
         "# Tidy up\n\nKeep it small.\n\n## Todo\n\n- [x] Rename things\n- [ ] Comment [`run`](src/a.rs#L3)\n",
     );
-    let invocation = crate::workspace::planner::implement_invocation(&task);
-    assert!(invocation.agent);
-    assert_eq!(invocation.name.as_deref(), Some("Tidy up"));
+    let ask = crate::workspace::planner::implement_ask(&task);
+    assert_eq!(ask.name.as_deref(), Some("Tidy up"));
     assert_eq!(
-        invocation.instruction,
+        ask.instruction,
         "Implement the task “Tidy up”: work through its open todos in order."
     );
-    let context = invocation.task.unwrap();
+    let context = ask.task.unwrap();
     assert!(context.starts_with("# Tidy up\n\nKeep it small."));
     assert!(context.ends_with("- [ ] Comment [`run`](src/a.rs#L3)\nTask id: tidy-up."));
     assert!(

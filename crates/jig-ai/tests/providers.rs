@@ -1,4 +1,4 @@
-//! Provider tests against a one-shot local HTTP server, so no network or
+//! Asking providers for their models, against a one-shot local HTTP server, so no network or
 //! API keys are needed.
 
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -6,13 +6,9 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 
-use jig_ai::config::AuthStyle;
-use jig_ai::{AnthropicProvider, OpenAiCompatProvider, PromptRequest, Provider};
-
 struct Recorded {
     request_line: String,
     headers: Vec<(String, String)>,
-    body: serde_json::Value,
 }
 
 impl Recorded {
@@ -69,7 +65,6 @@ fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Recorde
             tx.send(Recorded {
                 request_line: request_line.trim_end().to_string(),
                 headers,
-                body: serde_json::from_slice(&raw).unwrap_or_default(),
             })
             .unwrap();
         }
@@ -77,101 +72,11 @@ fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Recorde
     (url, rx)
 }
 
-fn request() -> PromptRequest {
-    PromptRequest {
-        task: None,
-        instruction: "Rename to b".into(),
-        language: "rust".into(),
-        file_name: Some("lib.rs".into()),
-        text: "fn a() {}\n".into(),
-        target: 0..9,
-        comment: None,
-        project_rules: None,
-        diagnostics: Vec::new(),
-        answer: false,
-        subject: None,
-    }
-}
-
-#[test]
-fn openai_compat_round_trip() {
-    let (url, rx) = serve_once(
-        200,
-        r#"{"choices":[{"message":{"role":"assistant","content":"{\"replace\":\"fn b() {}\",\"message\":\"Renamed.\"}"}}]}"#,
-    );
-    let provider =
-        OpenAiCompatProvider::new(&format!("{url}/v1/"), Some("k".into()), "glm", 1000, true)
-            .with_headers(vec![("x-opencode-session".into(), "jig-1".into())]);
-    let reply = jig_ai::run(&provider, &request()).unwrap();
-    assert_eq!(reply.replace, "fn b() {}");
-    assert_eq!(reply.message, "Renamed.");
-
-    let sent = rx.recv().unwrap();
-    assert_eq!(sent.request_line, "POST /v1/chat/completions HTTP/1.1");
-    assert_eq!(sent.header("authorization"), Some("Bearer k"));
-    assert_eq!(sent.header("x-opencode-session"), Some("jig-1"));
-    assert!(sent.header("user-agent").unwrap().starts_with("jig/"));
-    assert_eq!(sent.body["model"], "glm");
-    assert_eq!(sent.body["response_format"]["type"], "json_object");
-    assert_eq!(
-        sent.body["reasoning_effort"], "none",
-        "no thinking by default"
-    );
-    assert_eq!(sent.body["messages"][0]["role"], "system");
-    assert!(
-        sent.body["messages"][1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("<<<SELECTION>>>fn a() {}<<<END>>>")
-    );
-}
-
-#[test]
-fn rejected_fields_are_dropped_and_stay_dropped() {
-    let ok = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
-    let (url, rx) = serve(vec![
-        (
-            400,
-            r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}"#,
-        ),
-        (
-            400,
-            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#,
-        ),
-        (200, ok),
-        (200, ok),
-    ]);
-    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, true);
-    assert_eq!(provider.complete("s", "u").unwrap(), "hi");
-    let first = rx.recv().unwrap().body;
-    assert_eq!(first["max_tokens"], 1000);
-    let second = rx.recv().unwrap().body;
-    assert!(second.get("max_tokens").is_none());
-    assert_eq!(second["max_completion_tokens"], 1000);
-    let third = rx.recv().unwrap().body;
-    assert!(third.get("reasoning_effort").is_none());
-    assert_eq!(third["response_format"]["type"], "json_object");
-
-    // The next command doesn't hit the same rejections again.
-    assert_eq!(provider.complete("s", "u").unwrap(), "hi");
-    let fourth = rx.recv().unwrap().body;
-    assert!(fourth.get("reasoning_effort").is_none());
-    assert_eq!(fourth["max_completion_tokens"], 1000);
-}
-
-#[test]
-fn an_unnamed_rejection_is_not_retried() {
-    let (url, _rx) = serve_once(400, r#"{"error":{"message":"Bad request"}}"#);
-    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, true);
-    let error = provider.complete("s", "u").unwrap_err();
-    assert_eq!(error.to_string(), "400 Bad Request: Bad request");
-}
-
 #[test]
 fn models_are_listed_with_the_providers_auth() {
     let (url, rx) = serve_once(200, r#"{"data":[{"id":"claude-b"},{"id":"claude-a"}]}"#);
     let config = jig_ai::Config::parse(&format!(
-        "default = \"c\"\n[[provider]]\nname = \"c\"\nkind = \"anthropic\"\nbase_url = \"{url}/v1/\"\nmodel = \"\"\n"
+        "[[provider]]\nname = \"c\"\nkind = \"anthropic\"\nbase_url = \"{url}/v1/\"\nmodel = \"\"\n"
     ))
     .unwrap();
     let models = config.providers[0].list_models(Some("k")).unwrap();
@@ -182,57 +87,21 @@ fn models_are_listed_with_the_providers_auth() {
     assert_eq!(sent.header("anthropic-version"), Some("2023-06-01"));
 }
 
-#[test]
-fn openai_compat_without_key_or_json_mode() {
-    let (url, rx) = serve_once(200, r#"{"choices":[{"message":{"content":"hi"}}]}"#);
-    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, false);
-    assert_eq!(provider.complete("s", "u").unwrap(), "hi");
-    let sent = rx.recv().unwrap();
-    assert_eq!(sent.header("authorization"), None);
-    assert!(sent.body.get("response_format").is_none());
-}
-
-#[test]
-fn anthropic_round_trip_with_api_key() {
-    let (url, rx) = serve_once(
-        200,
-        r#"{"content":[{"type":"text","text":"{\"replace\":\"fn b() {}\","},{"type":"text","text":"\"message\":\"Renamed.\"}"}]}"#,
-    );
-    let provider = AnthropicProvider::new(&url, "k".into(), "claude", 1000, AuthStyle::ApiKey);
-    let reply = jig_ai::run(&provider, &request()).unwrap();
-    assert_eq!(reply.replace, "fn b() {}");
-
-    let sent = rx.recv().unwrap();
-    assert_eq!(sent.request_line, "POST /messages HTTP/1.1");
-    assert_eq!(sent.header("x-api-key"), Some("k"));
-    assert_eq!(sent.header("anthropic-version"), Some("2023-06-01"));
-    assert!(sent.body["system"].as_str().unwrap().contains("Jig"));
-    assert_eq!(
-        sent.body["thinking"]["type"], "disabled",
-        "no thinking by default"
-    );
-    assert_eq!(
-        sent.body["tool_choice"]["name"], "apply_edit",
-        "the reply is a forced tool call"
-    );
-    assert_eq!(sent.body["messages"][0]["role"], "user");
-}
-
-#[test]
-fn anthropic_bearer_auth() {
-    let (url, rx) = serve_once(200, r#"{"content":[{"type":"text","text":"x"}]}"#);
-    let provider = AnthropicProvider::new(&url, "k".into(), "qwen", 1000, AuthStyle::Bearer);
-    provider.complete("s", "u").unwrap();
-    let sent = rx.recv().unwrap();
-    assert_eq!(sent.header("authorization"), Some("Bearer k"));
-    assert_eq!(sent.header("x-api-key"), None);
+fn provider(url: &str) -> jig_ai::ProviderConfig {
+    let config = jig_ai::Config::parse(&format!(
+        "[[provider]]\nname = \"o\"\nkind = \"openai\"\nbase_url = \"{url}\"\n"
+    ))
+    .unwrap();
+    config.providers[0].clone()
 }
 
 #[test]
 fn http_error_carries_provider_message() {
     let (url, _rx) = serve_once(401, r#"{"error":{"message":"invalid api key"}}"#);
-    let provider = OpenAiCompatProvider::new(&url, Some("bad".into()), "m", 1000, true);
-    let error = provider.complete("s", "u").unwrap_err().to_string();
+    let error = provider(&url)
+        .list_models(Some("bad"))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("401"), "{error}");
     assert!(error.contains("invalid api key"), "{error}");
 }
@@ -242,58 +111,6 @@ fn unreachable_server_is_an_error() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let provider = OpenAiCompatProvider::new(&url, None, "m", 1000, true);
-    assert!(
-        provider
-            .complete("s", "u")
-            .unwrap_err()
-            .to_string()
-            .contains("Couldn't reach")
-    );
-}
-
-#[test]
-fn thinking_can_be_turned_back_on() {
-    let (url, rx) = serve_once(200, r#"{"content": [{"type": "text", "text": "ok"}]}"#);
-    let provider =
-        AnthropicProvider::new(&url, "k".into(), "m", 100, AuthStyle::ApiKey).with_thinking(true);
-    provider.complete("s", "u").unwrap();
-    assert!(rx.recv().unwrap().body.get("thinking").is_none());
-}
-
-#[test]
-fn anthropic_reply_comes_from_the_forced_tool_call() {
-    let (url, _rx) = serve_once(
-        200,
-        r#"{"content": [{"type": "tool_use", "id": "t1", "name": "apply_edit", "input": {"replace": "x", "message": "Done."}}]}"#,
-    );
-    let provider = AnthropicProvider::new(&url, "k".into(), "m", 100, AuthStyle::ApiKey);
-    let raw = provider.complete("s", "u").unwrap();
-    let reply = jig_ai::response::parse(&raw, "y").unwrap();
-    assert_eq!(
-        (reply.replace.as_str(), reply.message.as_str()),
-        ("x", "Done.")
-    );
-}
-
-#[test]
-fn an_answer_goes_through_a_tool_with_no_code_in_it() {
-    let (url, rx) = serve_once(
-        200,
-        r#"{"content":[{"type":"tool_use","name":"answer","input":{"message":"Defines a."}}]}"#,
-    );
-    let provider = AnthropicProvider::new(&url, "k".into(), "claude", 1000, AuthStyle::ApiKey);
-    let question = PromptRequest {
-        instruction: "Explain".into(),
-        answer: true,
-        ..request()
-    };
-    let reply = jig_ai::run(&provider, &question).unwrap();
-    assert_eq!(reply.message, "Defines a.");
-    assert_eq!(reply.replace, "fn a() {}", "the code stays as it was");
-
-    let sent = rx.recv().unwrap();
-    assert_eq!(sent.body["tool_choice"]["name"], "answer");
-    assert_eq!(sent.body["tools"][0]["name"], "answer");
-    assert!(sent.body["tools"][0]["input_schema"]["properties"]["replace"].is_null());
+    let error = provider(&url).list_models(None).unwrap_err().to_string();
+    assert!(error.contains("Couldn't reach"), "{error}");
 }

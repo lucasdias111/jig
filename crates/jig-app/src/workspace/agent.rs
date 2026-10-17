@@ -1,11 +1,10 @@
-//! Agent mode: the request goes to a coding agent (OpenCode), which may
-//! read and edit the whole project. Every edit it wants to make opens in the
+//! The agent: the request goes to a coding agent (OpenCode by default),
+//! which may read and edit the whole project. Every edit it wants to make opens in the
 //! editor as a normal preview, in its file's tab, and only goes through when
 //! the user accepts it; shell commands, the web and subagents wait for a
 //! go-ahead too. The run is a conversation: once the agent answers, the
 //! user can reply, and the agent carries on in the same session. Earlier
-//! conversations are listed in the palette's Agent mode and can be picked
-//! up again.
+//! conversations are listed in the ⌘K input and can be picked up again.
 
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -17,7 +16,6 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jig_ai::PromptRequest;
 use jig_ai::agent::acp::SignInNeeded;
 use jig_ai::agent::harness::Session;
 use jig_ai::agent::{
@@ -33,7 +31,7 @@ use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
 
-/// Why Agent mode can't start.
+/// Why a conversation can't start.
 const NO_PROJECT: &str =
     "Open the project's folder, or save the file, so the agent knows which project it's in.";
 
@@ -82,13 +80,13 @@ enum Request {
     Question(QuestionRequest),
 }
 
-/// What the window keeps for Agent mode from one conversation to the next.
+/// What the window keeps for the agent from one conversation to the next.
 #[derive(Default)]
 pub(super) struct AgentState {
     /// The agent and model picked in ⌘K for new conversations; `None`
     /// follows the settings.
     pub(super) pick: Option<crate::agent::Pick>,
-    /// What the palette's Agent mode lists, from the last time it asked.
+    /// What the ⌘K input lists, from the last time it asked.
     catalog: Option<AgentCatalog>,
     /// The docked conversation's width, when the last one was left docked:
     /// the next opens the same way.
@@ -234,7 +232,7 @@ impl Workspace {
         &mut self,
         id: u64,
         name: Option<String>,
-        request: PromptRequest,
+        request: jig_ai::agent::Prompt,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -243,17 +241,14 @@ impl Workspace {
             return self.show_note(NO_PROJECT.into(), window, cx);
         };
         // What the user asked, as the conversation's first line.
-        let asked = match (&name, &request.comment) {
-            (Some(name), Some(note)) => format!("{name}: {note}"),
-            (Some(name), None) => name.clone(),
-            (None, Some(note)) => format!("{}: {note}", request.instruction.trim()),
-            (None, None) => request.instruction.trim().to_string(),
-        };
+        let asked = name
+            .clone()
+            .unwrap_or_else(|| request.instruction.trim().to_string());
         let agent = self.new_agent_run(name, asked, directory, window, cx);
         let run = self
             .chat
             .as_mut()
-            .expect("run_command set up the conversation");
+            .expect("start_conversation set up the conversation");
         let target = run.target.clone();
         run.agent = Some(agent);
         let anchor = self.agent_anchor(target, window, cx);
@@ -366,7 +361,6 @@ impl Workspace {
             id,
             bubble: Bubble::Message(String::new()),
             anchor: self.floating_anchor(cx),
-            snapshot: String::new(),
             target: target.clone(),
             preview: None,
             agent: None,
@@ -395,8 +389,8 @@ impl Workspace {
         }
     }
 
-    /// ⌥⌘K, or the conversation's history button: the palette in Agent
-    /// mode, listing the earlier conversations.
+    /// ⌥⌘K, or the conversation's history button: the ⌘K input, which
+    /// lists the earlier conversations.
     pub(super) fn open_agent_conversations(
         &mut self,
         _: &OpenAgentConversations,
@@ -406,52 +400,12 @@ impl Workspace {
         if self.palette.is_none() {
             self.open_command(&OpenCommand, window, cx);
         }
-        let Some(palette) = self.palette.as_ref().map(|palette| palette.view.clone()) else {
-            return;
-        };
-        palette.update(cx, |palette, cx| palette.switch_to_agent(window, cx));
     }
 
-    /// What ⌘K's model chip offers: Jig mode's models, and each installed
-    /// agent with its models (OpenCode's from the providers, the others' as
-    /// they last said).
-    pub(super) fn model_menus(&self, cx: &App) -> (ModelMenu, ModelMenu) {
+    /// What ⌘K's model chip offers: each installed agent with its models
+    /// (OpenCode's from the providers, the others' as they last said).
+    pub(super) fn model_menu(&self, cx: &App) -> ModelMenu {
         let offered = crate::providers::offered_by_provider(cx);
-        let config = crate::providers::config(cx).ok();
-
-        // Jig mode: under each provider, its models.
-        let mut jig = ModelMenu {
-            choices: offered
-                .iter()
-                .map(|(id, provider, model)| ModelChoice {
-                    agent: None,
-                    group: provider.clone(),
-                    name: model.clone(),
-                    model: Some(id.clone()),
-                    label: format!("{provider} · {model}"),
-                })
-                .collect(),
-            current: None,
-        };
-        let in_use = self
-            .jig_pick
-            .clone()
-            .or_else(|| config.as_ref().and_then(|config| config.quick_model()));
-        if let Some(id) = in_use {
-            let (provider, model) = id.split_once('/').unwrap_or(("", &id));
-            let provider = jig_ai::template_named(provider)
-                .map_or(provider.to_string(), |template| template.label.to_string());
-            jig.current = Some(position_or_push(
-                &mut jig.choices,
-                None,
-                Some(&id),
-                &provider,
-                model,
-            ));
-        }
-
-        // Agent mode: under each agent, its models: OpenCode's from the
-        // providers, the others' as they last said.
         let picked = self.picked_agent(cx);
         let pick = self
             .agent
@@ -499,7 +453,7 @@ impl Workspace {
             &picked.name,
             pick.model.as_deref().unwrap_or("Default model"),
         ));
-        (jig, agent)
+        agent
     }
 
     /// The palette's lists again, as the providers' models arrive.
@@ -507,12 +461,12 @@ impl Workspace {
         let Some(palette) = self.palette.as_ref().map(|palette| palette.view.clone()) else {
             return;
         };
-        let (jig, agent) = self.model_menus(cx);
-        palette.update(cx, |palette, cx| palette.set_models(jig, agent, cx));
+        let menu = self.model_menu(cx);
+        palette.update(cx, |palette, cx| palette.set_models(menu, cx));
     }
 
-    /// ⌘K's chip picked `choice` for the window: Jig mode's model, or the
-    /// agent new conversations run.
+    /// ⌘K's chip picked `choice` for the window: the agent and model new
+    /// conversations run.
     pub(super) fn pick_model(
         &mut self,
         choice: ModelChoice,
@@ -520,19 +474,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match choice.agent {
-            None => self.jig_pick = choice.model,
-            Some(agent) => {
-                let pick = crate::agent::Pick {
-                    agent,
-                    model: choice.model,
-                };
-                // The settings' own choice needs no pick.
-                self.agent.pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
-                // Its conversations and commands, in place of the last agent's.
-                self.load_agent_catalog(Some(palette), window, cx);
-            }
-        }
+        let Some(agent) = choice.agent else {
+            return;
+        };
+        let pick = crate::agent::Pick {
+            agent,
+            model: choice.model,
+        };
+        // The settings' own choice needs no pick.
+        self.agent.pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
+        // Its conversations and commands, in place of the last agent's.
+        self.load_agent_catalog(Some(palette), window, cx);
         cx.notify();
     }
 
@@ -662,8 +614,8 @@ impl Workspace {
         self.open_file(&path, window, cx);
     }
 
-    /// Fill the palette's Agent mode: what's known at once, then what
-    /// OpenCode says now. Without a palette, just learn the commands, so a
+    /// Fill the ⌘K input's lists: what's known at once, then what the agent
+    /// says now. Without a palette, just learn the commands, so a
     /// reply can run one.
     pub(super) fn load_agent_catalog(
         &mut self,
@@ -847,6 +799,15 @@ impl Workspace {
         (-agent.scroll.offset().y, agent.scroll.max_offset().y)
     }
 
+    /// What the conversation last sent the agent, when it was a message.
+    #[cfg(test)]
+    pub(super) fn agent_prompt(&self) -> Option<String> {
+        match self.chat.as_ref()?.agent.as_ref()?.last_input.as_ref()? {
+            TurnInput::Prompt(prompt) => Some(prompt.clone()),
+            TurnInput::Command { .. } => None,
+        }
+    }
+
     /// What the conversation waits on the user for, in a word.
     #[cfg(test)]
     pub(super) fn agent_waiting_on(&self) -> Option<&'static str> {
@@ -901,10 +862,9 @@ impl Workspace {
         agent.finished = false;
         let bubble = Bubble::Running {
             label: agent.label.clone(),
-            agent: true,
             started: agent.started,
             context: agent.context.clone(),
-            step: Some(agent.step.clone()),
+            step: agent.step.clone(),
         };
 
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
@@ -1639,17 +1599,11 @@ impl Workspace {
                 }
             }
             (_, bubble) => match bubble {
-                Bubble::Running {
-                    started,
-                    step: Some(step),
-                    ..
-                } => ChatStatus::Working {
+                Bubble::Running { started, step, .. } => ChatStatus::Working {
                     started: *started,
                     step: step.clone(),
                 },
-                Bubble::Preview {
-                    message, removed, ..
-                } => ChatStatus::Reviewing {
+                Bubble::Preview { message, removed } => ChatStatus::Reviewing {
                     path: message.clone(),
                     removed: removed.clone(),
                 },
@@ -1948,8 +1902,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        // A jig's change under review there is kept, as a new command would.
-        self.accept_quick_preview(cx);
         let created = !edit.path.exists();
         let disk = std::fs::read_to_string(&edit.path).unwrap_or_default();
         let new = edit.change.apply(&disk).map_err(|error| {
@@ -1988,7 +1940,6 @@ impl Workspace {
         run.bubble = Bubble::Preview {
             message: relative,
             removed: preview.removed,
-            agent: true,
         };
         if let Some(agent) = run.agent.as_mut() {
             agent.pending = Some(Pending::Edit(PendingEdit {
@@ -2101,10 +2052,9 @@ impl Workspace {
             agent.scroll.scroll_to_bottom();
             run.bubble = Bubble::Running {
                 label: agent.label.clone(),
-                agent: true,
                 started: agent.started,
                 context: agent.context.clone(),
-                step: Some(agent.step.clone()),
+                step: agent.step.clone(),
             };
             agent.step.set("Working".into());
             if accept {

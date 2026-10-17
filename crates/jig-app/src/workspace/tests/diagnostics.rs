@@ -154,7 +154,7 @@ fn problems_show_count_and_can_be_stepped_through(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn fix_sends_the_problems_on_the_line(cx: &mut TestAppContext) {
+fn a_fix_sends_the_problems_on_the_line(cx: &mut TestAppContext) {
     use serde_json::json;
 
     let dir = tempfile::tempdir().unwrap();
@@ -162,9 +162,6 @@ fn fix_sends_the_problems_on_the_line(cx: &mut TestAppContext) {
     let text = "fn main() {\n    let x: u32 = \"s\";\n}\n";
     std::fs::write(&path, text).unwrap();
     let (window, workspace) = open(cx, &path);
-    let provider = Arc::new(RecordingProvider(Default::default()));
-    let provider_for_ws: Arc<dyn Provider> = provider.clone();
-    cx.update(|cx| workspace.update(cx, |this, _| this.provider = Ok(provider_for_ws)));
     report(
         cx,
         &path,
@@ -179,21 +176,30 @@ fn fix_sends_the_problems_on_the_line(cx: &mut TestAppContext) {
 
     // The cursor on the line, nothing selected.
     let on_line = text.find("let").unwrap();
-    run_preset(cx, window, &workspace, on_line..on_line, "fix");
-    // Another jig doesn't send them.
-    press(cx, window, "escape");
-    run_preset(cx, window, &workspace, on_line..on_line, "simplify");
-
-    let sent = provider.0.lock().unwrap().clone();
-    assert_eq!(sent.len(), 2);
+    let ask = |diagnostics: bool, cx: &mut TestAppContext| {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                this.editor().select(on_line..on_line, cx);
+                let ask = super::super::commands::Ask {
+                    diagnostics,
+                    ..super::super::commands::Ask::new("Fix it.")
+                };
+                this.start_conversation(ask, window, cx);
+            })
+        });
+        cx.update(|cx| workspace.read(cx).agent_prompt()).unwrap()
+    };
+    let sent = ask(true, cx);
     assert!(
-        sent[0].contains(
-            "<diagnostics>\nline 2, error: mismatched types (rustc E0308)\n</diagnostics>\n"
+        sent.contains(
+            "The language server reports:\n- line 2, error: mismatched types (rustc E0308)"
         ),
-        "{}",
-        sent[0]
+        "{sent}"
     );
-    assert!(!sent[1].contains("<diagnostics>"), "{}", sent[1]);
+    // Asked without them, they don't go.
+    let sent = ask(false, cx);
+    assert!(!sent.contains("language server"), "{sent}");
 }
 
 /// A Rust file at `text` in a project whose server is `answer`.

@@ -387,7 +387,7 @@ fn command_k_leaves_the_conversation_open(cx: &mut TestAppContext) {
     assert!(open(cx), "the palette opens beside it");
     step(cx, window, |window, cx| window.press("escape", cx));
     assert!(open(cx), "and closing it leaves the conversation");
-    // A note from ⌘K's side shows without touching the conversation.
+    // A note shows without touching the conversation.
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
         ws.update(cx, |this, cx| this.show_note("Done.".into(), window, cx))
@@ -395,7 +395,7 @@ fn command_k_leaves_the_conversation_open(cx: &mut TestAppContext) {
     assert!(open(cx));
     // Esc dismisses the note first, then closes the conversation.
     step(cx, window, |window, cx| window.press("escape", cx));
-    assert!(cx.update(|cx| workspace.read(cx).run.is_none()));
+    assert!(cx.update(|cx| workspace.read(cx).note.is_none()));
     assert!(open(cx));
     step(cx, window, |window, cx| window.press("escape", cx));
     assert!(!open(cx));
@@ -501,14 +501,14 @@ fn the_pin_docks_the_conversation_to_the_right_edge(cx: &mut TestAppContext) {
         "the next conversation opens docked, this wide"
     );
 
-    // Docked, ⌘K opens the palette on Jig, with Agent mode in the panel.
+    // Docked, ⌘K still opens the input, for another conversation.
     vcx.update(|window, cx| window.press("secondary-k", cx));
     vcx.run_until_parked();
     vcx.update(|_, cx| {
         let this = workspace.read(cx);
         let palette = this.palette.as_ref().expect("the palette opens");
         assert!(this.chat.is_some(), "the docked conversation stays");
-        assert!(palette.view.read(cx).is_jig_only());
+        assert!(palette.view.read(cx).query(cx).is_empty());
     });
 }
 
@@ -697,16 +697,15 @@ fn with_claude_code(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn command_k_offers_claude_codes_models_in_agent_mode(cx: &mut TestAppContext) {
+fn command_k_offers_claude_codes_models(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     with_claude_code(cx);
     step(cx, window, |window, cx| {
         window.render_frame(cx);
         window.press("secondary-k", cx);
     });
-    step(cx, window, |window, cx| window.press("tab", cx));
     let labels = cx.update(|cx| {
-        let (_, agent) = workspace.read(cx).model_menus(cx);
+        let agent = workspace.read(cx).model_menu(cx);
         agent
             .choices
             .iter()

@@ -1,4 +1,4 @@
-//! Agent: which agent Agent mode runs (OpenCode, Claude Code, Codex, Gemini
+//! Agent: which agent runs (OpenCode, Claude Code, Codex, Gemini
 //! CLI or one from `agents.toml`), and what it may do besides reading the
 //! project and proposing edits, each asked about every time, allowed, or
 //! turned off. Kept under `[agent]` in `settings.toml` and applied from its

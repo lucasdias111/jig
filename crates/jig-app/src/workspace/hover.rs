@@ -38,7 +38,7 @@ const HOVER_TIMEOUT: Duration = Duration::from_secs(3);
 const SIGNATURE_TIMEOUT: Duration = Duration::from_secs(2);
 const PANEL_MAX_WIDTH: f32 = 520.;
 const HOVER_MAX_HEIGHT: f32 = 320.;
-/// Above the agent's conversation and a jig's bubble, which are drawn
+/// Above the agent's conversation and a note, which are drawn
 /// after: the pointer is on the code, so what it asks about comes first.
 const PANEL_PRIORITY: usize = 1;
 
@@ -78,7 +78,7 @@ pub(super) fn install(
 impl Workspace {
     /// Whether the palette or another sheet is open, or a change is under
     /// review, which the panels would get in the way of. The agent's
-    /// conversation and a jig's bubble don't: the panels show over them.
+    /// conversation and a note don't: the panels show over them.
     pub(super) fn hides_code_hover(&self) -> bool {
         self.modal_open() || self.previewing()
     }

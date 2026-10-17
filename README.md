@@ -41,9 +41,9 @@ Agents are open-ended but take you away from the code. Jig takes the refactoring
 interaction and puts AI behind it.
 
 The name comes from woodworking: a jig is a guide you make so you can do the
-same precise cut by hand, again and again. In Jig, each saved AI command is one.
-"Simplify", "Add docs", "Fix this error", or whatever you find yourself asking
-for every day.
+same precise cut by hand, again and again. Jig is that guide for a coding
+agent: it works where you point it, and every cut it makes is yours to keep or
+throw away.
 
 A few things I hold it to:
 
@@ -51,29 +51,25 @@ A few things I hold it to:
   pin one there yourself.
 - **You decide.** Every change shows up as a preview and needs an explicit
   accept. Nothing reaches the disk without you looking at it.
-- **Brief.** A quick jig answers in one short sentence, or not at all.
 - **Keyboard first.** Few shortcuts, each one obvious.
 - **Out of the way.** The code is the interface.
 
 ## What it does
 
-Select some code, press **⌘K**, pick a jig or type what you want, and the change
-shows up inline. **Tab** keeps it, **Esc** throws it away.
+Select some code, press **⌘K** and type what you want. A coding agent works on
+it in a small conversation next to the code, and each change it wants shows up
+inline. **Tab** keeps it, **Esc** throws it away.
 
 <img width="1134" height="813" alt="Jig previewing a change" src="https://github.com/user-attachments/assets/ceabdaed-93f9-4953-a564-bb4d00b9d1e5" />
 
-- **Two modes, one switch.** *Jig* mode makes one quick, focused edit to the
-  selection, line or file, in a few seconds. *Agent* mode hands a bigger job to a
-  coding agent (OpenCode, Claude Code, Codex, Gemini CLI, or any agent that speaks
-  the Agent Client Protocol) in a small conversation next to the code. Every edit
-  it wants to make still opens as a preview you accept or reject, and shell
-  commands and web access wait for your go-ahead.
-- **Your own jigs.** Save any prompt as a jig and run it again with a couple of
-  keystrokes. Add a note on the fly (`docs: terse, no examples`).
+- **Any agent.** OpenCode, Claude Code, Codex, Gemini CLI, or any agent that
+  speaks the Agent Client Protocol. Every edit it wants to make opens as a
+  preview you accept or reject, and shell commands and web access wait for your
+  go-ahead. Its own commands and skills are a `/` away.
 - **Any model.** Anthropic, OpenAI-compatible providers, or a model running on
   your own machine. Jig doesn't pick one for you.
 - **Tasks.** A small planner in the sidebar. Agents can save their plans there,
-  and you can hand single steps back to Jig or the agent.
+  and you can hand single steps, or the whole task, back to the agent.
 - **A proper editor around it.** Language servers (go to definition, completion,
   rename, diagnostics, hover, formatting), Git gutter and panel, run
   configurations, a debugger over DAP, find in files, and themes that follow
@@ -81,7 +77,7 @@ shows up inline. **Tab** keeps it, **Esc** throws it away.
 
 It's macOS-first, and also builds on Linux and Windows.
 
-<img width="597" height="411" alt="Jig's command palette" src="https://github.com/user-attachments/assets/1b28e39a-5494-4138-8174-a2a59ec864ab" />
+<img width="597" height="411" alt="Jig's agent input" src="https://github.com/user-attachments/assets/1b28e39a-5494-4138-8174-a2a59ec864ab" />
 
 ## Getting it
 
@@ -98,8 +94,9 @@ xattr -dr com.apple.quarantine /Applications/Jig.app
 Linux and Windows builds are on the
 [releases page](https://github.com/lucasdias111/jig/releases/latest).
 
-Then connect a model provider in Settings > Providers. For Agent mode, pick an
-agent in Settings > Agent and install it from there if you don't have it.
+Then pick an agent in Settings > Agent and install it from there if you don't
+have it. For OpenCode, the default, connect a model provider in Settings >
+Providers.
 
 ### Build and run
 

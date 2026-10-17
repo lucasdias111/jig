@@ -1,6 +1,6 @@
 //! Right-clicking the code: the menu VS Code users reach for. Go to
 //! Definition, Find All References and Rename Symbol for the name under the
-//! pointer, Quick Fix, a jig, the clipboard, commenting lines out and
+//! pointer, Quick Fix, asking the agent, the clipboard, commenting lines out and
 //! formatting.
 
 use std::ops::Range;
@@ -11,7 +11,7 @@ use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::*;
 use jig_editor::EditorHandle;
 
-use super::commands::COMMAND_ICON;
+use super::commands::SPARKLE_ICON;
 use super::{
     FindReferences, FormatDocument, OpenCommand, RenameSymbol, ToggleLineComment, Workspace,
 };
@@ -39,10 +39,10 @@ impl Workspace {
                 .menu_with_disabled("Rename Symbol…", !editable, Box::new(RenameSymbol))
                 .menu_with_disabled("Quick Fix…", !editable, Box::new(ToggleCodeActions))
                 .separator()
-                // The sparkle the title bar's and the selection's Jig buttons wear.
+                // The sparkle the selection's button wears.
                 .menu_with_icon_disabled(
-                    "Run Jig…",
-                    Icon::default().data(COMMAND_ICON),
+                    "Ask the Agent…",
+                    Icon::default().data(SPARKLE_ICON),
                     !editable,
                     Box::new(OpenCommand),
                 )

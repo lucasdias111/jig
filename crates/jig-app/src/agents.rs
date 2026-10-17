@@ -1,7 +1,7 @@
-//! The agents Agent mode can run, as data: `assets/default-agents.toml` has
+//! The agents Jig can run, as data: `assets/default-agents.toml` has
 //! the built-ins and documents every field, and the user's
 //! `~/.config/jig/agents.toml` adds more or replaces one by `key`.
-//! Settings > Agent mode picks one (`[agent] use`).
+//! Settings > Agent picks one (`[agent] use`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,10 +20,10 @@ const BUILT_IN: &str = include_str!("../../../assets/default-agents.toml");
 pub const DEFAULT: &str = "opencode";
 
 /// A starter for the user's `agents.toml`.
-pub const USER_TEMPLATE: &str = r#"# Your agents for Agent mode. Any agent that speaks the Agent Client
+pub const USER_TEMPLATE: &str = r#"# Your agents for Jig. Any agent that speaks the Agent Client
 # Protocol on stdio works; one with the same key as a built-in replaces it.
 # See assets/default-agents.toml in Jig's source for the built-ins and
-# every field. Pick one in Settings, under Agent mode.
+# every field. Pick one in Settings, under Agent.
 #
 # [[agent]]
 # key = "goose"

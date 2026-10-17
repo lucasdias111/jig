@@ -25,7 +25,7 @@ use crate::ProviderConfig;
 use crate::config::{AgentModel, ProviderKind};
 use crate::tasks;
 
-/// A model OpenCode knows by itself, for trying the agent lane on its own.
+/// A model OpenCode knows by itself, for trying the agent on its own.
 pub const DEFAULT_MODEL: &str = "opencode-go/qwen3.8-flash";
 
 /// Room OpenCode assumes for a model Jig hands it; it can't look these up

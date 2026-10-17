@@ -106,7 +106,7 @@ impl Render for AboutWindow {
                             .pt_3()
                             .text_size(px(12.))
                             .text_color(theme.muted_foreground)
-                            .child("AI jigs at the cursor."),
+                            .child("A coding agent at the cursor."),
                     )
                     .child(
                         div().pt_5().child(

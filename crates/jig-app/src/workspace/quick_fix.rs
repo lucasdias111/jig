@@ -1,13 +1,13 @@
 //! Quick Fix (⌘.): ways to fix the problems on the cursor's line, in GPUI
 //! Kit's code action list under the cursor. The language server's own fixes
 //! come first (`textDocument/codeAction`, quick fixes with their edits),
-//! then Fix with Jig, which runs the Fix jig on the line, and Fix with
-//! Agent, which asks the agent, for fixes that reach past the line, such as
-//! a dependency missing from the manifest. The problem panels offer the
-//! same, under the message.
+//! then Fix with Agent, which starts a conversation given the problems, for
+//! fixes the server doesn't have, including those that reach past the line,
+//! such as a dependency missing from the manifest. The problem panels offer
+//! the same, under the message.
 //!
 //! A server's fix lands in the buffers as rename's edits do: unsaved, one
-//! undo step per file. Jig's go through review like any other run.
+//! undo step per file. The agent's go through review like any other edit.
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -18,24 +18,21 @@ use gpui_kit::base::input::DiagnosticEntry;
 use gpui_kit::component::input::{CodeActionProvider, EditorState};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::*;
-use jig_commands::{Invocation, Scope, surface};
+use jig_commands::surface;
 use jig_editor::EditorHandle;
 use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, Command};
 use serde_json::{Value, json};
 
 use super::Workspace;
+use super::commands::Ask;
 use super::definitions::with_timeout;
 use crate::lsp;
 
-/// Past this, the list opens with Jig's fixes alone.
+/// Past this, the list opens with Fix with Agent alone.
 const FIX_TIMEOUT: Duration = Duration::from_secs(3);
 /// How many of the server's fixes a problem's panel lists.
 const PANEL_FIXES: usize = 3;
-const FIX_WITH_JIG: &str = "jig.fixWithJig";
 const FIX_WITH_AGENT: &str = "jig.fixWithAgent";
-/// For when the Fix jig is hidden or renamed.
-const JIG_FIX: &str =
-    "Fix the problems the language server reports here. Change as little as possible.";
 const AGENT_FIX: &str = "Fix the problems the language server reports here. If the fix belongs outside this code, such as a dependency missing from the project's manifest, make it there.";
 
 /// Lucide "wrench".
@@ -145,13 +142,8 @@ impl Workspace {
     }
 
     /// Fix the problems on the selected lines, or the cursor's, with the
-    /// Fix jig or the agent.
-    pub(super) fn fix_problems(
-        &mut self,
-        agent: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// agent.
+    pub(super) fn fix_problems(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.home {
             return;
         }
@@ -164,59 +156,26 @@ impl Workspace {
             return;
         }
         self.dismiss_problem_panels(cx);
-        let invocation = if agent {
-            Invocation {
+        self.start_conversation(
+            Ask {
                 name: Some("Fix".into()),
-                instruction: AGENT_FIX.into(),
-                scope: Scope::Selection,
-                comment: None,
-                agent: true,
                 diagnostics: true,
-                answer: false,
-                task: None,
-            }
-        } else {
-            self.fix_jig()
-        };
-        self.run_command(invocation, window, cx);
+                ..Ask::new(AGENT_FIX)
+            },
+            window,
+            cx,
+        );
     }
 
     /// Fix the problem starting at `at`, from its panel.
-    fn fix_problem_at(
-        &mut self,
-        at: usize,
-        agent: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn fix_problem_at(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.home {
             return;
         }
         let editor = self.editor().clone();
         editor.select(at..at, cx);
         editor.focus(window, cx);
-        self.fix_problems(agent, window, cx);
-    }
-
-    /// The Fix jig, or one like it if it's hidden or renamed.
-    fn fix_jig(&self) -> Invocation {
-        let fixes = |preset: &&jig_commands::Preset| preset.diagnostics && !preset.agent;
-        self.presets
-            .iter()
-            .filter(fixes)
-            .find(|preset| preset.name == "Fix")
-            .or_else(|| self.presets.iter().find(fixes))
-            .map(Invocation::preset)
-            .unwrap_or_else(|| Invocation {
-                name: Some("Fix".into()),
-                instruction: JIG_FIX.into(),
-                scope: Scope::Selection,
-                comment: None,
-                agent: false,
-                diagnostics: true,
-                answer: false,
-                task: None,
-            })
+        self.fix_problems(window, cx);
     }
 
     /// Put away the problem and hover panels, once one of their fixes is
@@ -276,7 +235,6 @@ impl CodeActionProvider for QuickFixes {
                 None => Vec::new(),
             };
             if problems {
-                actions.push(jig_action("Fix with Jig", FIX_WITH_JIG));
                 actions.push(jig_action("Fix with Agent", FIX_WITH_AGENT));
             } else if actions.is_empty() {
                 workspace
@@ -304,8 +262,7 @@ impl CodeActionProvider for QuickFixes {
             workspace
                 .update(cx, |this, cx| {
                     match action.command.as_ref().map(|c| c.command.as_str()) {
-                        Some(FIX_WITH_JIG) => this.fix_problems(false, window, cx),
-                        Some(FIX_WITH_AGENT) => this.fix_problems(true, window, cx),
+                        Some(FIX_WITH_AGENT) => this.fix_problems(window, cx),
                         _ => this.apply_fix(editor, &action, window, cx),
                     }
                 })
@@ -370,7 +327,7 @@ fn line_of(text: &str, offset: usize) -> u32 {
 }
 
 /// What a problem's panel offers under its message: the server's fixes,
-/// asked for once per problem, then Fix with Jig and Fix with Agent.
+/// asked for once per problem, then Fix with Agent.
 pub(super) struct PanelFixes {
     workspace: WeakEntity<Workspace>,
     editor: EntityId,
@@ -422,23 +379,12 @@ impl PanelFixes {
         self.actions.iter().map(|a| a.title.clone()).collect()
     }
 
-    fn lane_button(&self, at: usize, agent: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        let accent = surface::lane_accent(agent, cx);
+    fn agent_button(&self, at: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let accent = surface::agent_accent(cx);
         let workspace = self.workspace.clone();
         h_flex()
-            .id(if agent {
-                "fix-with-agent"
-            } else {
-                "fix-with-jig"
-            })
-            .debug_selector(move || {
-                if agent {
-                    "fix-with-agent"
-                } else {
-                    "fix-with-jig"
-                }
-                .into()
-            })
+            .id("fix-with-agent")
+            .debug_selector(|| "fix-with-agent".into())
             .gap_1()
             .px_1p5()
             .py(px(2.))
@@ -448,12 +394,12 @@ impl PanelFixes {
             .text_color(accent)
             .text_size(px(11.5))
             .font_weight(FontWeight::MEDIUM)
-            .child(surface::lane_icon(agent).size(px(11.)).text_color(accent))
-            .child(format!("Fix with {}", surface::lane_name(agent)))
+            .child(surface::agent_icon().size(px(11.)).text_color(accent))
+            .child("Fix with Agent")
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 workspace
-                    .update(cx, |this, cx| this.fix_problem_at(at, agent, window, cx))
+                    .update(cx, |this, cx| this.fix_problem_at(at, window, cx))
                     .ok();
             })
     }
@@ -505,12 +451,7 @@ impl Render for PanelFixes {
             .border_t_1()
             .border_color(theme.border)
             .children(fixes)
-            .child(
-                h_flex()
-                    .gap_1p5()
-                    .child(self.lane_button(at, false, cx))
-                    .child(self.lane_button(at, true, cx)),
-            )
+            .child(h_flex().child(self.agent_button(at, cx)))
             .into_any_element()
     }
 }

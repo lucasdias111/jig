@@ -1,16 +1,14 @@
-//! Agent mode: conversations with a full coding agent instead of a single
-//! model call.
+//! Conversations with a coding agent, the way Jig's AI works.
 
 pub mod acp;
 pub mod harness;
 pub mod opencode;
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
-
-use crate::PromptRequest;
 
 /// Whether the agent may use a tool: after asking the user each time, on
 /// its own, or not at all.
@@ -115,14 +113,53 @@ pub fn title(asked: &str) -> String {
     }
 }
 
-/// The message for the agent: the instruction, the user's note, where they
-/// are in the file and what they selected. The agent finds `AGENTS.md`,
-/// skills and commands on its own.
-pub fn prompt(request: &PromptRequest) -> String {
-    let mut out = request.instruction.trim().to_string();
-    if let Some(note) = &request.comment {
-        out.push_str(&format!("\nNote: {note}"));
+/// What a conversation starts from: what the user asked, and where they
+/// are in the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    pub instruction: String,
+    /// What the language server reports on the target's lines, for fixes.
+    pub diagnostics: Vec<Diagnostic>,
+    /// The planned task the instruction is one step of, when a todo from
+    /// the task planner is run: the whole task, that step marked.
+    pub task: Option<String>,
+    pub language: String,
+    /// Relative to the project.
+    pub file_name: Option<String>,
+    pub text: String,
+    /// The selection, or the cursor when empty.
+    pub target: Range<usize>,
+}
+
+/// One problem a language server reports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// 1-based, in the whole file.
+    pub line: usize,
+    /// `error`, `warning`, `info` or `hint`.
+    pub severity: String,
+    pub message: String,
+}
+
+impl Diagnostic {
+    /// `line 3, error: mismatched types`, the way prompts list it.
+    pub fn describe(&self) -> String {
+        // Messages can run over several lines; one line each keeps the
+        // list readable.
+        let message = self
+            .message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("line {}, {}: {message}", self.line, self.severity)
     }
+}
+
+/// The message for the agent: the instruction, where the user is in the
+/// file and what they selected. The agent finds `AGENTS.md`, skills and
+/// commands on its own.
+pub fn prompt(request: &Prompt) -> String {
+    let mut out = request.instruction.trim().to_string();
     if let Some(task) = &request.task {
         out.push_str(&format!(
             "\n\nThis is from a planned task in Jig's task planner, below. As you finish each of its todos, check it off with the task tool's update_task.\n\n<task>\n{}\n</task>",
@@ -163,7 +200,11 @@ pub fn prompt(request: &PromptRequest) -> String {
         out.push_str(&format!(
             "I'm in {file}, with {lines} selected:\n```{}\n{}\n```",
             request.language,
-            request.target_text().trim_end_matches('\n')
+            request
+                .text
+                .get(range.clone())
+                .unwrap_or_default()
+                .trim_end_matches('\n')
         ));
     }
     out
@@ -442,43 +483,36 @@ mod tests {
     #[test]
     fn prompt_says_where_the_user_is() {
         let text = "fn a() {}\nfn b() {}\nfn c() {}\n".to_string();
-        let request = PromptRequest {
+        let request = Prompt {
             task: None,
             instruction: "Add docs".into(),
-            comment: Some("terse".into()),
-            project_rules: None,
             language: "rust".into(),
             file_name: Some("src/lib.rs".into()),
             target: 10..20,
             text,
             diagnostics: Vec::new(),
-            answer: false,
-            subject: None,
         };
         assert_eq!(
             prompt(&request),
-            "Add docs\nNote: terse\n\nI'm in src/lib.rs, with line 2 selected:\n```rust\nfn b() {}\n```"
+            "Add docs\n\nI'm in src/lib.rs, with line 2 selected:\n```rust\nfn b() {}\n```"
         );
-        let at_cursor = PromptRequest {
-            task: None,
+        let at_cursor = Prompt {
             target: 20..20,
-            comment: None,
             ..request
         };
         assert!(prompt(&at_cursor).ends_with("cursor on line 3. New code goes there."));
-        let with_problems = PromptRequest {
-            task: None,
-            diagnostics: vec![crate::prompt::Diagnostic {
+        let with_problems = Prompt {
+            diagnostics: vec![Diagnostic {
                 line: 3,
                 severity: "error".into(),
-                message: "expected `;`".into(),
+                message: "expected\n `;`".into(),
             }],
             ..at_cursor
         };
         assert!(prompt(&with_problems).starts_with(
             "Add docs\nThe language server reports:\n- line 3, error: expected `;`\n\n"
         ));
-        let step = PromptRequest {
+        let step = Prompt {
             task: Some("# Plan\n\n## Todo\n\n- [ ] Add docs ← this step".into()),
             ..with_problems
         };
