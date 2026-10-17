@@ -475,3 +475,215 @@ lines = "8-27"
 strip_comments = true
 must = ["Comments in shell syntax (#) explaining the steps: release build, the .app layout, copying the binary, icon and licence, and the third-party notices only when cargo-about is there or on CI"]
 must_not = ["Comments saying the notices are always generated", "Changed commands"]
+
+# Extract function: the result must still build and pass the module's tests.
+
+[[case]]
+id = "extract-lcs-table"
+jig = "Extract function"
+file = "crates/jig-app/src/diff.rs"
+lines = "37-47"
+must = ["Moves the LCS table into a function of its own, returning the table, and calls it in place", "The new function compares lines the same way, ignoring a final newline"]
+must_not = ["Changes how lines are compared", "Leaves the old code beside the call"]
+crate = "jig-app"
+test = "diff::"
+
+[[case]]
+id = "extract-latest-positions"
+jig = "Extract function"
+file = "crates/jig-app/src/fuzzy.rs"
+lines = "92-99"
+must = ["Returns an Option so the early `?` still rejects a path the query doesn't fit, and the call keeps that with `?`"]
+must_not = ["Drops the early rejection", "Changes the search order"]
+crate = "jig-app"
+test = "fuzzy::"
+
+[[case]]
+id = "extract-csi-params"
+jig = "Extract function"
+file = "crates/jig-app/src/run_output.rs"
+lines = "337-346"
+must = ["Moves reading a CSI sequence's parameters into a function that takes the chars and the style, applying SGR at `m`"]
+must_not = ["Consumes characters past the final byte", "Applies SGR for finals other than m"]
+crate = "jig-app"
+test = "run_output::"
+
+[[case]]
+id = "extract-editorconfig-files"
+jig = "Extract function"
+file = "crates/jig-app/src/editorconfig.rs"
+lines = "46-57"
+must = ["Moves collecting the .editorconfig files up to the one with root = true into a function returning them, nearest first"]
+must_not = ["Keeps looking past a root file", "Changes the order the files are found in"]
+crate = "jig-app"
+test = "editorconfig::"
+
+[[case]]
+id = "extract-http-error"
+jig = "Extract function"
+file = "crates/jig-ai/src/http.rs"
+lines = "137-147"
+must = ["Moves building the HttpError from a failed response into a function, and the call still returns the error early"]
+must_not = ["Loses the early return, so a failed status falls through to parsing JSON", "Changes the 200-character cut"]
+crate = "jig-ai"
+test = "http::"
+
+[[case]]
+id = "extract-delete-range"
+jig = "Extract function"
+file = "crates/jig-app/src/lines.rs"
+lines = "86-92"
+must = ["Moves choosing the range to delete into a function of the text and span, with the same three cases"]
+must_not = ["Changes which newline is taken with the lines"]
+crate = "jig-app"
+test = "lines::"
+
+# Fix: a bug is planted; the fix must make the module's tests pass again.
+
+[[case]]
+id = "fix-camel-case-boundary"
+jig = "Fix"
+file = "crates/jig-app/src/fuzzy.rs"
+lines = "137-144"
+plant = [["(before.is_lowercase() && c.is_uppercase())", "(before.is_uppercase() && c.is_lowercase())"]]
+must = ["Restores a word start at a lowercase letter followed by an uppercase one (camelCase)"]
+must_not = ["Changes the separators", "Says there's no bug"]
+crate = "jig-app"
+test = "fuzzy::"
+
+[[case]]
+id = "fix-line-span-start"
+jig = "Fix"
+file = "crates/jig-app/src/lines.rs"
+lines = "18-27"
+plant = [["    let first = line_start(text, start);", "    let first = line_start(text, end);"]]
+must = ["Takes the first line from the selection's start again"]
+must_not = ["Changes how the end is found"]
+crate = "jig-app"
+test = "lines::"
+
+[[case]]
+id = "fix-trailing-newlines"
+jig = "Fix"
+file = "crates/jig-ai/src/response.rs"
+lines = "74-87"
+plant = [["    if had && !replace.ends_with('\\n') {", "    if had && replace.ends_with('\\n') {"]]
+must = ["Adds the missing newline again when the original ends with one and the reply doesn't"]
+must_not = ["Changes the case where the original has no final newline"]
+crate = "jig-ai"
+test = "response::"
+
+[[case]]
+id = "fix-closing-bracket"
+jig = "Fix"
+file = "crates/jig-app/src/brackets.rs"
+lines = "115-121"
+plant = [["        b'[' => b']',", "        b'[' => b')',"]]
+must = ["Pairs [ with ] again"]
+must_not = ["Changes the other pairs"]
+crate = "jig-app"
+test = "brackets::"
+
+[[case]]
+id = "fix-version-extra-part"
+jig = "Fix"
+file = "crates/jig-app/src/update/release.rs"
+lines = "29-36"
+plant = [["        parts.next().is_none().then_some(version)", "        Some(version)"]]
+must = ["Refuses a version with more than three parts again, as the doc comment says"]
+must_not = ["Accepts pre-releases"]
+crate = "jig-app"
+test = "update::"
+
+[[case]]
+id = "fix-splice-option"
+jig = "Fix"
+file = "crates/jig-app/src/text_edits.rs"
+lines = "17-30"
+plant = [["        new.push_str(text.get(at..range.start)?);", "        new.push_str(text.get(at..range.start));"]]
+diagnostics = [{ line = 25, message = "mismatched types: expected `&str`, found `Option<&str>`" }]
+must = ["Unwraps the Option with `?`, keeping None for a range outside the text"]
+must_not = ["Uses unwrap or indexing that can panic"]
+crate = "jig-app"
+test = "text_edits::"
+
+[[case]]
+id = "fix-ambiguous-pow"
+jig = "Fix"
+file = "crates/jig-ai/src/http.rs"
+lines = "124-132"
+plant = [["FIRST_WAIT * 3u32.pow(attempt)", "FIRST_WAIT * 3.pow(attempt)"]]
+diagnostics = [{ line = 130, message = "can't call method `pow` on ambiguous numeric type `{integer}`" }]
+must = ["Gives the 3 a type, u32, so the waits stay 0.5 s × 3^attempt"]
+must_not = ["Changes the backoff's numbers"]
+crate = "jig-ai"
+test = "http::"
+
+[[case]]
+id = "fix-multiple-of-type"
+jig = "Fix"
+file = "crates/jig-process/src/timed.rs"
+lines = "55-63"
+plant = [["seconds.is_multiple_of(60)", "seconds.is_multiple_of(60u32)"]]
+diagnostics = [{ line = 58, message = "mismatched types: expected `u64`, found `u32`" }]
+must = ["Makes the 60 a u64 (or untyped)"]
+must_not = ["Changes when minutes are used"]
+crate = "jig-process"
+test = "timed::"
+
+# Add tests: the module's tests are cut; the new ones must build, run and pass.
+
+[[case]]
+id = "tests-fuzzy"
+jig = "Add tests"
+file = "crates/jig-app/src/fuzzy.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["A test module covering match_paths: file-name matches first, ties in order, no match for a non-subsequence, case and spaces ignored"]
+must_not = ["Assertions that only pass by chance or test nothing", "Tests of functions that don't exist"]
+crate = "jig-app"
+test = "fuzzy::"
+
+[[case]]
+id = "tests-lines"
+jig = "Add tests"
+file = "crates/jig-app/src/lines.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["A test module covering several of the line edits (move, duplicate, delete, select, open) and offset_of, including the top and bottom of the file"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "lines::"
+
+[[case]]
+id = "tests-response"
+jig = "Add tests"
+file = "crates/jig-ai/src/response.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for parse: prose around the JSON, a missing message, markers refused, the trailing newline matched"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-ai"
+test = "response::"
+
+[[case]]
+id = "tests-brackets"
+jig = "Add tests"
+file = "crates/jig-app/src/brackets.rs"
+lines = "end"
+cut_from = "#[cfg(test)]"
+must = ["Tests for matching: the bracket before and after the cursor, nesting, brackets in strings and comments ignored, a mismatched pair"]
+must_not = ["Assertions that only pass by chance or test nothing"]
+crate = "jig-app"
+test = "brackets::"
+
+[[case]]
+id = "tests-timed"
+jig = "Add tests"
+file = "crates/jig-process/src/timed.rs"
+lines = "end"
+cut_from = "#[cfg(all(test, unix))]"
+must = ["Tests that output is collected, that a command past its limit stops with TimedOut, and describe's wording"]
+must_not = ["Tests that take long, such as waiting the whole of a long sleep", "Assertions that only pass by chance"]
+crate = "jig-process"
+test = "timed::"

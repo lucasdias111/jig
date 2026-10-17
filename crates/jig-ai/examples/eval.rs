@@ -10,6 +10,7 @@
 //!     cargo run -p jig-ai --example eval -- --rejudge target/jig-evals/<run>
 //!                                     # grade a run's replies again, no model calls
 //!     cargo run -p jig-ai --example eval -- --no-judge        # only the checks (and --compile)
+//!     cargo run -p jig-ai --example eval -- --check-cases     # planted bugs fail, the rest build
 //!     cargo run -p jig-ai --example eval -- --list-models
 //!
 //! The cases are in `crates/jig-ai/evals/cases.toml`. Their code is read
@@ -22,10 +23,11 @@
 //! Every reply gets checks that need no model (Explain leaves the code as
 //! it was, Add docs changes nothing but comments, Simplify changes code,
 //! the message is at most 20 words), then a judge model grades it against
-//! the case's `must` and `must_not` lists. With `--compile`, each Simplify
-//! is put into a worktree of that commit and its crate built and its tests
-//! run, which says more about "without changing its behaviour" than any
-//! judge.
+//! the case's `must` and `must_not` lists. With `--compile`, each edit is
+//! put into a worktree of that commit and its crate built and its tests
+//! run: Simplify and Extract function must keep them passing, Fix must
+//! make a planted bug's tests pass, and Add tests must write tests that
+//! run and pass. That says more than any judge.
 //!
 //! These call real models and cost money: don't run them in a loop.
 
@@ -58,8 +60,19 @@ struct Case {
     file: String,
     /// `12-40`, counted from 1, both included. The selection runs from the
     /// start of the first line to the end of the last, without its newline,
-    /// as selecting whole lines in the editor makes it.
+    /// as selecting whole lines in the editor makes it. `end` is the cursor
+    /// at the end of the file, for jigs that insert.
     lines: String,
+    /// Cut the file at the line starting with this, e.g. `#[cfg(test)]`,
+    /// so Add tests writes a module that isn't there yet.
+    cut_from: Option<String>,
+    /// Bugs to plant before the jig runs, as `[found, replaced]` pairs,
+    /// each found exactly once: what Fix is meant to find.
+    #[serde(default)]
+    plant: Vec<[String; 2]>,
+    /// What the language server would report, as Fix is sent it.
+    #[serde(default)]
+    diagnostics: Vec<CaseDiagnostic>,
     /// Take the selection's own comments out first, as if the code had
     /// none: Add docs then has something to do, and the author's comments
     /// are what the judge compares against.
@@ -80,6 +93,18 @@ struct Case {
     #[serde(rename = "crate")]
     krate: Option<String>,
     test: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CaseDiagnostic {
+    line: usize,
+    #[serde(default = "error")]
+    severity: String,
+    message: String,
+}
+
+fn error() -> String {
+    "error".into()
 }
 
 #[derive(Deserialize)]
@@ -109,7 +134,9 @@ struct Outcome {
     /// Checks that need no model, by name: `None` passed.
     checks: BTreeMap<String, Option<String>>,
     judge: Option<Verdict>,
-    /// From `--compile`: `None` built and passed its tests.
+    /// From `--compile`: `None` built and passed its tests. Left out of
+    /// the JSON when not built, so `null` there means it passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compiled: Option<Option<String>>,
 }
 
@@ -234,6 +261,15 @@ fn main() -> Result<()> {
         bail!("No case matches {:?}.", options.only);
     }
 
+    if args.iter().any(|arg| arg == "--check-cases") {
+        let source = Source {
+            root: &root,
+            rev: &cases.rev,
+            jigs: &jigs,
+            rules: None,
+        };
+        return check_cases(&source, &selected);
+    }
     if args.iter().any(|arg| arg == "--dry-run") {
         for case in &selected {
             let request = request_for(case, &root, &cases.rev, &jigs, None)?;
@@ -338,7 +374,13 @@ fn main() -> Result<()> {
         .into_inner()?;
 
     if options.compile {
-        compile_all(&root, &cases.rev, &selected, &mut outcomes)?;
+        let source = Source {
+            root: &root,
+            rev: &cases.rev,
+            jigs: &jigs,
+            rules: None,
+        };
+        compile_all(&source, &selected, &mut outcomes)?;
     }
 
     let stamp = std::time::SystemTime::now()
@@ -479,9 +521,28 @@ fn request_for(
         .iter()
         .find(|jig| jig.name == case.jig)
         .with_context(|| format!("no jig named {}", case.jig))?;
-    let text = git_show(root, rev, &case.file)?;
-    let mut target = line_range(&text, &case.lines)?;
-    let mut text = text;
+    let mut text = git_show(root, rev, &case.file)?;
+    if let Some(marker) = &case.cut_from {
+        let at = text
+            .match_indices('\n')
+            .map(|(ix, _)| ix + 1)
+            .find(|&ix| text[ix..].starts_with(marker.as_str()))
+            .with_context(|| format!("no line starts with {marker}"))?;
+        text.truncate(at);
+        text.truncate(text.trim_end().len());
+        text.push_str("\n\n");
+    }
+    for [found, replaced] in &case.plant {
+        if text.matches(found.as_str()).count() != 1 {
+            bail!("`{found}` isn't in {} exactly once", case.file);
+        }
+        text = text.replacen(found.as_str(), replaced, 1);
+    }
+    let mut target = if case.lines == "end" {
+        text.len()..text.len()
+    } else {
+        line_range(&text, &case.lines)?
+    };
     if case.strip_comments {
         let marker = comment_marker(&case.file);
         let stripped = strip_comment_lines(&text[target.clone()], marker);
@@ -496,7 +557,15 @@ fn request_for(
         file_name: Some(case.file.clone()),
         text,
         target,
-        diagnostics: Vec::new(),
+        diagnostics: case
+            .diagnostics
+            .iter()
+            .map(|d| jig_ai::prompt::Diagnostic {
+                line: d.line,
+                severity: d.severity.clone(),
+                message: d.message.clone(),
+            })
+            .collect(),
         task: None,
         answer: jig.answer,
     })
@@ -667,7 +736,33 @@ fn checks(case: &Case, outcome: &Outcome, marker: &str) -> BTreeMap<String, Opti
         }
         _ => {}
     }
-    if case.jig == "Simplify" {
+    match case.jig.as_str() {
+        "Extract function" => {
+            checks.insert(
+                "a function is added".into(),
+                (new.matches("fn ").count() <= old.matches("fn ").count())
+                    .then(|| "no new fn".into()),
+            );
+        }
+        "Fix" => {
+            checks.insert(
+                "code changed".into(),
+                (code_only(old, marker) == code_only(new, marker))
+                    .then(|| "the code wasn't changed".into()),
+            );
+        }
+        "Add tests" => {
+            checks.insert(
+                "tests added".into(),
+                (!new.contains("#[test]")).then(|| "no #[test]".into()),
+            );
+        }
+        _ => {}
+    }
+    // A rough count, fooled by brackets in strings and character literals:
+    // only for cases that aren't built, where nothing better says.
+    let edits = ["Simplify", "Extract function", "Fix", "Add tests"];
+    if case.krate.is_none() && edits.contains(&case.jig.as_str()) {
         checks.insert(
             "brackets balance".into(),
             (bracket_balance(old) != bracket_balance(new))
@@ -710,6 +805,8 @@ fn bracket_balance(text: &str) -> [i64; 3] {
 const JUDGE_SYSTEM: &str = r#"You grade the output of Jig, a code editor's AI tool. The user selected some code and ran a command ("jig") on it. For an edit, the tool replies with the new text for the selection and a message of at most 20 words saying what it changed. For an explanation, it replies with an answer of at most 80 words and the code stays as it was.
 
 Read the code yourself and decide whether the reply is correct. Be strict and concrete: a reply that is vague, explains or changes something other than the selection, or says something false about the code is not a pass. The case's checklist says what a good reply must do and what would make it wrong; use it, but also report any other error you find.
+
+For Fix, a bug was planted in the selection (and diagnostics may name it): the reply must fix it without other changes. For Extract function, the new function and its call replace the selection. For Add tests, the reply is inserted at the cursor and its tests must be right about the code.
 
 Grades:
 - "pass": correct, about the selected code, and does what the jig asks.
@@ -783,21 +880,22 @@ fn first_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
 
 /// Up to 60 lines before or after the selection, for the judge.
 fn context(request: &PromptRequest, before: bool) -> String {
-    const LINES: usize = 60;
+    // Code inserted at the cursor is about the whole file.
+    let lines = if request.target.is_empty() { 400 } else { 60 };
     if before {
-        let lines: Vec<&str> = request.text[..request.target.start].lines().collect();
-        lines[lines.len().saturating_sub(LINES)..].join("\n")
+        let shown: Vec<&str> = request.text[..request.target.start].lines().collect();
+        shown[shown.len().saturating_sub(lines)..].join("\n")
     } else {
         request.text[request.target.end..]
             .lines()
-            .take(LINES)
+            .take(lines)
             .collect::<Vec<_>>()
             .join("\n")
     }
 }
 
-/// Build each Simplify reply in a worktree of `rev` and run its tests.
-fn compile_all(root: &Path, rev: &str, cases: &[Case], outcomes: &mut [Outcome]) -> Result<()> {
+/// The worktree of `rev` replies are built in, made the first time.
+fn worktree(root: &Path, rev: &str) -> Result<PathBuf> {
     let tree = root.join("target/jig-evals/tree");
     if !tree.exists() {
         let status = Command::new("git")
@@ -811,58 +909,106 @@ fn compile_all(root: &Path, rev: &str, cases: &[Case], outcomes: &mut [Outcome])
             bail!("couldn't make a worktree at {}", tree.display());
         }
     }
-    let target_dir = root.join("target/jig-evals/target");
+    Ok(tree)
+}
+
+/// Build `case`'s crate with `file` in place of its file and run its
+/// tests: `None` when they built, ran and passed.
+fn build_and_test(root: &Path, rev: &str, case: &Case, file: &str) -> Result<Option<String>> {
+    let Some(krate) = &case.krate else {
+        return Ok(None);
+    };
+    let tree = worktree(root, rev)?;
+    run_git(&tree, &["checkout", "--quiet", "--detach", "--force", rev])?;
+    run_git(&tree, &["clean", "-fdq"])?;
+    std::fs::write(tree.join(&case.file), file)?;
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&tree)
+        .env("CARGO_TARGET_DIR", root.join("target/jig-evals/target"))
+        .args(["test", "--quiet", "-p", krate]);
+    if let Some(filter) = &case.test {
+        command.arg(filter);
+    }
+    let output = command.output()?;
+    run_git(&tree, &["checkout", "--quiet", "--detach", "--force", rev])?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() {
+        // A filter that matches nothing passes too; written tests must run.
+        let passed: usize = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("test result: ok. "))
+            .filter_map(|rest| rest.split(' ').next()?.parse::<usize>().ok())
+            .sum();
+        return Ok((passed == 0 && case.jig == "Add tests").then(|| "no tests ran".into()));
+    }
+    let lines: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|line| {
+            line.starts_with("error") || line.contains("panicked") || line.contains("FAILED")
+        })
+        .take(6)
+        .collect();
+    Ok(Some(lines.join(" | ")))
+}
+
+/// Build each edit's file with the reply in it and run its tests.
+fn compile_all(source: &Source, cases: &[Case], outcomes: &mut [Outcome]) -> Result<()> {
     for (case, outcome) in cases.iter().zip(outcomes.iter_mut()) {
-        let Some(krate) = &case.krate else { continue };
-        if case.jig != "Simplify" || outcome.error.is_some() || outcome.replace == outcome.original
+        let edits = ["Simplify", "Extract function", "Fix", "Add tests"];
+        if case.krate.is_none()
+            || !edits.contains(&case.jig.as_str())
+            || outcome.error.is_some()
+            || outcome.replace == outcome.original
         {
             continue;
         }
-        run_git(&tree, &["checkout", "--detach", "--force", rev])?;
-        run_git(&tree, &["clean", "-fdq"])?;
-        let path = tree.join(&case.file);
-        let text = std::fs::read_to_string(&path)?;
-        let range = line_range(&text, &case.lines)?;
-        let new = format!(
+        let request = request_for(case, source.root, source.rev, source.jigs, None)?;
+        let file = format!(
             "{}{}{}",
-            &text[..range.start],
+            &request.text[..request.target.start],
             outcome.replace,
-            &text[range.end..]
+            &request.text[request.target.end..]
         );
-        std::fs::write(&path, new)?;
         print!("compile  {:<28} ", case.id);
-        let mut command = Command::new("cargo");
-        command
-            .current_dir(&tree)
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .args(["test", "--quiet", "-p", krate]);
-        if let Some(filter) = &case.test {
-            command.arg(filter);
-        }
-        let output = command.output()?;
-        let problem = (!output.status.success()).then(|| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let lines: Vec<&str> = stderr
-                .lines()
-                .chain(stdout.lines())
-                .filter(|line| {
-                    line.starts_with("error")
-                        || line.contains("panicked")
-                        || line.contains("FAILED")
-                })
-                .take(6)
-                .collect();
-            lines.join(" | ")
-        });
+        let problem = build_and_test(source.root, source.rev, case, &file)?;
         println!("{}", problem.as_deref().unwrap_or("ok"));
         outcome.compiled = Some(problem);
     }
-    run_git(&tree, &["checkout", "--detach", "--force", rev])?;
     Ok(())
 }
 
-fn run_git(dir: &PathBuf, args: &[&str]) -> Result<()> {
+/// Check the cases themselves, without a model: each planted bug fails
+/// its tests (or the build), and everything else builds as it is.
+fn check_cases(source: &Source, cases: &[Case]) -> Result<()> {
+    let mut wrong = 0;
+    for case in cases.iter().filter(|case| case.krate.is_some()) {
+        let request = request_for(case, source.root, source.rev, source.jigs, None)?;
+        let problem = build_and_test(source.root, source.rev, case, &request.text)?;
+        let planted = !case.plant.is_empty();
+        let fine = match (&problem, planted) {
+            (Some(_), true) | (None, false) => true,
+            // A file cut before its tests builds and runs none.
+            (Some(p), false) => case.jig == "Add tests" && p == "no tests ran",
+            (None, true) => false,
+        };
+        wrong += usize::from(!fine);
+        println!(
+            "{:<6} {:<28} {}",
+            if fine { "ok" } else { "WRONG" },
+            case.id,
+            problem.as_deref().unwrap_or("builds and passes")
+        );
+    }
+    if wrong > 0 {
+        bail!("{wrong} cases don't do what they should");
+    }
+    Ok(())
+}
+
+fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
     let status = Command::new("git").arg("-C").arg(dir).args(args).status()?;
     if !status.success() {
         bail!("git {} failed", args.join(" "));

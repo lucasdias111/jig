@@ -24,7 +24,7 @@ prompt = "Add concise doc comments to this code and return all of it, every line
 [[jig]]
 name = "Extract function"
 scope = "selection"
-prompt = "Extract this code into a well-named function and replace it with a call to that function. Return both the new function and the call site."
+prompt = "Extract this code into a well-named function. The replacement must hold both: first the complete new function, defined right here as a nested function, then the call that replaces the code. Pass in what the code reads and return what the code after it uses."
 
 [[jig]]
 name = "Simplify"
