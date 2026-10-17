@@ -51,7 +51,7 @@ impl ReplyKind {
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "The answer, plain text, at most 60 words."
+                        "description": "The answer, plain text, at most 80 words."
                     }
                 },
                 "required": ["message"]

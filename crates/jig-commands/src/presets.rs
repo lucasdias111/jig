@@ -95,7 +95,7 @@ pub struct Preset {
     #[serde(default)]
     pub diagnostics: bool,
     /// Answer about the code instead of changing it, as Explain does: the
-    /// reply is a message of up to 60 words and the code stays as it is.
+    /// reply is a message of up to 80 words and the code stays as it is.
     #[serde(default)]
     pub answer: bool,
 }
@@ -237,7 +237,7 @@ pub const USER_FILE_HEADER: &str = "\
 # read and edit the whole project; you review every edit.
 # diagnostics = true: send the problems the language server reports on
 # the lines it works on, as the built-in Fix does.
-# answer = true: answer about the code in up to 60 words instead of
+# answer = true: answer about the code in up to 80 words instead of
 # changing it, as the built-in Explain does.
 #
 # [[jig]]

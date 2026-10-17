@@ -10,7 +10,7 @@ pub const CURSOR: &str = "<<<CURSOR>>>";
 pub const MESSAGE_WORDS: usize = 20;
 /// The most words an answer may have: room for what the code is for and
 /// the detail that's easy to misread, which 20 words rarely fit.
-pub const ANSWER_WORDS: usize = 60;
+pub const ANSWER_WORDS: usize = 80;
 
 const SYSTEM: &str = r#"You are Jig, a precise code-editing tool inside a text editor. You are not a chat assistant.
 
@@ -27,7 +27,7 @@ Rules for "replace":
 - Match the file's existing indentation and style. No markdown fences.
 - If the instruction is a question or asks for an explanation, return the region unchanged and answer in "message".
 
-Rules for "message": plain text, no greetings, no follow-up questions. For an edit, at most 20 words saying what you changed, and only what you actually changed in "replace". For an answer, at most 60 words."#;
+Rules for "message": plain text, no greetings, no follow-up questions. For an edit, at most 20 words saying what you changed, and only what you actually changed in "replace". For an answer, at most 80 words."#;
 
 /// For jigs that answer about the code, such as Explain: nothing comes
 /// back to put in the buffer, so the model can't change the code by
@@ -42,7 +42,7 @@ Answer the instruction about that region only; the rest of the file is context. 
 {"message": "<the answer>"}
 
 Rules for "message":
-- Two or three short sentences, at most 60 words, plain text, no markdown, no greetings, no follow-up questions.
+- Two or three short sentences, at most 80 words, plain text, no markdown, no greetings, no follow-up questions.
 - Be specific to this code: name what it does and the detail that is easiest to misread (an edge case, a tie-break, an order, what it returns when nothing matches).
 - Say only what the code shows. If something depends on code you can't see, say so rather than guess.
 - Don't restate the instruction or describe your reply."#;
@@ -368,7 +368,7 @@ mod tests {
         let (system, user) = build(&question);
         assert!(system.contains("{\"message\": \"<the answer>\"}"));
         assert!(!system.contains("\"replace\""));
-        assert!(system.contains("at most 60 words"));
+        assert!(system.contains("at most 80 words"));
         assert!(user.contains("<<<SELECTION>>>fn b() {}<<<END>>>"));
         assert!(user.ends_with(ANSWER_REMINDER));
         // An edit still asks for the new text.

@@ -621,7 +621,7 @@ fn checks(case: &Case, outcome: &Outcome, marker: &str) -> BTreeMap<String, Opti
     let mut checks = BTreeMap::new();
     let words = outcome.message.split_whitespace().count();
     let (limit, label) = if case.jig == "Explain" {
-        (jig_ai::prompt::ANSWER_WORDS, "answer ≤ 60 words")
+        (jig_ai::prompt::ANSWER_WORDS, "answer ≤ 80 words")
     } else {
         (jig_ai::prompt::MESSAGE_WORDS, "message ≤ 20 words")
     };
@@ -707,7 +707,7 @@ fn bracket_balance(text: &str) -> [i64; 3] {
     balance
 }
 
-const JUDGE_SYSTEM: &str = r#"You grade the output of Jig, a code editor's AI tool. The user selected some code and ran a command ("jig") on it. For an edit, the tool replies with the new text for the selection and a message of at most 20 words saying what it changed. For an explanation, it replies with an answer of at most 60 words and the code stays as it was.
+const JUDGE_SYSTEM: &str = r#"You grade the output of Jig, a code editor's AI tool. The user selected some code and ran a command ("jig") on it. For an edit, the tool replies with the new text for the selection and a message of at most 20 words saying what it changed. For an explanation, it replies with an answer of at most 80 words and the code stays as it was.
 
 Read the code yourself and decide whether the reply is correct. Be strict and concrete: a reply that is vague, explains or changes something other than the selection, or says something false about the code is not a pass. The case's checklist says what a good reply must do and what would make it wrong; use it, but also report any other error you find.
 

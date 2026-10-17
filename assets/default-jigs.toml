@@ -10,7 +10,7 @@
 # project; you review every edit.
 # diagnostics = true: send the problems the language server reports on the
 # lines it works on (the selection's, or the cursor's line) with the prompt.
-# answer = true: answer about the code in up to 60 words instead of changing
+# answer = true: answer about the code in up to 80 words instead of changing
 # it. The code never comes back, so it can't be changed by accident.
 #
 # In the ⌘K input, Tab switches between Jig and Agent mode, and a colon
@@ -40,7 +40,7 @@ diagnostics = true
 [[jig]]
 name = "Explain"
 scope = "selection"
-prompt = "Explain this selection: what it's for, then the detail that's easiest to misread, such as an edge case, a tie-break, an order or what it returns when nothing matches."
+prompt = "Explain this selection in at most 60 words: what it's for, then the detail that's easiest to misread, such as an edge case, a tie-break, an order or what it returns when nothing matches."
 answer = true
 
 [[jig]]
