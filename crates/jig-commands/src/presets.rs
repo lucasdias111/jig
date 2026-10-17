@@ -94,6 +94,10 @@ pub struct Preset {
     /// along with the prompt, for jigs that fix them.
     #[serde(default)]
     pub diagnostics: bool,
+    /// Answer about the code instead of changing it, as Explain does: the
+    /// reply is a message of up to 60 words and the code stays as it is.
+    #[serde(default)]
+    pub answer: bool,
 }
 
 /// What the user chose to run from the command input.
@@ -109,6 +113,8 @@ pub struct Invocation {
     pub agent: bool,
     /// Send the language server's problems on the target's lines.
     pub diagnostics: bool,
+    /// Answer about the code instead of changing it.
+    pub answer: bool,
     /// The planned task this run is one step of, as context.
     pub task: Option<String>,
 }
@@ -122,6 +128,7 @@ impl Invocation {
             comment: None,
             agent: preset.agent,
             diagnostics: preset.diagnostics,
+            answer: preset.answer,
             task: None,
         }
     }
@@ -147,6 +154,7 @@ impl Invocation {
             comment: None,
             agent: false,
             diagnostics: false,
+            answer: false,
             task: None,
             name: None,
             instruction: text.trim().to_string(),
@@ -229,6 +237,8 @@ pub const USER_FILE_HEADER: &str = "\
 # read and edit the whole project; you review every edit.
 # diagnostics = true: send the problems the language server reports on
 # the lines it works on, as the built-in Fix does.
+# answer = true: answer about the code in up to 60 words instead of
+# changing it, as the built-in Explain does.
 #
 # [[jig]]
 # name = \"Create controller\"
@@ -291,6 +301,9 @@ pub fn add_user_preset(path: &Path, preset: &Preset) -> Result<()> {
     }
     if preset.diagnostics {
         entry.push_str("diagnostics = true\n");
+    }
+    if preset.answer {
+        entry.push_str("answer = true\n");
     }
     if let Some(hint) = preset
         .comment_hint
@@ -403,6 +416,10 @@ mod tests {
         assert!(fix.diagnostics);
         assert!(Invocation::preset(fix).diagnostics);
         assert_eq!(presets.iter().filter(|p| p.diagnostics).count(), 1);
+        // Explain answers; the others edit.
+        let explain = presets.iter().find(|p| p.name == "Explain").unwrap();
+        assert!(Invocation::preset(explain).answer);
+        assert_eq!(presets.iter().filter(|p| p.answer).count(), 1);
     }
 
     #[test]
@@ -602,6 +619,7 @@ mod tests {
             comment_hint: Some("Entity".into()),
             agent: true,
             diagnostics: true,
+            answer: true,
             ..Default::default()
         };
         add_user_preset(&path, &preset).unwrap();

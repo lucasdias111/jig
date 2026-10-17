@@ -162,6 +162,26 @@ fn unchanged_reply_only_shows_the_message(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_answer_never_changes_the_code(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, ORIGINAL).unwrap();
+    let (window, workspace) = open(cx, &path);
+    // Explain answers, so code the model sends anyway is ignored.
+    use_provider(
+        cx,
+        &workspace,
+        Ok(r#"{"replace": "fn b() {}", "message": "Defines an empty function a."}"#),
+    );
+    run_preset(cx, window, &workspace, 0..9, "explain");
+    assert_eq!(
+        bubble(cx, &workspace),
+        Some(Bubble::Message("Defines an empty function a.".into()))
+    );
+    assert_eq!(text(cx, &workspace), ORIGINAL);
+}
+
+#[gpui_kit::test]
 fn new_command_accepts_pending_change(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = preview_docs(cx);
     step(cx, window, |window, cx| window.press("secondary-k", cx));

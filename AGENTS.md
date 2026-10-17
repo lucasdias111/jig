@@ -10,7 +10,7 @@ Principles:
 
 - **Near the code.** Every interaction is anchored to the cursor. No side panels, except an agent conversation you pin to the side yourself.
 - **You decide.** Every change is previewed and needs an explicit accept. Nothing reaches the disk unreviewed, in either mode (unless you accept the rest of an agent conversation's edits with ⌘↩), and the agent's shell commands, web access and subagents wait for a go-ahead too.
-- **Brief.** In Jig mode the AI answers in one sentence of at most 20 words, or not at all. The agent may say more.
+- **Brief.** In Jig mode an edit comes with one sentence of at most 20 words saying what it changed, or nothing; an answer (a jig with `answer = true`, such as Explain) is at most 60 words. The agent may say more.
 - **Keyboard first.** Few shortcuts, each obvious.
 - **Clean and Mac-like.** The code is the interface. Restrained colour, floating panels, follows system light/dark.
 
@@ -36,7 +36,7 @@ A jig can always run on the agent with `agent = true`; the switch then shows Age
 
 ### Review
 
-A change goes into the buffer provisionally: highlighted, file read-only, one undo step. The model returns the whole new region, so Jig diffs it line by line (`jig-app/src/diff.rs`): only lines that differ are edited, only new lines are highlighted, and the bubble lists only lines actually removed. Tab/Enter accepts, Esc or ⌘Z rejects. A reply that changes nothing (e.g. an explanation) just shows its message.
+A change goes into the buffer provisionally: highlighted, file read-only, one undo step. The model returns the whole new region, so Jig diffs it line by line (`jig-app/src/diff.rs`): only lines that differ are edited, only new lines are highlighted, and the bubble lists only lines actually removed. Tab/Enter accepts, Esc or ⌘Z rejects. A reply that changes nothing just shows its message, as an answer always does.
 
 ## Layout
 
@@ -61,6 +61,8 @@ Per project: `.jig/run.toml` (run configurations), `.jig/tasks/` (the task plann
 
 - Prompt (`jig-ai/src/prompt.rs`): instruction, optional note, optional `<task>` (the planned task a delegated todo is one step of, that step marked; context only), optional `<diagnostics>` (the problems on the target's lines, `line N, severity: message`, for jigs with `diagnostics = true` such as Fix), language, file name, `AGENTS.md` as `<project_rules>`, and the file with the region marked `<<<SELECTION>>>…<<<END>>>` or `<<<CURSOR>>>`. Files over 24 KB are cut to whole lines around the region. The reply format is repeated after the file.
 - Reply: `{"replace": "<new text for the region>", "message": "<≤20 words>"}`. Anthropic-format providers must return it through a forced `apply_edit` tool call; OpenAI-format ones use JSON mode. Anything that doesn't parse is an error and never changes the buffer.
+- Answers: a jig with `answer = true` (Explain) gets its own system prompt and asks for `{"message": "<≤60 words>"}` alone, through a forced `answer` tool (`ReplyKind`, `Provider::complete_as`), so the model never retypes the code and can't change it; plain text is taken as the answer, and the region always comes back as it was (`response::parse_answer`).
+- Evals: `cargo run -p jig-ai --example eval` runs the built-in jigs on 50 real snippets (`crates/jig-ai/evals/cases.toml`, code read at a pinned commit), checks each reply without a model (Explain unchanged, Add docs only comments, word limits), has a judge model grade it against the case's checklist, and with `--compile` builds and tests each Simplify in a worktree. `--rejudge <run>` grades saved replies again. It calls real models: don't loop it.
 - Thinking is off by default (`thinking: {type: disabled}` / `reasoning_effort: none`, plus `chat_template_kwargs: {enable_thinking: false}` for servers on this computer, such as llama.cpp's `llama-server`, LM Studio or vLLM, which run the model's own chat template); with it on, reasoning models took 30-75 s and sometimes returned nothing. `thinking = true` on a provider turns it back on.
 - No provider by default: Jig favours no vendor. The built-in `config.toml` connects none and picks no model (`quick = ""`, read as none), so a run says to connect one in Settings > Providers. The first provider connected starts Jig mode, and the agent that follows it, on one of its fast models once it lists them (`ProviderTemplate::fast`, e.g. Haiku, mini, flash; a local server's first model), never over a model already picked (`providers::start_on_a_model`). OpenCode Go is one provider among the others (Anthropic format, an `x-opencode-session` header). API keys never go in `config.toml`: one typed in Settings goes in the system keychain (macOS Keychain, Windows Credential Manager; elsewhere a 0600 `keys.toml`) and wins over the `api_key_env` variable.
 

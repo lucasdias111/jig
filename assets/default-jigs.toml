@@ -10,6 +10,8 @@
 # project; you review every edit.
 # diagnostics = true: send the problems the language server reports on the
 # lines it works on (the selection's, or the cursor's line) with the prompt.
+# answer = true: answer about the code in up to 60 words instead of changing
+# it. The code never comes back, so it can't be changed by accident.
 #
 # In the ⌘K input, Tab switches between Jig and Agent mode, and a colon
 # adds a one-off note: "docs: terse" runs Add docs with the note "terse".
@@ -17,7 +19,7 @@
 [[jig]]
 name = "Add docs"
 scope = "selection"
-prompt = "Add concise doc comments to this code. Do not change the code itself."
+prompt = "Add concise doc comments to this code and return all of it, every line of code kept exactly as it is. In the docs, state only what the code shows (what it does, returns and its edge cases), not guesses about callers or intent."
 
 [[jig]]
 name = "Extract function"
@@ -38,7 +40,8 @@ diagnostics = true
 [[jig]]
 name = "Explain"
 scope = "selection"
-prompt = "Explain what this code does. Return the code unchanged in `replace`."
+prompt = "Explain this selection: what it's for, then the detail that's easiest to misread, such as an edge case, a tie-break, an order or what it returns when nothing matches."
+answer = true
 
 [[jig]]
 name = "Add tests"

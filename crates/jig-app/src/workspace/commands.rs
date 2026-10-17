@@ -266,6 +266,8 @@ impl Workspace {
                 .filter(|_| !invocation.agent)
                 .and_then(crate::project::agents_for),
             task: invocation.task.clone(),
+            // The agent may answer or edit as it sees fit.
+            answer: invocation.answer && !invocation.agent,
             diagnostics: if invocation.diagnostics {
                 self.problems_on_lines(&text, target.clone(), cx)
             } else {

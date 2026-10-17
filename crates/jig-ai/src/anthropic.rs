@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::config::AuthStyle;
 use crate::http::{Fallback, Lenient};
-use crate::{Provider, http};
+use crate::{Provider, ReplyKind, http};
 
 /// Servers that speak the format without all of it reject the switch that
 /// turns thinking off.
@@ -59,7 +59,7 @@ impl AnthropicProvider {
         self
     }
 
-    fn send(&self, system: &str, messages: &[Value]) -> Result<Value> {
+    fn send(&self, system: &str, messages: &[Value], kind: ReplyKind) -> Result<Value> {
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -67,16 +67,16 @@ impl AnthropicProvider {
             "messages": messages,
         });
         body["tools"] = json!([{
-            "name": crate::response::REPLY_TOOL,
-            "description": "Apply the edit to the marked region.",
-            "input_schema": crate::response::reply_schema(),
+            "name": kind.tool(),
+            "description": kind.tool_description(),
+            "input_schema": kind.schema(),
         }]);
         if self.thinking {
             // A forced tool call isn't allowed while thinking.
             body["tool_choice"] = json!({ "type": "auto" });
         } else {
             body["thinking"] = json!({ "type": "disabled" });
-            body["tool_choice"] = json!({ "type": "tool", "name": crate::response::REPLY_TOOL });
+            body["tool_choice"] = json!({ "type": "tool", "name": kind.tool() });
         }
         let auth = match self.auth {
             AuthStyle::ApiKey => ("x-api-key", self.api_key.clone()),
@@ -98,17 +98,19 @@ impl AnthropicProvider {
 }
 
 impl Provider for AnthropicProvider {
-    /// The reply as JSON text: the input of the `apply_edit` call, or the
-    /// model's text if it answered without one.
     fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let response = self.send(system, &[json!({ "role": "user", "content": user })])?;
+        self.complete_as(system, user, ReplyKind::Edit)
+    }
+
+    /// The reply as JSON text: the input of the call to `kind`'s tool, or
+    /// the model's text if it answered without one.
+    fn complete_as(&self, system: &str, user: &str, kind: ReplyKind) -> Result<String> {
+        let response = self.send(system, &[json!({ "role": "user", "content": user })], kind)?;
         let call = response["content"]
             .as_array()
             .into_iter()
             .flatten()
-            .find(|block| {
-                block["type"] == "tool_use" && block["name"] == crate::response::REPLY_TOOL
-            });
+            .find(|block| block["type"] == "tool_use" && block["name"] == kind.tool());
         match call {
             Some(call) => Ok(call["input"].to_string()),
             None => text_of(&response),

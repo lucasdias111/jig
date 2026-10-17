@@ -1315,7 +1315,12 @@ impl Render for CommandPalette {
                 .chain(self.context.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("Edits {target} · sees {sees}")
+            let answers = matches!(
+                self.rows.get(self.selected),
+                Some(Row::Preset(preset)) if self.presets[*preset].answer
+            );
+            let does = if answers { "Answers about" } else { "Edits" };
+            format!("{does} {target} · sees {sees}")
         };
 
         let palette = crate::surface::panel(cx)
@@ -1578,6 +1583,7 @@ mod tests {
                     comment: None,
                     agent: false,
                     diagnostics: false,
+                    answer: false,
                     task: None,
                     name: None,
                     instruction: "add".into(),

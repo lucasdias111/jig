@@ -172,6 +172,7 @@ impl Workspace {
                 comment: None,
                 agent: true,
                 diagnostics: true,
+                answer: false,
                 task: None,
             }
         } else {
@@ -213,6 +214,7 @@ impl Workspace {
                 comment: None,
                 agent: false,
                 diagnostics: true,
+                answer: false,
                 task: None,
             })
     }

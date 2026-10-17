@@ -20,19 +20,31 @@ pub use config_file::{ConfigFile, ProviderTemplate, TEMPLATES, template_named};
 pub use keys::{KeySource, KeyStore};
 pub use openai_compat::OpenAiCompatProvider;
 pub use prompt::PromptRequest;
-pub use response::Reply;
+pub use response::{Reply, ReplyKind};
 
 /// A model endpoint. `complete` sends one system + user message pair and
 /// returns the model's raw text.
 pub trait Provider: Send + Sync {
     fn complete(&self, system: &str, user: &str) -> anyhow::Result<String>;
+
+    /// As [`Self::complete`], for a reply of `kind`. Providers that force
+    /// the reply through a tool pick the tool for it; the others are told
+    /// the shape in the prompt alone.
+    fn complete_as(&self, system: &str, user: &str, kind: ReplyKind) -> anyhow::Result<String> {
+        let _ = kind;
+        self.complete(system, user)
+    }
 }
 
 /// Build the prompt, call the provider and parse the reply.
 pub fn run(provider: &dyn Provider, request: &PromptRequest) -> anyhow::Result<Reply> {
     request.check_target()?;
     let (system, user) = prompt::build(request);
-    let raw = provider.complete(&system, &user)?;
+    if request.answer {
+        let raw = provider.complete_as(&system, &user, ReplyKind::Answer)?;
+        return response::parse_answer(&raw, request.target_text());
+    }
+    let raw = provider.complete_as(&system, &user, ReplyKind::Edit)?;
     response::parse(&raw, request.target_text())
 }
 
@@ -50,6 +62,7 @@ pub fn check(provider: &dyn Provider) -> anyhow::Result<Reply> {
         text: text.into(),
         target: 0..text.len(),
         diagnostics: Vec::new(),
+        answer: false,
     };
     run(provider, &request)
 }

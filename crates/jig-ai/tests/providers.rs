@@ -88,6 +88,7 @@ fn request() -> PromptRequest {
         comment: None,
         project_rules: None,
         diagnostics: Vec::new(),
+        answer: false,
     }
 }
 
@@ -272,4 +273,26 @@ fn anthropic_reply_comes_from_the_forced_tool_call() {
         (reply.replace.as_str(), reply.message.as_str()),
         ("x", "Done.")
     );
+}
+
+#[test]
+fn an_answer_goes_through_a_tool_with_no_code_in_it() {
+    let (url, rx) = serve_once(
+        200,
+        r#"{"content":[{"type":"tool_use","name":"answer","input":{"message":"Defines a."}}]}"#,
+    );
+    let provider = AnthropicProvider::new(&url, "k".into(), "claude", 1000, AuthStyle::ApiKey);
+    let question = PromptRequest {
+        instruction: "Explain".into(),
+        answer: true,
+        ..request()
+    };
+    let reply = jig_ai::run(&provider, &question).unwrap();
+    assert_eq!(reply.message, "Defines a.");
+    assert_eq!(reply.replace, "fn a() {}", "the code stays as it was");
+
+    let sent = rx.recv().unwrap();
+    assert_eq!(sent.body["tool_choice"]["name"], "answer");
+    assert_eq!(sent.body["tools"][0]["name"], "answer");
+    assert!(sent.body["tools"][0]["input_schema"]["properties"]["replace"].is_null());
 }

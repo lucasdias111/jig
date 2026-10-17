@@ -12,6 +12,54 @@ use crate::prompt::{CURSOR, SELECTION_END, SELECTION_START};
 /// or an instruction that doesn't fit the selection.
 pub const REPLY_TOOL: &str = "apply_edit";
 
+/// The tool an answer comes back through: a message and nothing else, so
+/// there's no code for the model to retype, or change while retyping it.
+pub const ANSWER_TOOL: &str = "answer";
+
+/// What the model is asked to return.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplyKind {
+    /// The region's new text and a short message.
+    Edit,
+    /// An answer about the region, which stays as it is.
+    Answer,
+}
+
+impl ReplyKind {
+    /// The tool a provider that can force one makes the model call.
+    pub fn tool(self) -> &'static str {
+        match self {
+            ReplyKind::Edit => REPLY_TOOL,
+            ReplyKind::Answer => ANSWER_TOOL,
+        }
+    }
+
+    pub fn tool_description(self) -> &'static str {
+        match self {
+            ReplyKind::Edit => "Apply the edit to the marked region.",
+            ReplyKind::Answer => "Answer about the marked region.",
+        }
+    }
+
+    /// JSON Schema of the tool's input: the same object the prompt asks
+    /// for in text.
+    pub fn schema(self) -> serde_json::Value {
+        match self {
+            ReplyKind::Edit => reply_schema(),
+            ReplyKind::Answer => serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The answer, plain text, at most 60 words."
+                    }
+                },
+                "required": ["message"]
+            }),
+        }
+    }
+}
+
 /// JSON Schema of [`REPLY_TOOL`]'s input: the same object the prompt asks
 /// for in text.
 pub fn reply_schema() -> serde_json::Value {
@@ -24,7 +72,7 @@ pub fn reply_schema() -> serde_json::Value {
             },
             "message": {
                 "type": "string",
-                "description": "One short plain sentence, at most 20 words."
+                "description": "One short plain sentence, at most 20 words, saying what was changed."
             }
         },
         "required": ["replace", "message"]
@@ -66,6 +114,39 @@ pub fn parse(raw: &str, original: &str) -> Result<Reply> {
     Ok(Reply {
         replace: match_trailing_newline(reply.replace, original),
         message: reply.message.trim().to_string(),
+    })
+}
+
+#[derive(Deserialize)]
+struct RawAnswer {
+    message: String,
+}
+
+/// Parse an answer. The region comes back as it was, whatever the model
+/// sent, so an answer never changes the buffer. Plain text, from a model
+/// that ignored the format, is taken as the answer: nothing can go wrong
+/// with it.
+pub fn parse_answer(raw: &str, original: &str) -> Result<Reply> {
+    let from_json = raw.find('{').and_then(|start| {
+        serde_json::Deserializer::from_str(&raw[start..])
+            .into_iter::<RawAnswer>()
+            .next()?
+            .ok()
+    });
+    let message = match from_json {
+        Some(answer) => answer.message,
+        None if raw.contains("\"message\"") => {
+            bail!("The model's answer didn't match the expected format.")
+        }
+        None => raw.to_string(),
+    };
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        bail!("The model returned an empty answer.");
+    }
+    Ok(Reply {
+        replace: original.to_string(),
+        message,
     })
 }
 
@@ -146,5 +227,27 @@ mod tests {
         assert_eq!(parse(r#"{"replace": "a"}"#, "b\n").unwrap().replace, "a\n");
         // Insertions (empty original) are left alone.
         assert_eq!(parse(r#"{"replace": "a\n"}"#, "").unwrap().replace, "a\n");
+    }
+
+    #[test]
+    fn an_answer_keeps_the_region_as_it_was() {
+        let reply = parse_answer(r#"{"message": " Sorts by score. "}"#, "code").unwrap();
+        assert_eq!(reply.replace, "code");
+        assert_eq!(reply.message, "Sorts by score.");
+        // Code sent anyway is ignored, so the buffer can't change.
+        let reply = parse_answer(r#"{"replace": "other", "message": "m"}"#, "code").unwrap();
+        assert_eq!(reply.replace, "code");
+        // Plain text is the answer.
+        assert_eq!(parse_answer("It sorts.", "c").unwrap().message, "It sorts.");
+        assert!(parse_answer(r#"{"message": ""}"#, "c").is_err());
+        assert!(parse_answer(r#"{"message": 3}"#, "c").is_err());
+    }
+
+    #[test]
+    fn each_kind_has_its_own_tool() {
+        assert_eq!(ReplyKind::Edit.tool(), REPLY_TOOL);
+        let answer = ReplyKind::Answer.schema();
+        assert_eq!(answer["required"], serde_json::json!(["message"]));
+        assert!(answer["properties"].get("replace").is_none());
     }
 }

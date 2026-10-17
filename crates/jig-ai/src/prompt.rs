@@ -6,6 +6,12 @@ pub const SELECTION_START: &str = "<<<SELECTION>>>";
 pub const SELECTION_END: &str = "<<<END>>>";
 pub const CURSOR: &str = "<<<CURSOR>>>";
 
+/// The most words the message beside an edit may have.
+pub const MESSAGE_WORDS: usize = 20;
+/// The most words an answer may have: room for what the code is for and
+/// the detail that's easy to misread, which 20 words rarely fit.
+pub const ANSWER_WORDS: usize = 60;
+
 const SYSTEM: &str = r#"You are Jig, a precise code-editing tool inside a text editor. You are not a chat assistant.
 
 You receive a file in which the region to change is marked:
@@ -21,7 +27,25 @@ Rules for "replace":
 - Match the file's existing indentation and style. No markdown fences.
 - If the instruction is a question or asks for an explanation, return the region unchanged and answer in "message".
 
-Rules for "message": at most 20 words, plain text, no greetings, no follow-up questions."#;
+Rules for "message": plain text, no greetings, no follow-up questions. For an edit, at most 20 words saying what you changed, and only what you actually changed in "replace". For an answer, at most 60 words."#;
+
+/// For jigs that answer about the code, such as Explain: nothing comes
+/// back to put in the buffer, so the model can't change the code by
+/// retyping it, and the answer has room to be specific.
+const ANSWER_SYSTEM: &str = r#"You are Jig, a precise code-reading tool inside a text editor. You are not a chat assistant.
+
+You receive a file in which the region the user asks about is marked:
+- <<<SELECTION>>> ... <<<END>>> surrounds the code in question, or
+- <<<CURSOR>>> marks the place in question.
+
+Answer the instruction about that region only; the rest of the file is context. A Note, when present, is the user's detail for this run; follow it. Diagnostics, when present, are the problems a language server reports on the region's lines, by line number in the file. Project rules, when present, are the project's conventions. A task, when present, is the plan the instruction is one step of; it's context. Reply with exactly one JSON object and nothing else:
+{"message": "<the answer>"}
+
+Rules for "message":
+- Two or three short sentences, at most 60 words, plain text, no markdown, no greetings, no follow-up questions.
+- Be specific to this code: name what it does and the detail that is easiest to misread (an edge case, a tie-break, an order, what it returns when nothing matches).
+- Say only what the code shows. If something depends on code you can't see, say so rather than guess.
+- Don't restate the instruction or describe your reply."#;
 
 /// Everything the model needs for one command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +66,9 @@ pub struct PromptRequest {
     /// The planned task the instruction is one step of, when a todo from
     /// the task planner is run: the whole task, that step marked.
     pub task: Option<String>,
+    /// Ask for an answer about the region rather than its new text, for
+    /// jigs like Explain. The buffer is never changed.
+    pub answer: bool,
 }
 
 /// One problem a language server reports.
@@ -93,6 +120,8 @@ const MAX_FILE_BYTES: usize = 24 * 1024;
 
 /// Repeated after the file, where the model reads it last.
 const REMINDER: &str = "Reply with the JSON object only: {\"replace\": ..., \"message\": ...}. No prose before or after it.";
+const ANSWER_REMINDER: &str =
+    "Reply with the JSON object only: {\"message\": ...}. No prose before or after it.";
 
 /// The part of `text` to send for `range`: all of it when it's small,
 /// otherwise whole lines around `range`, about [`MAX_FILE_BYTES`] in all.
@@ -174,11 +203,16 @@ pub fn build(request: &PromptRequest) -> (String, String) {
         .as_deref()
         .map(|task| format!("<task>\n{}\n</task>\n\n", task.trim()))
         .unwrap_or_default();
+    let (system, reminder) = if request.answer {
+        (ANSWER_SYSTEM, ANSWER_REMINDER)
+    } else {
+        (SYSTEM, REMINDER)
+    };
     let user = format!(
-        "{rules}{task}Language: {}\nFile: {file}\nInstruction: {}\n{note}{diagnostics}\n<file>\n{marked}\n</file>\n\n{REMINDER}",
+        "{rules}{task}Language: {}\nFile: {file}\nInstruction: {}\n{note}{diagnostics}\n<file>\n{marked}\n</file>\n\n{reminder}",
         request.language, request.instruction
     );
-    (SYSTEM.to_string(), user)
+    (system.to_string(), user)
 }
 
 #[cfg(test)]
@@ -196,6 +230,7 @@ mod tests {
             comment: None,
             project_rules: None,
             diagnostics: Vec::new(),
+            answer: false,
         }
     }
 
@@ -324,6 +359,20 @@ mod tests {
         bad.target = 0..2;
         bad.check_target().unwrap();
         assert_eq!(bad.target_text(), "é");
+    }
+
+    #[test]
+    fn an_answer_asks_for_the_message_alone() {
+        let mut question = request(10..19);
+        question.answer = true;
+        let (system, user) = build(&question);
+        assert!(system.contains("{\"message\": \"<the answer>\"}"));
+        assert!(!system.contains("\"replace\""));
+        assert!(system.contains("at most 60 words"));
+        assert!(user.contains("<<<SELECTION>>>fn b() {}<<<END>>>"));
+        assert!(user.ends_with(ANSWER_REMINDER));
+        // An edit still asks for the new text.
+        assert!(build(&request(10..19)).0.contains("\"replace\""));
     }
 
     #[test]

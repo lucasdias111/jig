@@ -452,6 +452,7 @@ mod tests {
             target: 10..20,
             text,
             diagnostics: Vec::new(),
+            answer: false,
         };
         assert_eq!(
             prompt(&request),

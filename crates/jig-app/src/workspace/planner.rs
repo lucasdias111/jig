@@ -383,6 +383,7 @@ impl Workspace {
             comment: None,
             agent,
             diagnostics: false,
+            answer: false,
             task: Some(task.step_context(todo)),
         };
         self.run_command(invocation, window, cx);
@@ -436,6 +437,7 @@ pub(super) fn implement_invocation(task: &jig_ai::tasks::Task) -> Invocation {
         comment: None,
         agent: true,
         diagnostics: false,
+        answer: false,
         task: Some(task.context()),
     }
 }
