@@ -25,6 +25,8 @@ const MAX_ROWS: usize = 8;
 const MAX_MESSAGE_LINES: usize = 8;
 /// The palette's key context, for its own shortcuts.
 pub const CONTEXT: &str = "JigPalette";
+/// How wide the input is, to find it room beside the code.
+pub const WIDTH: f32 = 420.;
 
 actions!(jig_palette, [PickModel]);
 
@@ -1336,7 +1338,7 @@ impl Render for CommandPalette {
             .capture_action(cx.listener(Self::on_right))
             .capture_action(cx.listener(Self::on_end))
             .capture_action(cx.listener(Self::on_backspace))
-            .w(px(420.))
+            .w(px(WIDTH))
             .p_1p5()
             .gap_0p5()
             .when(agent, |this| this.border_color(accent.opacity(0.55)))

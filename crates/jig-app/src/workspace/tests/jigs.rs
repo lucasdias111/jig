@@ -293,3 +293,48 @@ fn command_k_and_the_jig_button_toggle_the_palette(cx: &mut TestAppContext) {
         "clicking it again closes it, and doesn't open it anew"
     );
 }
+
+#[gpui_kit::test]
+fn the_command_input_opens_beside_the_code_when_it_fits(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let short = "fn short() {}\n";
+    let long = format!("// {}\n", "x".repeat(110));
+    std::fs::write(dir.path().join("a.rs"), format!("{short}{long}")).unwrap();
+    let (window, workspace) = open(cx, &dir.path().join("a.rs"));
+
+    // Open on `line`, and say where it ended up against that line's end.
+    let open_on = |cx: &mut TestAppContext, line: std::ops::Range<usize>| {
+        let (ws, selected) = (workspace.clone(), line.clone());
+        step(cx, window, move |window, cx| {
+            window.render_frame(cx);
+            ws.update(cx, |this, cx| {
+                this.palette = None;
+                this.editor().select(selected.clone(), cx);
+                this.open_command(&super::super::OpenCommand, window, cx);
+            })
+        });
+        cx.update(|cx| {
+            let this = workspace.read(cx);
+            let end = this
+                .editor()
+                .state()
+                .read(cx)
+                .range_to_bounds(&(line.end - 1..line.end - 1))
+                .unwrap();
+            (this.palette.as_ref().unwrap().anchor, end)
+        })
+    };
+
+    let (anchor, end) = open_on(cx, 0..short.len());
+    assert!(
+        anchor.x > end.left(),
+        "right of the code: {anchor:?} {end:?}"
+    );
+    assert!((anchor.y - end.top()).abs() < px(8.), "level with it");
+
+    let (anchor, end) = open_on(cx, short.len()..short.len() + long.len());
+    assert!(
+        anchor.y >= end.bottom(),
+        "no room on the right, so below it: {anchor:?} {end:?}"
+    );
+}

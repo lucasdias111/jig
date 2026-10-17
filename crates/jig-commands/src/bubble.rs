@@ -11,6 +11,8 @@ use gpui_kit::*;
 
 /// Lines of removed code shown before the rest is elided.
 const REMOVED_LINES: usize = 6;
+/// The widest the bubble gets, to find it room beside the code.
+pub const MAX_WIDTH: f32 = 520.;
 
 #[derive(Clone, Debug, PartialEq, IntoElement)]
 pub enum Bubble {
@@ -83,7 +85,7 @@ impl RenderOnce for Bubble {
         let container = crate::surface::panel(cx)
             .flex()
             .flex_col()
-            .max_w(px(520.))
+            .max_w(px(MAX_WIDTH))
             .min_w(px(240.))
             .px_3p5()
             .py_2p5()

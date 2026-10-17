@@ -1441,6 +1441,15 @@ impl Workspace {
             .is_some_and(|agent| agent.sign_in.is_some())
     }
 
+    /// How much of the window's right a docked conversation takes.
+    pub(super) fn docked_chat_width(&self) -> Pixels {
+        self.chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .filter(|agent| agent.frame.pinned)
+            .map_or(px(0.), |agent| agent.frame.width)
+    }
+
     /// The conversation floating at the code, unless it's pinned.
     pub(super) fn floating_agent_chat_pinned(&self) -> bool {
         self.chat
@@ -1493,20 +1502,18 @@ impl Workspace {
     /// Where the conversation opens: just right of the code it's about, so
     /// it doesn't cover it, when the window has room for it there; below
     /// the cursor otherwise.
-    fn agent_anchor(&self, range: Range<usize>, window: &Window, cx: &App) -> Point<Pixels> {
-        const GAP: f32 = 32.;
-        const MARGIN: f32 = 8.;
+    pub(super) fn agent_anchor(
+        &self,
+        range: Range<usize>,
+        window: &Window,
+        cx: &App,
+    ) -> Point<Pixels> {
         let width = self
             .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .map_or(px(jig_commands::chat::WIDTH), |agent| agent.frame.width);
-        self.editor()
-            .beside_point(range, cx)
-            // Level with the first line, give or take the panel's padding.
-            .map(|at| at + point(px(GAP), px(-4.)))
-            .filter(|at| at.x + width + px(MARGIN) <= window.viewport_size().width)
-            .unwrap_or_else(|| self.floating_anchor(cx))
+        self.beside_anchor(range, width, window, cx)
     }
 
     /// Pressed on the conversation's header: a drag may follow.

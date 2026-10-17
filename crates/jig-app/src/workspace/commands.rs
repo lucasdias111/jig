@@ -63,6 +63,28 @@ impl Workspace {
             .unwrap_or(gpui_kit::point(px(48.), px(48.)))
     }
 
+    /// Where a floating panel `width` wide opens: just right of the code in
+    /// `range`, level with its first line, so it covers none of it, when
+    /// there's room for it before the window's edge (or a docked
+    /// conversation); below the cursor otherwise.
+    pub(super) fn beside_anchor(
+        &self,
+        range: Range<usize>,
+        width: Pixels,
+        window: &Window,
+        cx: &App,
+    ) -> Point<Pixels> {
+        const GAP: f32 = 32.;
+        const MARGIN: f32 = 8.;
+        let edge = window.viewport_size().width - self.docked_chat_width();
+        self.editor()
+            .beside_point(range, cx)
+            // Level with the first line, give or take the panel's padding.
+            .map(|at| at + gpui_kit::point(px(GAP), px(-4.)))
+            .filter(|at| at.x + width + px(MARGIN) <= edge)
+            .unwrap_or_else(|| self.floating_anchor(cx))
+    }
+
     /// A button in the title bar that opens the command input, for those
     /// who reach for the mouse or don't know ⌘K yet. Only with a file open.
     pub(super) fn render_command_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -167,8 +189,10 @@ impl Workspace {
         if self.run.take().is_some() {
             self.editor().clear_highlights(cx);
         }
-        let has_selection = !self.editor().selection(cx).is_empty();
-        let anchor = self.floating_anchor(cx);
+        let selection = self.editor().selection(cx);
+        let has_selection = !selection.is_empty();
+        // Beside the selection, or the cursor's line, which a prompt edits.
+        let anchor = self.beside_anchor(selection, px(jig_commands::palette::WIDTH), window, cx);
         let presets = self.presets.clone();
         let context = self.context_names();
         // A docked conversation is where Agent mode lives meanwhile.
@@ -239,7 +263,7 @@ impl Workspace {
             invocation
                 .scope
                 .target(&text, self.editor().selection(cx), self.editor().cursor(cx));
-        let anchor = self.floating_anchor(cx);
+        let anchor = self.bubble_anchor(target.clone(), window, cx);
         self.next_run_id += 1;
         let id = self.next_run_id;
 
@@ -421,9 +445,23 @@ impl Workspace {
             cx,
         );
         if let Some(preview) = self.run.as_mut().and_then(|run| run.preview.as_mut()) {
-            preview.range = range;
+            preview.range = range.clone();
         }
+        // Beside the new code, which may reach further right than the old,
+        // once it's laid out.
+        cx.on_next_frame(window, move |this, window, cx| {
+            let anchor = this.bubble_anchor(range, window, cx);
+            if let Some(run) = this.run.as_mut().filter(|run| run.preview.is_some()) {
+                run.anchor = anchor;
+                cx.notify();
+            }
+        });
         cx.notify();
+    }
+
+    /// Where a jig's bubble goes: beside the code it works on.
+    fn bubble_anchor(&self, target: Range<usize>, window: &Window, cx: &App) -> Point<Pixels> {
+        self.beside_anchor(target, px(jig_commands::bubble::MAX_WIDTH), window, cx)
     }
 
     /// The project files commands are sent with, e.g. "AGENTS.md", by name.
