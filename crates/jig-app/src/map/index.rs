@@ -1442,12 +1442,12 @@ pub(crate) mod tests {
         assert_eq!(project.find(&symbol), None);
     }
 
-    /// How a real project reads: `JIG_GRAPH_PROJECT=<folder>`, `--ignored
+    /// How a real project reads: `JIG_MAP_PROJECT=<folder>`, `--ignored
     /// --nocapture`. Only reads it.
     #[test]
     #[ignore]
     fn reads_a_real_project() {
-        let root = std::env::var_os("JIG_GRAPH_PROJECT").expect("JIG_GRAPH_PROJECT");
+        let root = std::env::var_os("JIG_MAP_PROJECT").expect("JIG_MAP_PROJECT");
         let started = std::time::Instant::now();
         let project = Project::read(Path::new(&root));
         let took = started.elapsed();

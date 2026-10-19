@@ -246,7 +246,7 @@ impl Site {
                 .readmes
                 .get(&path)
                 .cloned()
-                .or_else(|| folder_doc(project, &path));
+                .or_else(|| folder_doc(project, tree, &path));
             let ix = self.push(Node {
                 key: format!("dir:{place}"),
                 kind: Kind::Folder {
@@ -266,11 +266,7 @@ impl Site {
         for &file in &folder.files {
             let source = &project.files[file];
             let place = slashed(&source.path);
-            let functions = project.modules[source.module]
-                .functions
-                .iter()
-                .filter(|&&id| project.functions[id].file == file)
-                .count();
+            let functions = tree.functions.get(&(file, None)).copied().unwrap_or(0);
             let ix = self.push(Node {
                 key: format!("file:{place}"),
                 kind: Kind::File { read: true },
@@ -288,15 +284,11 @@ impl Site {
                 if units.contains_key(&(file, Some(ty.name.clone()))) {
                     continue;
                 }
-                let owned = project.modules[source.module]
+                let owned = tree
                     .functions
-                    .iter()
-                    .filter(|&&id| {
-                        let function = &project.functions[id];
-                        function.file == file
-                            && function.outline.owner.as_deref() == Some(ty.name.as_str())
-                    })
-                    .count();
+                    .get(&(file, Some(ty.name.clone())))
+                    .copied()
+                    .unwrap_or(0);
                 let at = self.push(Node {
                     key: format!("type:{place}#{}", ty.name),
                     kind: Kind::Type,
@@ -460,6 +452,10 @@ fn shelves(sizes: &[(f32, f32)]) -> (Vec<(f32, f32)>, f32, f32) {
 #[derive(Default)]
 struct Tree {
     folders: HashMap<PathBuf, Folder>,
+    /// Each file read, by its path.
+    files: HashMap<PathBuf, usize>,
+    /// How many functions each file has, and each type in it.
+    functions: HashMap<(usize, Option<String>), usize>,
 }
 
 #[derive(Default)]
@@ -476,6 +472,16 @@ impl Tree {
         for (ix, file) in project.files.iter().enumerate() {
             let dir = file.path.parent().unwrap_or(Path::new("")).to_path_buf();
             tree.folder(&dir).files.push(ix);
+            tree.files.insert(file.path.clone(), ix);
+        }
+        for function in &project.functions {
+            *tree.functions.entry((function.file, None)).or_default() += 1;
+            if let Some(owner) = &function.outline.owner {
+                *tree
+                    .functions
+                    .entry((function.file, Some(owner.clone())))
+                    .or_default() += 1;
+            }
         }
         for path in &project.others {
             let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -509,7 +515,7 @@ impl Tree {
 /// What a folder's own module file says it's for: `mod.rs`, the
 /// `name.rs` beside it, `__init__.py`, `index.ts`, `doc.go`,
 /// `package-info.java`.
-fn folder_doc(project: &Project, dir: &Path) -> Option<String> {
+fn folder_doc(project: &Project, tree: &Tree, dir: &Path) -> Option<String> {
     let name = dir.file_name()?.to_string_lossy().into_owned();
     let beside = dir.with_file_name(format!("{name}.rs"));
     let candidates = [
@@ -523,11 +529,8 @@ fn folder_doc(project: &Project, dir: &Path) -> Option<String> {
         dir.join("package-info.java"),
     ];
     candidates.iter().find_map(|path| {
-        project
-            .files
-            .iter()
-            .find(|file| &file.path == path)
-            .and_then(|file| file.purpose.clone())
+        let &file = tree.files.get(path)?;
+        project.files[file].purpose.clone()
     })
 }
 
@@ -697,5 +700,83 @@ mod tests {
             .unwrap();
         assert_eq!(site.nodes[ty].kind, Kind::Type);
         assert!(site.holds(demo, ty));
+    }
+
+    /// The Map on a big project stays smooth: `JIG_MAP_PROJECT=<a repo of
+    /// about 10k files> cargo test -p jig-app big_project_live -- --ignored
+    /// --nocapture` (budgets are for a release build; a debug build gets
+    /// eight times as long). Reading it, reading it again unchanged,
+    /// laying Site out, what each frame at Site works out, and a Plan.
+    #[test]
+    #[ignore]
+    fn big_project_live() {
+        use std::time::{Duration, Instant};
+        let root = std::env::var_os("JIG_MAP_PROJECT").expect("JIG_MAP_PROJECT");
+        let root = Path::new(&root);
+        let slack = if cfg!(debug_assertions) { 8 } else { 1 };
+        let within = |what: &str, took: Duration, budget_ms: u64| {
+            println!("{what}: {took:?}");
+            assert!(
+                took <= Duration::from_millis(budget_ms * slack),
+                "{what} took {took:?}, over {budget_ms} ms"
+            );
+        };
+        let started = Instant::now();
+        let project = Project::read(root);
+        within("read", started.elapsed(), 20_000);
+        println!(
+            "{} files read, {} placed by folder, {} functions, {} skipped",
+            project.files.len(),
+            project.others.len(),
+            project.functions.len(),
+            project.skipped
+        );
+        let started = Instant::now();
+        let again = Project::read_again(root, Some(&project));
+        within("read again, unchanged", started.elapsed(), 4_000);
+        assert_eq!(again.functions.len(), project.functions.len());
+        let started = Instant::now();
+        let site = Site::of(&project);
+        within("Site laid out", started.elapsed(), 3_000);
+        println!(
+            "{} boxes, {} counted calls",
+            site.nodes.len(),
+            site.calls.len()
+        );
+        // Each frame at Site: which boxes show, and the arrows between them,
+        // all the way out and further in.
+        let fit = 1000. / site.nodes[0].rect.width.max(1.);
+        for zoom in [fit, fit * 4., fit * 16., fit * 64.] {
+            let started = Instant::now();
+            let shown = site.shown_as(|ix| ix == 0 || site.nodes[ix].rect.width * zoom >= 340.);
+            let arrows = site.arrows(&shown);
+            within(
+                &format!("a frame at {zoom:.3}x ({} arrows)", arrows.len()),
+                started.elapsed(),
+                30,
+            );
+        }
+        // A Plan around the most called function.
+        let busiest = (0..project.functions.len())
+            .max_by_key(|&id| project.callers[id].len())
+            .expect("a function");
+        let started = Instant::now();
+        let plan = super::super::plan::neighbourhood(
+            &project,
+            busiest,
+            &super::super::plan::Opened::default(),
+        );
+        super::super::layout::layout(&plan);
+        within(
+            &format!("the Plan of {}", project.functions[busiest].title()),
+            started.elapsed(),
+            30,
+        );
+        // Seven callers and "+N more", and its tests folded into one.
+        let callers = plan.nodes.iter().filter(|n| n.column == -1).count();
+        assert!(
+            callers <= super::super::plan::MAX_SIDE + 1,
+            "{callers} callers"
+        );
     }
 }

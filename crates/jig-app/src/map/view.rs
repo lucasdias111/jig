@@ -107,6 +107,8 @@ pub struct MapView {
     hover: Option<input::Hover>,
     /// The scene as last drawn, for finding what's under the pointer.
     drawn: RefCell<Scene>,
+    /// Site's arrows for the boxes showing, kept while they stay the same.
+    site_arrows: RefCell<Option<(u64, Rc<Vec<super::site::Arrow>>)>>,
     /// The paused program's stack, and its functions on the Plan.
     stack: Stack,
     on_stack: Vec<FnId>,
@@ -149,6 +151,7 @@ impl MapView {
             scrolled: None,
             hover: None,
             drawn: RefCell::new(Scene::default()),
+            site_arrows: RefCell::new(None),
             stack: Vec::new(),
             on_stack: Vec::new(),
             live: true,

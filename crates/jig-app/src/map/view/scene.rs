@@ -4,11 +4,12 @@
 //! folder opening as it grows past a size on screen, what's inside
 //! fading in, and the calls counted between the boxes showing.
 
+use std::rc::Rc;
 use std::time::Instant;
 
 use super::super::layout::{HEADER_HEIGHT, Placed, Rect};
 use super::super::plan::Item;
-use super::super::site::{Calls, Kind};
+use super::super::site::{Calls, Kind, Site};
 use super::zoom::Camera;
 use super::zoom::FADE_OUT;
 use super::{Level, MapView};
@@ -299,9 +300,9 @@ impl MapView {
         let shown = site.shown_as(|ix| {
             opened(ix) && (ix == 0 || opening(site.nodes[ix].rect.width * camera.zoom) >= 0.5)
         });
-        let arrows = site.arrows(&shown);
+        let arrows = self.site_arrows(site, &shown);
         for arrow in arrows
-            .into_iter()
+            .iter()
             .filter(|arrow| {
                 let (a, b) = (site.nodes[arrow.from].rect, site.nodes[arrow.to].rect);
                 a.overlaps(&view) || b.overlaps(&view)
@@ -319,11 +320,29 @@ impl MapView {
                 ),
                 across: false,
                 dashed: false,
-                calls: Some(arrow.calls),
+                calls: Some(arrow.calls.clone()),
                 alpha: alpha[arrow.from].min(alpha[arrow.to]).max(0.25),
             });
         }
         scene
+    }
+
+    /// The arrows between the Site boxes `shown`, worked out again only
+    /// when which boxes show changes.
+    fn site_arrows(&self, site: &Site, shown: &[usize]) -> Rc<Vec<super::super::site::Arrow>> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        shown.hash(&mut hasher);
+        (site as *const Site as usize).hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((at, arrows)) = self.site_arrows.borrow().as_ref()
+            && *at == key
+        {
+            return arrows.clone();
+        }
+        let arrows = Rc::new(site.arrows(shown));
+        *self.site_arrows.borrow_mut() = Some((key, arrows.clone()));
+        arrows
     }
 
     /// Plan's boxes that left on a re-centring, fading where they were.

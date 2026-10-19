@@ -363,3 +363,71 @@ fn the_paused_stack_lights_up_and_running_functions_glow(cx: &mut TestAppContext
     assert!(cx.update(|cx| view.read(cx).firing_of("write")) > 0.5);
     assert_eq!(cx.update(|cx| view.read(cx).firing_of("check")), 0.);
 }
+
+/// The Map on Jig's own repo, drawn at every level: `cargo test -p
+/// jig-app map_of_jig_live -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn map_of_jig_live(cx: &mut TestAppContext) {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = super::super::tabs::canonical(&repo);
+    let file = repo.join("crates/jig-app/src/workspace.rs");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let (window, workspace) = open(cx, &file);
+    let inside = text.find("fn render_code").unwrap() + 3;
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .editor()
+            .clone()
+            .select(inside..inside, cx)
+    });
+    press(cx, window, "secondary-b");
+    let arrived = read_level(cx, &workspace);
+    assert!(plan_of("render_code")(&arrived), "{arrived:?}");
+    let view = map(cx, &workspace).unwrap();
+    draw(cx, window);
+    let titles: Vec<String> = cx.update(|cx| {
+        view.read(cx)
+            .plan()
+            .nodes
+            .iter()
+            .map(|n| n.title.clone())
+            .collect()
+    });
+    println!("Plan of render_code: {titles:?}");
+    assert!(
+        titles.iter().any(|t| t == "Workspace.render"),
+        "called from render"
+    );
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    let selected = cx.update(|cx| view.read(cx).selected_keys().to_vec());
+    // Its type's box, in its file.
+    assert_eq!(
+        selected,
+        ["site:type:crates/jig-app/src/workspace.rs#Workspace"]
+    );
+    let showing = cx.update(|cx| view.read(cx).site_showing());
+    println!("Site around workspace.rs: {} boxes showing", showing.len());
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    let all = cx.update(|cx| view.read(cx).site_showing());
+    println!(
+        "The whole project: {:?}",
+        all.iter()
+            .map(|(key, open)| (key.as_str(), *open))
+            .take(12)
+            .collect::<Vec<_>>()
+    );
+    let middle = point(px(400.), px(240.));
+    for _ in 0..12 {
+        zoom_scroll(cx, window, middle, -120.);
+        draw(cx, window);
+        if level(cx, &workspace) != Some(Level::Site) {
+            break;
+        }
+    }
+    let ended = level(cx, &workspace);
+    println!("Zoomed in from the middle: {ended:?}");
+}
