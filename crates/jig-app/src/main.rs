@@ -34,6 +34,7 @@ mod languages;
 mod lines;
 mod lsp;
 mod lsp_debug;
+mod map;
 mod menus;
 mod planner;
 mod project;
