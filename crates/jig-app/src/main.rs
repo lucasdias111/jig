@@ -8,7 +8,6 @@
 mod about_window;
 mod agent;
 mod agents;
-mod blueprint;
 mod brackets;
 mod branch_picker;
 mod completions;

@@ -53,26 +53,7 @@ pub enum Visibility {
     Private,
 }
 
-impl Visibility {
-    /// As UML writes it: `+`, `#`, `~`, `−`.
-    pub fn symbol(self) -> &'static str {
-        match self {
-            Visibility::Public => "+",
-            Visibility::Protected => "#",
-            Visibility::Internal => "~",
-            Visibility::Private => "−",
-        }
-    }
-
-    pub fn word(self) -> &'static str {
-        match self {
-            Visibility::Public => "public",
-            Visibility::Protected => "protected",
-            Visibility::Internal => "internal",
-            Visibility::Private => "private",
-        }
-    }
-}
+impl Visibility {}
 
 /// The visibility of a declaration whose text before its name is
 /// `before`, named `name`, in `lang`: its keywords, else its language's
@@ -167,6 +148,7 @@ pub struct Parameter {
     pub ty: Option<String>,
 }
 
+#[cfg(test)]
 impl Parameter {
     /// `name: Type`, or just the name.
     pub fn label(&self) -> String {
@@ -176,6 +158,8 @@ impl Parameter {
         }
     }
 }
+
+impl Parameter {}
 
 /// A call a function makes, or a function it hands on (a callback).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1115,7 +1099,10 @@ fn doc_before(node: SyntaxNode, source: &str) -> Option<String> {
     while let Some(previous) = at {
         if is_comment(previous) {
             comments.push(text(previous, source));
-        } else if !matches!(previous.kind(), "attribute_item" | "decorator" | "annotation") {
+        } else if !matches!(
+            previous.kind(),
+            "attribute_item" | "decorator" | "annotation"
+        ) {
             break;
         }
         at = previous.prev_sibling();
@@ -1132,7 +1119,9 @@ fn file_purpose(root: SyntaxNode, source: &str, lang: Lang) -> Option<String> {
     if lang == Lang::Python
         && let Some(first) = children.iter().find(|child| !is_comment(**child))
         && first.kind() == "expression_statement"
-        && first.named_child(0).is_some_and(|node| node.kind() == "string")
+        && first
+            .named_child(0)
+            .is_some_and(|node| node.kind() == "string")
     {
         return purpose_of(text(*first, source));
     }

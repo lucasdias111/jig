@@ -6,8 +6,8 @@
 
 use tree_sitter::Node as SyntaxNode;
 
-use super::super::syntax::{Lister, Parts, Scope, Syntax};
 use super::super::syntax::{Function, text};
+use super::super::syntax::{Lister, Parts, Scope, Syntax};
 
 pub(super) static C: Syntax = Syntax {
     separator: "::",
@@ -126,34 +126,7 @@ fn parts<'t>(item: SyntaxNode<'t>, _: &Function, source: &str) -> Option<Parts<'
             .child_by_field_name("type")
             .map(|returns| text(returns, source).to_string()),
         body: item.child_by_field_name("body"),
-        returns_body: false,
     })
-}
-
-/// The names a declaration declares: `x` and `p` in `int x = 1, *p;`.
-fn declared(declaration: SyntaxNode) -> Vec<SyntaxNode> {
-    let mut cursor = declaration.walk();
-    declaration
-        .children_by_field_name("declarator", &mut cursor)
-        .filter_map(|declarator| {
-            let mut name = match declarator.kind() {
-                "init_declarator" => declarator.child_by_field_name("declarator")?,
-                _ => declarator,
-            };
-            for _ in 0..8 {
-                match name.kind() {
-                    "identifier" | "structured_binding_declarator" => return Some(name),
-                    "function_declarator" => return None,
-                    _ => {
-                        name = name
-                            .child_by_field_name("declarator")
-                            .or_else(|| name.named_child(0))?
-                    }
-                }
-            }
-            None
-        })
-        .collect()
 }
 
 #[cfg(test)]

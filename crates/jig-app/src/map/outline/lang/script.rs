@@ -6,8 +6,8 @@
 
 use tree_sitter::Node as SyntaxNode;
 
-use super::super::syntax::{Lister, Parts, Scope, Syntax};
 use super::super::syntax::{Function, text};
+use super::super::syntax::{Lister, Parts, Scope, Syntax};
 
 pub(super) static SYNTAX: Syntax = Syntax {
     separator: ".",
@@ -144,7 +144,6 @@ fn parts<'t>(item: SyntaxNode<'t>, function: &Function, source: &str) -> Option<
         returns: node
             .child_by_field_name("return_type")
             .map(|returns| text(returns, source).trim_start_matches(':').to_string()),
-        returns_body: body.is_some_and(|body| body.kind() != "statement_block"),
         body,
     })
 }

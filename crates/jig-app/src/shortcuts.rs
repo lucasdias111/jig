@@ -413,7 +413,7 @@ pub const ALL: &[Shortcut] = &[
         "toggle_sidebar",
         "Toggle sidebar",
         View,
-        // ⌘B is the blueprint's.
+        // ⌘B is the Map's.
         ["secondary-u"],
         ANYWHERE,
         ToggleSidebar
@@ -444,12 +444,12 @@ pub const ALL: &[Shortcut] = &[
         ToggleGitPanel
     ),
     shortcut!(
-        "toggle_blueprint",
-        "Show blueprint",
+        "show_map",
+        "Show Map",
         View,
         ["secondary-b"],
         ANYWHERE,
-        ToggleBlueprint
+        ShowMap
     ),
     shortcut!(
         "toggle_task_planner",

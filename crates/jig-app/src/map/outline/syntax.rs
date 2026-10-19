@@ -27,24 +27,6 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// The one for Jig's language name, if the Map reads it.
-    pub fn of(language: &str) -> Option<Lang> {
-        Some(match language {
-            "rust" => Lang::Rust,
-            "javascript" => Lang::JavaScript,
-            "typescript" => Lang::TypeScript,
-            "tsx" => Lang::Tsx,
-            "python" => Lang::Python,
-            "go" => Lang::Go,
-            "java" => Lang::Java,
-            "c" => Lang::C,
-            "cpp" => Lang::Cpp,
-            "swift" => Lang::Swift,
-            "zig" => Lang::Zig,
-            _ => return None,
-        })
-    }
-
     fn grammar(self) -> tree_sitter::Language {
         match self {
             Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
@@ -111,8 +93,6 @@ pub(super) struct Parts<'t> {
     pub returns: Option<String>,
     /// Its body: statements in order, or an expression it returns.
     pub body: Option<SyntaxNode<'t>>,
-    /// Whether `body` is an expression, whose value it returns.
-    pub returns_body: bool,
 }
 
 /// Lists a file's functions, with what they're in.
@@ -179,6 +159,7 @@ impl Scope {
 /// The file's functions with bodies, in the order they're written,
 /// including those in impls, traits' default methods and modules (in
 /// other languages, classes, namespaces and the like).
+#[cfg(test)]
 pub fn functions(source: &str, lang: Lang) -> Vec<Function> {
     let Some(tree) = parse(source, lang) else {
         return Vec::new();
@@ -329,6 +310,7 @@ fn base_type(name: &str) -> String {
 }
 
 /// The innermost function whose item contains `offset`.
+#[cfg(test)]
 pub fn containing(functions: &[Function], offset: usize) -> Option<usize> {
     functions
         .iter()

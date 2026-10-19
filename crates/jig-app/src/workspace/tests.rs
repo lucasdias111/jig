@@ -2,7 +2,6 @@
 //! The helpers here are shared; the tests are grouped by feature below.
 
 mod agent;
-mod blueprint;
 mod brackets;
 mod code;
 mod debug;
@@ -13,6 +12,7 @@ mod format;
 mod git;
 mod home;
 mod input;
+mod map;
 mod occurrences;
 mod quick_fix;
 mod servers;

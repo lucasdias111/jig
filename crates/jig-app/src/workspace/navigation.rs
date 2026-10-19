@@ -1,8 +1,9 @@
 //! Go Back and Go Forward (⌃- and ⌃⇧-): jumps (a task's link, Go to
 //! Definition, Go to Line, a problem, a search result) remember where the
-//! cursor was, so you can go back and forth between them. A place in the
-//! blueprint view is one too, and going back to it shows the blueprint.
-//! A mouse's back and forward buttons do the same.
+//! cursor was, so you can go back and forth between them. The Map's
+//! places are too: entering it, each level stepped into and each
+//! re-centring; going back to one shows the Map there. A mouse's back and
+//! forward buttons do the same.
 
 use std::path::{Path, PathBuf};
 
@@ -11,18 +12,31 @@ use jig_editor::EditorHandle as _;
 
 use super::tabs::canonical;
 use super::{GoBack, GoForward, Workspace};
+use crate::map::view::Level;
 
 /// More than anyone goes back through.
 const MAX_PLACES: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Place {
-    path: PathBuf,
-    /// The cursor, as a byte offset. Edits since may have moved what was
-    /// there; it's kept within the file.
-    offset: usize,
-    /// The blueprint view was showing, there.
-    blueprint: bool,
+pub(super) enum Place {
+    Code {
+        path: PathBuf,
+        /// The cursor, as a byte offset. Edits since may have moved what
+        /// was there; it's kept within the file.
+        offset: usize,
+    },
+    /// A level of the Map.
+    Map(Level),
+}
+
+impl Place {
+    /// Whether it can still be gone to: its file is there.
+    fn exists(&self) -> bool {
+        match self {
+            Place::Code { path, .. } => path.is_file(),
+            Place::Map(_) => true,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -53,17 +67,23 @@ impl Workspace {
                 .is_some_and(|open| canonical(open) == canonical(path))
     }
 
-    /// Where the cursor is, in a saved file.
+    /// Where the cursor is, in a saved file, or the Map's level.
     fn here(&self, cx: &App) -> Option<Place> {
+        if let Some(view) = self.map_showing() {
+            return Some(Place::Map(view.read(cx).level().clone()));
+        }
         if self.home {
             return None;
         }
-        let blueprint = self.blueprint().and_then(|view| view.read(cx).place());
-        Some(Place {
+        Some(Place::Code {
             path: self.document().path.clone()?,
-            offset: blueprint.unwrap_or_else(|| self.editor().cursor(cx)),
-            blueprint: blueprint.is_some(),
+            offset: self.editor().cursor(cx),
         })
+    }
+
+    /// The Map moved on from `level`: Go Back returns to it.
+    pub(super) fn remember_map(&mut self, level: Level) {
+        self.remember(Place::Map(level));
     }
 
     /// About to jump somewhere: remember where the cursor is, for Go Back.
@@ -80,10 +100,9 @@ impl Workspace {
             .tab_for(path)
             .and_then(|ix| self.tabs[ix].last_cursor());
         if let Some(offset) = offset {
-            self.remember(Place {
+            self.remember(Place::Code {
                 path: path.to_path_buf(),
                 offset,
-                blueprint: false,
             });
         }
     }
@@ -128,30 +147,28 @@ impl Workspace {
             (&mut self.history.forward, &mut self.history.back)
         };
         // Places in files since deleted are skipped.
-        let Some(place) = std::iter::from_fn(|| from.pop()).find(|place| place.path.is_file())
-        else {
+        let Some(place) = std::iter::from_fn(|| from.pop()).find(Place::exists) else {
             return;
         };
         if let Some(here) = here {
             History::push(to, here);
         }
-        self.open_file(&place.path, window, cx);
-        if !self.showing(&place.path) {
+        let (path, offset) = match place {
+            Place::Map(level) => return self.map_at(level, window, cx),
+            Place::Code { path, offset } => (path, offset),
+        };
+        self.leave_map(window, cx);
+        self.open_file(&path, window, cx);
+        if !self.showing(&path) {
             return;
         }
         let text = self.editor().text(cx);
-        let mut offset = place.offset.min(text.len());
+        let mut offset = offset.min(text.len());
         while !text.is_char_boundary(offset) {
             offset -= 1;
         }
         self.editor().select(offset..offset, cx);
-        if place.blueprint {
-            self.blueprint_at(offset, window, cx);
-        } else {
-            // Showing the code, if its blueprint was.
-            self.close_blueprint(window, cx);
-            self.editor().focus(window, cx);
-        }
+        self.editor().focus(window, cx);
         cx.notify();
     }
 

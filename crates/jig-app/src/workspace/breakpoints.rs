@@ -183,7 +183,7 @@ impl Workspace {
             }
             self.tabs[ix].marks.enabled = enabled;
         }
-        self.refresh_blueprint_debug(cx);
+        self.refresh_map_debug(cx);
     }
 
     /// ⌘F8: a breakpoint on the cursor's line, or none.
@@ -225,7 +225,7 @@ impl Workspace {
         self.breakpoints
             .set(path.clone(), self.breakpoint_lines(ix, cx));
         self.breakpoints_changed(&path, cx);
-        self.refresh_blueprint_debug(cx);
+        self.refresh_map_debug(cx);
         cx.notify();
     }
 
@@ -300,23 +300,15 @@ impl Workspace {
     ) {
         self.clear_execution_line(cx);
         let position = lsp_types::Position::new(line, 0);
-        // Following along in the blueprint: it stays, at the pause.
-        let in_blueprint = self.blueprint().is_some();
-        if in_blueprint {
+        // Following along on the Map: it stays, on the Plan of the pause.
+        let in_map = self.map_showing().is_some();
+        if in_map {
             self.remember_location(cx);
-            self.open_file(path, window, cx);
-        } else {
-            self.open_at(path, lsp_types::Range::new(position, position), window, cx);
         }
+        self.open_at(path, lsp_types::Range::new(position, position), window, cx);
         let Some(ix) = self.tab_for(path) else {
             return;
         };
-        if in_blueprint && self.showing(path) {
-            let text = self.editor().text(cx);
-            if let Some(range) = line_range(&text, line) {
-                self.blueprint_at(range.start, window, cx);
-            }
-        }
         let text = self.tabs[ix].editor.text(cx);
         if let Some(range) = line_range(&text, line) {
             let color = cx.theme().blue.opacity(0.22);
@@ -329,7 +321,10 @@ impl Workspace {
                 cx,
             );
         }
-        self.refresh_blueprint_debug(cx);
+        if in_map {
+            self.keep_map(window, cx);
+        }
+        self.refresh_map_debug(cx);
     }
 
     /// Where the debugger is paused in tab `ix`: the start of the marked
@@ -342,11 +337,6 @@ impl Workspace {
             .into_iter()
             .next()
             .map(|range| range.start)
-    }
-
-    /// Whether tab `ix` takes breakpoints.
-    pub(super) fn takes_breakpoints_in(&self, ix: usize) -> bool {
-        self.tabs[ix].marks.enabled
     }
 
     /// Where the execution line is marked, if anywhere.
@@ -363,7 +353,7 @@ impl Workspace {
         for tab in &self.tabs {
             tab.marks.execution.clear(cx);
         }
-        self.refresh_blueprint_debug(cx);
+        self.refresh_map_debug(cx);
     }
 }
 

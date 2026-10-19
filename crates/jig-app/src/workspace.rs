@@ -3,7 +3,6 @@
 
 mod agent;
 mod agents_file;
-mod blueprint;
 mod brackets;
 mod breakpoints;
 mod code_menu;
@@ -24,6 +23,7 @@ mod hover;
 mod line_edits;
 mod live;
 mod lsp;
+mod map;
 mod navigation;
 mod occurrences;
 mod planner;
@@ -117,7 +117,7 @@ actions!(
         NewTask,
         GoBack,
         GoForward,
-        ToggleBlueprint
+        ShowMap
     ]
 );
 
@@ -192,11 +192,13 @@ pub struct Workspace {
     planner: planner::PlannerState,
     /// Where jumps came from, for Go Back and Go Forward.
     history: navigation::History,
-    /// Where the debugger paused this session, oldest first, as files and
-    /// 0-based lines: the blueprint lights the way it went.
-    debug_trail: Vec<(PathBuf, u32)>,
-    /// The logpoints that light blueprints up as the program runs.
+    /// The logpoints that light the Map's functions up as the program
+    /// runs.
     live: live::LivePoints,
+    /// The Map, once it has shown.
+    map: Option<map::MapPane>,
+    /// How far a pinch in the code has gone out, towards the Map.
+    pinched: f32,
     file_watch: file_watch::FileWatch,
     /// A save waiting on its formatter.
     pending_save: Option<format::PendingSave>,
@@ -270,7 +272,8 @@ impl Workspace {
             git: Default::default(),
             planner: Default::default(),
             history: Default::default(),
-            debug_trail: Vec::new(),
+            map: None,
+            pinched: 0.,
             live: Default::default(),
             file_watch: file_watch::FileWatch::start(window, cx),
             pending_save: None,
@@ -622,9 +625,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 }
 
 impl Workspace {
-    /// The current tab's code, or its blueprint view.
+    /// The current tab's code, or the Map in its place.
     fn render_code(&self, cx: &Context<Self>) -> AnyElement {
-        if let Some(view) = self.blueprint() {
+        if let Some(view) = self.map_showing() {
             return div()
                 .flex_1()
                 .min_h_0()
@@ -640,6 +643,7 @@ impl Workspace {
             .pb_2()
             // Line shortcuts bind here, not in every other input.
             .key_context("CodeEditor")
+            .on_pinch(cx.listener(Self::pinch_code))
             .child(
                 Editor::new(self.editor().state())
                     .bordered(false)
@@ -732,7 +736,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_task))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
-            .on_action(cx.listener(Self::toggle_blueprint))
+            .on_action(cx.listener(Self::show_map))
             .capture_any_mouse_down(cx.listener(Self::navigation_button))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))
@@ -760,7 +764,7 @@ impl Render for Workspace {
                             .border_b_1()
                             .border_color(theme.title_bar_border)
                             .child(title)
-                            .children(self.render_blueprint_button(cx))
+                            .children(self.render_map_button(cx))
                             .children(self.render_command_button(cx))
                             .children(self.render_run_controls(cx)),
                     ),

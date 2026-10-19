@@ -76,18 +76,6 @@ pub struct Placed {
 }
 
 impl Placed {
-    /// Where calls come into box `ix`.
-    pub fn in_pin(&self, ix: usize) -> (f32, f32) {
-        let rect = self.nodes[ix];
-        (rect.x, rect.y + HEADER_HEIGHT / 2.)
-    }
-
-    /// Where box `ix`'s calls leave it.
-    pub fn out_pin(&self, ix: usize) -> (f32, f32) {
-        let rect = self.nodes[ix];
-        (rect.right(), rect.y + HEADER_HEIGHT / 2.)
-    }
-
     /// Box `ix` moved to `(x, y)`.
     pub fn put(&mut self, ix: usize, (x, y): (f32, f32)) {
         self.nodes[ix].x = x;
@@ -96,7 +84,11 @@ impl Placed {
 
     /// Everything moved by `(dx, dy)`.
     pub fn shift(&mut self, (dx, dy): (f32, f32)) {
-        for rect in self.nodes.iter_mut().chain(self.frames.iter_mut().map(|(_, r)| r)) {
+        for rect in self
+            .nodes
+            .iter_mut()
+            .chain(self.frames.iter_mut().map(|(_, r)| r))
+        {
             rect.x += dx;
             rect.y += dy;
         }
@@ -303,9 +295,8 @@ mod tests {
             &Opened::default(),
         );
         let placed = layout(&plan);
-        let x = |title: &str| {
-            placed.nodes[plan.nodes.iter().position(|n| n.title == title).unwrap()].x
-        };
+        let x =
+            |title: &str| placed.nodes[plan.nodes.iter().position(|n| n.title == title).unwrap()].x;
         assert!(x("BugService.create") < x("UserService.find"));
         assert!(x("UserService.find") < x("UserService.lookup"));
         for (a, ra) in placed.nodes.iter().enumerate() {

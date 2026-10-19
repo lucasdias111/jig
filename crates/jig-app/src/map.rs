@@ -7,8 +7,10 @@
 //! nested; `layout` places Plan's boxes; `view` draws the canvas, zooms
 //! between the levels and takes the gestures.
 
+pub mod debug;
 pub mod index;
-pub mod outline;
 pub mod layout;
+pub mod outline;
 pub mod plan;
 pub mod site;
+pub mod view;

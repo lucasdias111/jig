@@ -72,9 +72,9 @@ enum Pending {
 pub(super) struct Frame {
     id: i64,
     pub(super) name: String,
-    path: Option<PathBuf>,
+    pub(super) path: Option<PathBuf>,
     /// 1-based.
-    line: u32,
+    pub(super) line: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -354,8 +354,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.debug_trail.clear();
-        self.refresh_blueprint_debug(cx);
+        self.refresh_map_debug(cx);
         let plan = match debug_target::plan_for(&config, &debuggers::registry()) {
             Ok(plan) => plan,
             Err(why) => {
@@ -671,7 +670,7 @@ impl Workspace {
                     return;
                 };
                 let mut breakpoints = self.breakpoints_for(&key, cx);
-                // Files only the blueprints want to hear from.
+                // Files only the Map wants to hear from.
                 let live: Vec<PathBuf> = self
                     .live
                     .files()
@@ -829,11 +828,6 @@ impl Workspace {
         // Start where there's code to show: a crash often pauses inside
         // the system's libraries.
         let first = frames.iter().position(|f| f.path.is_some()).unwrap_or(0);
-        if let Some(frame) = frames.get(first)
-            && let Some(path) = &frame.path
-        {
-            self.note_pause(path, frame.line.saturating_sub(1));
-        }
         let Some(debug) = self.debug_mut() else {
             return;
         };
@@ -841,6 +835,7 @@ impl Workspace {
         if !debug.frames.is_empty() {
             self.select_frame(first, window, cx);
         }
+        self.refresh_map_debug(cx);
     }
 
     pub(super) fn select_frame(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

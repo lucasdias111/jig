@@ -39,7 +39,10 @@ pub enum Item {
     /// Calls into a package outside the project.
     External(String),
     /// Functions folded away: on a side, or the rest of a module.
-    More { ids: Vec<FnId>, key: String },
+    More {
+        ids: Vec<FnId>,
+        key: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -316,7 +319,12 @@ pub fn place_functions(project: &Project, place: &str) -> Vec<FnId> {
                 && owner.is_none_or(|owner| function.outline.owner.as_deref() == Some(owner))
         })
         .collect();
-    ids.sort_by_key(|&id| (project.functions[id].file, project.functions[id].range().start));
+    ids.sort_by_key(|&id| {
+        (
+            project.functions[id].file,
+            project.functions[id].range().start,
+        )
+    });
     ids
 }
 
@@ -460,7 +468,14 @@ fn spread(plan: &mut Plan, project: &Project, of: &str, centre: &[FnId], opened:
         externals(plan, project, id, here, 1);
     }
     side(plan, project, of, callers, -1, opened, &mut queue);
-    open_hops(plan, project, std::mem::take(&mut queue), centre, focus, opened);
+    open_hops(
+        plan,
+        project,
+        std::mem::take(&mut queue),
+        centre,
+        focus,
+        opened,
+    );
     // The centre's own hops opened, as a function's focus opens them.
     for &id in centre {
         let key = function_key(project, id);
@@ -869,7 +884,10 @@ mod tests {
         let join = &plan.nodes[plan.focus.unwrap()];
         assert!(join.unknown_target);
         assert!(titles(&plan).contains(&"mediasoup"));
-        assert_eq!(join.detail, "(id: string, done: () => void) → Promise<void>");
+        assert_eq!(
+            join.detail,
+            "(id: string, done: () => void) → Promise<void>"
+        );
     }
 
     #[test]
@@ -914,7 +932,10 @@ mod tests {
         assert_eq!(callers, MAX_SIDE, "seven callers and a +N more");
         assert!(titles(&plan).contains(&"+4 more"));
         let mut opened = Opened::default();
-        opened.more.insert(format!("{}@-1", function_key(&project, id(&project, "hub"))));
+        opened.more.insert(format!(
+            "{}@-1",
+            function_key(&project, id(&project, "hub"))
+        ));
         let all = neighbourhood(&project, id(&project, "hub"), &opened);
         assert_eq!(all.nodes.iter().filter(|n| n.column == -1).count(), 11);
     }

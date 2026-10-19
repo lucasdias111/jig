@@ -36,11 +36,60 @@ const MAX_FILES: usize = 12000;
 /// Files the outline can't read but that are the project's own code or
 /// pages, placed by their folder: templates, styles, other languages.
 const OTHER_SOURCES: &[&str] = &[
-    "svelte", "vue", "astro", "html", "htm", "css", "scss", "sass", "less", "erb", "hbs",
-    "handlebars", "mustache", "ejs", "njk", "jinja", "j2", "liquid", "twig", "php", "rb", "kt",
-    "kts", "scala", "cs", "fs", "lua", "dart", "ex", "exs", "erl", "hs", "ml", "clj", "sql",
-    "graphql", "gql", "proto", "sh", "bash", "zsh", "gd", "m", "mm", "groovy", "r", "jl", "nim",
-    "cr", "elm", "purs", "sol", "tf", "nix",
+    "svelte",
+    "vue",
+    "astro",
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    "erb",
+    "hbs",
+    "handlebars",
+    "mustache",
+    "ejs",
+    "njk",
+    "jinja",
+    "j2",
+    "liquid",
+    "twig",
+    "php",
+    "rb",
+    "kt",
+    "kts",
+    "scala",
+    "cs",
+    "fs",
+    "lua",
+    "dart",
+    "ex",
+    "exs",
+    "erl",
+    "hs",
+    "ml",
+    "clj",
+    "sql",
+    "graphql",
+    "gql",
+    "proto",
+    "sh",
+    "bash",
+    "zsh",
+    "gd",
+    "m",
+    "mm",
+    "groovy",
+    "r",
+    "jl",
+    "nim",
+    "cr",
+    "elm",
+    "purs",
+    "sol",
+    "tf",
+    "nix",
 ];
 /// Files bigger than this are generated, not written.
 const MAX_BYTES: u64 = 512 * 1024;
@@ -100,18 +149,6 @@ impl Func {
 
     pub fn range(&self) -> &Range<usize> {
         &self.outline.function.range
-    }
-
-    /// Whether it makes its type: Java's and C++'s named for it,
-    /// `constructor`, `__init__`, Swift's `init`, Rust's and Go's `new`.
-    pub fn is_constructor(&self) -> bool {
-        let name = self.short();
-        match &self.outline.owner {
-            Some(owner) => {
-                name == owner || matches!(name, "constructor" | "__init__" | "init" | "new")
-            }
-            None => name.starts_with("New") && name.len() > 3,
-        }
     }
 }
 
@@ -189,6 +226,18 @@ pub fn lang_of(path: &Path) -> Option<Lang> {
         "zig" => Lang::Zig,
         _ => return None,
     })
+}
+
+/// The project `file` is in, when no folder is open: the nearest folder
+/// above it with `.git`, else with a manifest (`Cargo.toml`,
+/// `package.json`…), else its own folder.
+pub fn root_of(file: &Path) -> PathBuf {
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let with = |marker: &dyn Fn(&Path) -> bool| dir.ancestors().find(|dir| marker(dir));
+    with(&|dir| dir.join(".git").exists())
+        .or_else(|| with(&|dir| MANIFESTS.iter().any(|name| dir.join(name).is_file())))
+        .unwrap_or(dir)
+        .to_path_buf()
 }
 
 /// When a file was last changed, and how long it was.
@@ -341,6 +390,7 @@ fn source_files(root: &Path) -> Found {
 
 impl Project {
     /// Read the project at `root`.
+    #[cfg(test)]
     pub fn read(root: &Path) -> Project {
         Project::read_again(root, None)
     }
@@ -411,19 +461,8 @@ impl Project {
         }
     }
 
-    /// The project made of these files and what they read as.
-    pub fn from_outlines(
-        root: &Path,
-        files: Vec<(PathBuf, Outline)>,
-        aliases: Vec<Alias>,
-    ) -> Project {
-        let files = files
-            .into_iter()
-            .map(|(path, outline)| (path, None, outline))
-            .collect();
-        Project::from_stamped(root, files, aliases)
-    }
-
+    /// The project made of these files, their stamps, and what they read
+    /// as.
     fn from_stamped(
         root: &Path,
         files: Vec<(PathBuf, Option<Stamp>, Outline)>,

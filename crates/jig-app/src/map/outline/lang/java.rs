@@ -5,8 +5,8 @@
 
 use tree_sitter::Node as SyntaxNode;
 
-use super::super::syntax::{Lister, Parts, Scope, Syntax};
 use super::super::syntax::{Function, text};
+use super::super::syntax::{Lister, Parts, Scope, Syntax};
 
 pub(super) static SYNTAX: Syntax = Syntax {
     separator: ".",
@@ -76,15 +76,7 @@ fn parts<'t>(item: SyntaxNode<'t>, _: &Function, source: &str) -> Option<Parts<'
             .child_by_field_name("type")
             .map(|returns| text(returns, source).to_string()),
         body: item.child_by_field_name("body"),
-        returns_body: false,
     })
-}
-
-fn declarators(declaration: SyntaxNode) -> Vec<SyntaxNode> {
-    let mut cursor = declaration.walk();
-    declaration
-        .children_by_field_name("declarator", &mut cursor)
-        .collect()
 }
 
 #[cfg(test)]

@@ -48,9 +48,9 @@ pub(super) struct Tab {
     pub(super) structure: super::brackets::Structure,
     /// The other uses of the name at the cursor.
     pub(super) occurrences: super::occurrences::Occurrences,
-    /// The blueprint view, while it shows in place of the code.
-    pub(super) blueprint: Option<super::blueprint::OpenBlueprint>,
     _events: Subscription,
+    /// The code getting focus, which shows it in place of the Map.
+    _focused: Subscription,
 }
 
 impl Tab {
@@ -132,7 +132,6 @@ impl Workspace {
                     this.snippet_changed(ix, cx);
                     this.git_buffer_changed(ix, cx);
                     this.show_structure(ix, true, cx);
-                    this.blueprint_changed(ix, cx);
                     if ix == this.active {
                         this.on_buffer_changed(cx);
                     }
@@ -145,6 +144,9 @@ impl Workspace {
                 cx.notify();
             },
         );
+        let focused = cx.on_focus(&state.focus_handle(cx), window, |this, _, cx| {
+            this.code_focused(cx)
+        });
         let cursor = cx.new(|cx| CursorPosition::new(state.clone(), cx));
         let marks = self.install_marks(&state, &document, cx);
         self.install_git(&state, &document, cx);
@@ -175,8 +177,8 @@ impl Workspace {
             hover,
             structure,
             occurrences,
-            blueprint: None,
             _events: events,
+            _focused: focused,
         }
     }
 
@@ -338,6 +340,8 @@ impl Workspace {
     }
 
     fn enter_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A tab is code: it shows in place of the Map.
+        self.code_focused(cx);
         self.focus_code(window, cx);
         self.tab_scroll.scroll_to_item(self.active);
         self.update_title(window);
@@ -418,10 +422,7 @@ impl Workspace {
             self.leave_tab(cx);
         }
         self.remember_breakpoints(ix, cx);
-        let blueprint = self.tabs.remove(ix).blueprint.is_some();
-        if blueprint {
-            self.sync_live_points(cx);
-        }
+        self.tabs.remove(ix);
         if self.tabs.is_empty() {
             let tab = self.new_tab(Document::default(), window, cx);
             self.tabs.push(tab);

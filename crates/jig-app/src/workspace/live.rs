@@ -1,7 +1,7 @@
-//! Blueprints firing off while the program runs. Each block of a function
-//! a blueprint shows gets a logpoint on its first line while debugging: the
-//! debugger prints a message there and carries on without stopping. The
-//! message names the place, and the blueprints showing it light it up.
+//! The Map's functions glowing while the program runs. Each function on
+//! the Plan showing gets a logpoint on its first statement while
+//! debugging: the debugger prints a message there and carries on without
+//! stopping. The message names the place, and the Map lights it up.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::Workspace;
 use super::tabs::canonical;
-use crate::blueprint::view::BlueprintView;
+use crate::map::view::MapView;
 
 /// What each logpoint's message starts with, then its place's id. No
 /// braces: LLDB reads those as expressions to print.
@@ -21,10 +21,10 @@ pub(super) struct LivePoints {
     /// Each place a logpoint was set, by the id its message carries.
     places: Vec<(PathBuf, u32)>,
     ids: HashMap<(PathBuf, u32), usize>,
-    /// The lines (0-based) the blueprints want to hear about, by file.
+    /// The lines (0-based) the Map wants to hear about, by file.
     lines: BTreeMap<PathBuf, BTreeSet<u32>>,
-    /// The blueprints showing, by file, to light up.
-    views: Vec<(PathBuf, WeakEntity<BlueprintView>)>,
+    /// The Map, to light up.
+    view: Option<WeakEntity<MapView>>,
 }
 
 impl LivePoints {
@@ -68,23 +68,16 @@ pub(super) fn fired(output: &str) -> Option<Vec<usize>> {
 }
 
 impl Workspace {
-    /// Ask the debugger to report the lines the blueprints showing want,
-    /// as they now are.
+    /// Ask the debugger to report the lines the Map showing wants, as
+    /// they now are.
     pub(super) fn sync_live_points(&mut self, cx: &App) {
         let mut lines: BTreeMap<PathBuf, BTreeSet<u32>> = BTreeMap::new();
-        let mut views = Vec::new();
-        for tab in &self.tabs {
-            let (Some(open), Some(path)) = (&tab.blueprint, &tab.document.path) else {
-                continue;
-            };
-            let path = canonical(path);
-            let wanted = open.view.read(cx).live_lines();
-            if !wanted.is_empty() {
-                lines.entry(path.clone()).or_default().extend(wanted);
-                views.push((path, open.view.downgrade()));
+        if let Some(view) = self.map_showing() {
+            for (path, line) in view.read(cx).live_lines() {
+                lines.entry(canonical(&path)).or_default().insert(line);
             }
         }
-        self.live.views = views;
+        self.live.view = self.map_showing().map(|view| view.downgrade());
         if lines == self.live.lines {
             return;
         }
@@ -100,18 +93,17 @@ impl Workspace {
         }
     }
 
-    /// The program reached the logpoints `ids`: light up their blocks.
+    /// The program reached the logpoints `ids`: light up their
+    /// functions.
     pub(super) fn on_fired(&mut self, ids: &[usize], cx: &mut App) {
+        let Some(view) = self.live.view.clone() else {
+            return;
+        };
         for &id in ids {
-            let Some((path, line)) = self.live.places.get(id) else {
+            let Some((path, line)) = self.live.places.get(id).cloned() else {
                 continue;
             };
-            for (file, view) in &self.live.views {
-                if file == path {
-                    let line = *line;
-                    let _ = view.update(cx, |view, cx| view.fire_line(line, cx));
-                }
-            }
+            let _ = view.update(cx, |view, cx| view.fire_line(&path, line, cx));
         }
     }
 }

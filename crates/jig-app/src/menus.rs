@@ -11,9 +11,9 @@ use crate::workspace::{
     FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack, GoForward, GoToFile,
     GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask, NextProblem, NextTab, Open,
     OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
-    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, StepInto, StepOut, StepOver, StopRun,
-    SwitchBranch, ToggleBlueprint, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment,
-    ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
+    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, ShowMap, StepInto, StepOut, StepOver,
+    StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
+    ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -110,7 +110,7 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Show Files", FocusFileTree),
                 MenuItem::action("Show Tasks", ToggleTaskPlanner),
                 MenuItem::action("New Task…", NewTask),
-                MenuItem::action("Show Blueprint", ToggleBlueprint),
+                MenuItem::action("Show Map", ShowMap),
                 MenuItem::separator(),
                 MenuItem::action("Show Next Tab", NextTab),
                 MenuItem::action("Show Previous Tab", PreviousTab),

@@ -84,6 +84,7 @@ pub struct Site {
     pub nodes: Vec<Node>,
     /// The calls between files and types, by (from, to) node.
     pub calls: HashMap<(usize, usize), Calls>,
+    by_key: HashMap<String, usize>,
 }
 
 /// An arrow between two boxes showing: one per direction.
@@ -120,11 +121,17 @@ impl Site {
         site.count(0);
         site.place(0);
         site.calls = calls(project, &units);
+        site.by_key = site
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(ix, node)| (node.key.clone(), ix))
+            .collect();
         site
     }
 
     pub fn index_of(&self, key: &str) -> Option<usize> {
-        self.nodes.iter().position(|node| node.key == key)
+        self.by_key.get(key).copied()
     }
 
     /// The box holding `place` (a folder `dir/`, a file or `path#Type`):
@@ -476,7 +483,9 @@ impl Tree {
         }
         for folder in tree.folders.values_mut() {
             folder.folders.sort();
-            folder.files.sort_by_key(|&ix| project.files[ix].path.clone());
+            folder
+                .files
+                .sort_by_key(|&ix| project.files[ix].path.clone());
         }
         tree
     }
@@ -590,7 +599,11 @@ mod tests {
     #[test]
     fn folders_nest_with_their_files_and_types_inside() {
         let dir = fixture();
-        std::fs::write(dir.path().join("client/src/App.svelte"), "<script></script>").unwrap();
+        std::fs::write(
+            dir.path().join("client/src/App.svelte"),
+            "<script></script>",
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join("client/README.md"),
             "# Client\n\nThe web client that joins rooms. It talks to the server.\n",
@@ -655,7 +668,10 @@ mod tests {
             .find(|a| a.from == service && a.to == find)
             .expect("BugService calls UserService");
         assert_eq!(arrow.calls.count, 1);
-        assert_eq!(arrow.calls.examples, ["BugService.create → UserService.find"]);
+        assert_eq!(
+            arrow.calls.examples,
+            ["BugService.create → UserService.find"]
+        );
         // The folders closed: their files' calls, summed onto them.
         let closed = site.shown_as(|ix| ix != bugs && ix != users);
         let arrows = site.arrows(&closed);

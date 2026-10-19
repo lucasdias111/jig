@@ -6,8 +6,8 @@
 
 use tree_sitter::Node as SyntaxNode;
 
-use super::super::syntax::{Lister, Parts, Scope, Syntax};
 use super::super::syntax::{Function, text};
+use super::super::syntax::{Lister, Parts, Scope, Syntax};
 
 pub(super) static SYNTAX: Syntax = Syntax {
     separator: ".",
@@ -78,7 +78,6 @@ fn parts<'t>(item: SyntaxNode<'t>, _: &Function, source: &str) -> Option<Parts<'
         parameters,
         returns,
         body,
-        returns_body: false,
     })
 }
 
