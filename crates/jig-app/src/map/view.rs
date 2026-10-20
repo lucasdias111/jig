@@ -923,6 +923,17 @@ impl MapView {
             .collect()
     }
 
+    /// Whether each drawn link's words are faint.
+    pub fn drawn_faint(&self) -> Vec<bool> {
+        self.drawn
+            .borrow()
+            .arrows
+            .iter()
+            .filter(|a| a.link)
+            .map(|a| a.faint)
+            .collect()
+    }
+
     /// How many links between domains are drawn.
     pub fn drawn_links(&self) -> usize {
         self.drawn.borrow().arrows.iter().filter(|a| a.link).count()

@@ -227,9 +227,23 @@ impl MapView {
         for (ix, _) in level.showing() {
             scene.regions.push(self.region_box(&level, ix, 0.));
         }
-        for link in &level.links {
-            scene.arrows.push(link_arrow(&level, link));
-        }
+        // What flows along each link: in full on the selected domain's,
+        // faintly on the rest. The full ones are placed first, so the faint
+        // ones keep out of their way.
+        let picked = self.selected_region();
+        let mut links: Vec<Arrow> = level
+            .links
+            .iter()
+            .map(|link| {
+                let mut arrow = link_arrow(&level, link);
+                arrow.faint = ![link.a, link.b]
+                    .iter()
+                    .any(|&end| Some(&level.regions[end].key) == picked.as_ref());
+                arrow
+            })
+            .collect();
+        links.sort_by_key(|arrow| arrow.faint);
+        scene.arrows.extend(links);
         scene
     }
 
@@ -893,6 +907,7 @@ pub(super) fn link_arrow(level: &DomainLevel, link: &super::super::domains::leve
         heads: (!link.backward.is_empty(), !link.forward.is_empty()),
         labels,
         link: true,
+        faint: false,
     }
 }
 

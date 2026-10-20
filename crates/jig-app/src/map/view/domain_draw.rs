@@ -369,13 +369,18 @@ impl MapView {
             .px(px(6.))
             .py(px(2.))
             .rounded(px(6.))
-            .bg(theme::canvas(cx))
-            .border_1()
-            .border_color(theme.foreground.opacity(0.18))
+            .when(!arrow.faint, |this| {
+                this.bg(theme::canvas(cx))
+                    .border_1()
+                    .border_color(theme.foreground.opacity(0.18))
+            })
+            .when(arrow.faint, |this| {
+                this.border_1().border_color(transparent_black())
+            })
             .text_size(px(10.5))
             .line_height(px(14.))
             .text_color(theme.foreground.opacity(0.75))
-            .opacity(arrow.alpha)
+            .opacity(arrow.alpha * if arrow.faint { 0.3 } else { 1. })
             .children(arrow.labels.iter().map(|(forward, label)| {
                 div().child(format!("{} {label}", glyph(*forward, dx, dy)))
             }))

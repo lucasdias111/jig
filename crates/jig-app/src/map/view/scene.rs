@@ -149,6 +149,8 @@ pub struct Arrow {
     /// A link between two domains, drawn steady whether it's labelled or
     /// not.
     pub link: bool,
+    /// Its words drawn faintly: a link of a domain not selected.
+    pub faint: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -259,6 +261,7 @@ impl MapView {
                 heads: (false, false),
                 labels: Vec::new(),
                 link: false,
+                faint: false,
                 alpha: self
                     .arriving(&self.plan.nodes[wire.from].key, now)
                     .min(self.arriving(&self.plan.nodes[wire.to].key, now)),
@@ -394,6 +397,7 @@ impl MapView {
                 heads: (false, true),
                 labels: Vec::new(),
                 link: false,
+                faint: false,
             });
         }
         // Between regions, the domains' links, one per pair; what flows

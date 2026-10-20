@@ -487,7 +487,9 @@ impl MapView {
                         lines.push(Line {
                             from: point(px(a.0), px(a.1)),
                             to: point(px(b.0), px(b.1)),
-                            colour: theme.foreground.opacity(0.22 * arrow.alpha),
+                            colour: theme
+                                .foreground
+                                .opacity(if arrow.faint { 0.08 } else { 0.22 } * arrow.alpha),
                             width: 1.,
                             dashed: true,
                             across: false,

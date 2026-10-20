@@ -119,6 +119,10 @@ impl MapView {
             }
         };
         let mut scene = self.scene(camera, Instant::now());
+        // A picture to share: every flow in words.
+        for arrow in &mut scene.arrows {
+            arrow.faint = false;
+        }
         if self.level == Level::Domain {
             // The domains as an overview: their words, not their files.
             scene.cards.clear();
@@ -378,18 +382,25 @@ fn draw_svg(
                         hex(palette.foreground),
                     );
                 }
-                let _ = write!(
-                    out,
-                    r#"<rect x="{x}" y="{y}" width="{}" height="{}" rx="6" fill="{}" stroke="{}" stroke-opacity="0.18"/>"#,
-                    size.0,
-                    size.1,
-                    hex(palette.background),
-                    hex(palette.foreground),
-                );
+                if !arrow.faint {
+                    let _ = write!(
+                        out,
+                        r#"<rect x="{x}" y="{y}" width="{}" height="{}" rx="6" fill="{}" stroke="{}" stroke-opacity="0.18"/>"#,
+                        size.0,
+                        size.1,
+                        hex(palette.background),
+                        hex(palette.foreground),
+                    );
+                }
+                let words = if arrow.faint {
+                    blend(palette.background, palette.foreground, 0.3)
+                } else {
+                    palette.foreground
+                };
                 let mut line_y = y + 14.;
                 for line in &lines {
                     for part in wrap(line, size.0 - 12., 10.5) {
-                        text(out, x + 6., line_y, 10.5, palette.foreground, false, &part);
+                        text(out, x + 6., line_y, 10.5, words, false, &part);
                         line_y += 14.;
                     }
                 }

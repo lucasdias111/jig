@@ -443,3 +443,22 @@ fn names_sit_above_their_regions_and_flows_in_the_gaps(cx: &mut TestAppContext) 
         assert!(!flow.intersects(region), "{flow:?} covers {region:?}");
     }
 }
+
+#[gpui_kit::test]
+fn flows_are_faint_but_for_the_selected_domains(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx, true);
+    let view = to_domain(cx, window, &workspace);
+    // main.rs is Shared's: the Bookings–Events flow isn't its, so faint.
+    let selected = cx.update(|cx| view.read(cx).selected_keys().to_vec());
+    assert_eq!(selected, ["domain:/shared"]);
+    assert_eq!(cx.update(|cx| view.read(cx).drawn_faint()), [true]);
+    // Bookings picked: its flow in full.
+    let at = cx.update(|cx| view.read(cx).region_point("Bookings", true));
+    click(cx, window, at);
+    draw(cx, window);
+    assert_eq!(cx.update(|cx| view.read(cx).drawn_faint()), [false]);
+    // Nothing picked: faint again.
+    press(cx, window, "escape");
+    draw(cx, window);
+    assert_eq!(cx.update(|cx| view.read(cx).drawn_faint()), [true]);
+}
