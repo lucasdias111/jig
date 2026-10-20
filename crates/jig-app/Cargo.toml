@@ -35,6 +35,9 @@ lsp-types = "0.97"
 similar = "3"
 # Reloading open files changed outside Jig. GPUI already builds this version.
 notify = "8"
+# The Map's Export Image: its SVG drawn to a PNG. GPUI already builds this
+# version, with these features.
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
 # Updates: the latest release from GitHub, and the check that a download

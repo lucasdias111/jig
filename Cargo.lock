@@ -3607,6 +3607,7 @@ dependencies = [
  "minisign-verify",
  "notify 8.2.0",
  "regex",
+ "resvg 0.46.0",
  "serde",
  "serde_json",
  "similar",

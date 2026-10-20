@@ -26,8 +26,9 @@ use serde_json::{Value, json};
 
 use super::definitions::with_timeout;
 use super::tabs::canonical;
-use super::{ShowMap, Workspace};
+use super::{IndexDomains, ShowMap, UpdateDomains, Workspace};
 use crate::lsp;
+use crate::map::domains::actions::Action;
 use crate::map::index::{FnId, Project, Target};
 use crate::map::view::{Level, MapEvent, MapView};
 
@@ -139,6 +140,41 @@ impl Workspace {
         Some(view)
     }
 
+    /// View > Index Domains or Update Domains: the Map at Domain, and the
+    /// agent asked.
+    pub(super) fn index_domains(
+        &mut self,
+        _: &IndexDomains,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.map_action_at_domain(false, window, cx);
+    }
+
+    pub(super) fn update_domains(
+        &mut self,
+        _: &UpdateDomains,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.map_action_at_domain(true, window, cx);
+    }
+
+    fn map_action_at_domain(&mut self, update: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_tab(cx);
+        let Some(view) = self.open_map_pane(window, cx) else {
+            return;
+        };
+        self.read_and(&view, cx, move |view, cx| {
+            view.go_to(Level::Domain, cx);
+            if update {
+                view.update_domains(cx);
+            } else {
+                view.start_action(Action::Index, cx);
+            }
+        });
+    }
+
     /// Back to the code, remembering the Map's place for Go Back.
     pub(super) fn close_map(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.map_showing().is_some() {
@@ -231,6 +267,10 @@ impl Workspace {
             MapEvent::AskServer(id) => self.map_server_calls(view, *id, window, cx),
             MapEvent::LiveLines => self.sync_live_points(cx),
             MapEvent::Close => self.close_map(window, cx),
+            MapEvent::Ask(action, instruction) => {
+                let root = view.read(cx).root().to_path_buf();
+                self.start_map_action(action.clone(), instruction.clone(), root, window, cx);
+            }
         }
     }
 

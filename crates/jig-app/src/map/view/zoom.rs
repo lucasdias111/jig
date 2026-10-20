@@ -2,7 +2,8 @@
 //! ⌘-scrolling zooms within a level; past its far end it steps out (Plan
 //! to Site), and past its near end over a box it steps into it (a Site
 //! box to its Plan, a Plan's function to its code, another function to
-//! its Plan). A step cross-fades: the old level is drawn fading out while
+//! its Plan); out past Site's is Domain, and in from Domain over a domain
+//! or its file is Site. A step cross-fades: the old level is drawn fading out while
 //! the new one fades in, the camera of each flying so that the box
 //! entered grows into its contents, or what's left shrinks into the box
 //! holding it. Once a gesture has changed level, it zooms no further
@@ -60,7 +61,7 @@ impl Camera {
 
     /// The camera that shows drawing rect `rect` filling screen rect
     /// `screen` (as near as its shape allows) on a canvas `size` big.
-    fn showing(rect: Rect, screen: Rect, (width, height): (f32, f32)) -> Camera {
+    pub(super) fn showing(rect: Rect, screen: Rect, (width, height): (f32, f32)) -> Camera {
         let zoom = (screen.width / rect.width.max(1.))
             .min(screen.height / rect.height.max(1.))
             .clamp(0.002, 400.);
@@ -271,6 +272,7 @@ impl MapView {
         let (width, height) = self.canvas_size();
         match &self.level {
             Level::Site => self.site_fit(),
+            Level::Domain => self.domain_fit(),
             Level::Plan(Focus::Function(_)) => self.centred_camera(1.),
             Level::Plan(Focus::Module(_)) => match self.placed.bounds() {
                 Some(bounds) => {
@@ -318,7 +320,7 @@ impl MapView {
     }
 
     /// How far out Site goes: the whole project, with room round it.
-    fn site_min(&self) -> f32 {
+    pub(super) fn site_min(&self) -> f32 {
         self.site_fit().zoom * 0.8
     }
 
@@ -375,7 +377,17 @@ impl MapView {
                 }
                 self.zoom_by(factor, around, PLAN_MIN, PLAN_MAX);
             }
+            Level::Domain => {
+                if factor > 1. && self.zoom_into_domain(wanted, around, cx) {
+                    return;
+                }
+                let min = self.domain_min();
+                self.zoom_by(factor, around, min, super::domain::DOMAIN_MAX);
+            }
             Level::Site => {
+                if factor < 1. && wanted < self.site_min() {
+                    return self.show(Level::Domain, cx);
+                }
                 if factor > 1.
                     && let Some(ix) = self.site_box_at(around)
                 {
@@ -404,18 +416,25 @@ impl MapView {
         self.zoom = zoom;
     }
 
-    /// ⌘↑: Plan out to Site; Site out to the whole project.
+    /// ⌘↑: Plan out to Site, Site out to Domain; Domain out to all of it.
     pub fn step_out(&mut self, cx: &mut Context<Self>) {
         match self.level {
             Level::Plan(_) => self.show(Level::Site, cx),
-            Level::Site => {
-                let to = self.site_fit();
+            Level::Site => self.show(Level::Domain, cx),
+            Level::Domain => {
+                let to = self.domain_fit();
                 self.transition = Some(Transition::pan(self.camera(), to));
                 self.set_camera(to);
                 self.save_view();
                 cx.notify();
             }
         }
+    }
+
+    /// The middle of the canvas, in the window.
+    pub(super) fn middle(&self) -> Point<Pixels> {
+        let (width, height) = self.canvas_size();
+        self.bounds.get().origin + point(px(width / 2.), px(height / 2.))
     }
 
     /// ⌘↓ or Enter: into the box selected, else the one in the middle.
@@ -430,6 +449,7 @@ impl MapView {
                     self.enter_plan_box(ix, cx);
                 }
             }
+            Level::Domain => self.step_into_domain(cx),
             Level::Site => {
                 let picked = self
                     .selected

@@ -376,7 +376,16 @@ impl Workspace {
     /// Whether the review keys belong to something else: a modal, or the
     /// find panel, where Enter goes to the next match and Esc closes it.
     pub(super) fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
-        self.modal_open() || self.find_panel_focused(window, cx) || self.planner_focused(window, cx)
+        self.modal_open()
+            || self.find_panel_focused(window, cx)
+            || self.planner_focused(window, cx)
+            || self.map_field_focused(window, cx)
+    }
+
+    /// A field on the Map (a domain's name or purpose) has the keyboard.
+    fn map_field_focused(&self, window: &Window, cx: &App) -> bool {
+        self.map_showing()
+            .is_some_and(|view| view.read(cx).editing(window, cx))
     }
 
     /// Tab accepts a change under review, or moves on in a snippet.
@@ -473,7 +482,14 @@ impl Workspace {
     /// agent's turn, or closes the conversation.
     /// With the palette open, the palette handles Esc itself.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
+        if self.map_field_focused(window, cx)
+            && let Some(view) = self.map_showing().cloned()
+        {
+            // A domain's name or purpose: left as it was.
+            view.update(cx, |view, cx| view.finish_edit(false, cx));
+            view.focus_handle(cx).focus(window, cx);
+            cx.stop_propagation();
+        } else if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
             // Focus went back to the code (e.g. a click outside the form or
             // the input), so the floating window can't hear Escape.
             self.palette = None;

@@ -9,11 +9,11 @@ use crate::workspace::{
     ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine, DuplicateLine,
     EditAgents, EditAgentsFile, EditDebuggers, EditRunConfigurations, Find, FindAndReplace,
     FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack, GoForward, GoToFile,
-    GoToLine, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask, NextProblem, NextTab, Open,
-    OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit, RenameSymbol,
-    ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, ShowMap, StepInto, StepOut, StepOver,
-    StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
-    ToggleSidebar, ToggleTaskPlanner, ZoomIn, ZoomOut,
+    GoToLine, IndexDomains, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask, NextProblem,
+    NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab, Quit,
+    RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, ShowMap, StepInto,
+    StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment,
+    ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -111,6 +111,8 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Show Tasks", ToggleTaskPlanner),
                 MenuItem::action("New Task…", NewTask),
                 MenuItem::action("Show Map", ShowMap),
+                MenuItem::action("Index Domains", IndexDomains),
+                MenuItem::action("Update Domains", UpdateDomains),
                 MenuItem::separator(),
                 MenuItem::action("Show Next Tab", NextTab),
                 MenuItem::action("Show Previous Tab", PreviousTab),

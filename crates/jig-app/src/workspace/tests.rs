@@ -6,6 +6,7 @@ mod brackets;
 mod code;
 mod debug;
 mod diagnostics;
+mod domains;
 mod editing;
 mod files;
 mod format;

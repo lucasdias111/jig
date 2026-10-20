@@ -8,6 +8,7 @@
 //! between the levels and takes the gestures.
 
 pub mod debug;
+pub mod domains;
 pub mod index;
 pub mod layout;
 pub mod outline;

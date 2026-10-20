@@ -18,36 +18,36 @@ use super::super::plan::Focus;
 use super::input::Hover;
 use super::scene::{Card, FrameBox, Look, Scene};
 use super::zoom::Camera;
-use super::{Expand, Level, MapView};
+use super::{Expand, Level, MapView, domain};
 
 const BAR_HEIGHT: f32 = 34.;
 const GRID: f32 = 24.;
 
 /// Where a scene goes on a canvas `size` big, seen by `camera`.
 #[derive(Clone, Copy)]
-struct View {
-    camera: Camera,
-    size: (f32, f32),
+pub(super) struct View {
+    pub(super) camera: Camera,
+    pub(super) size: (f32, f32),
 }
 
 impl View {
-    fn point(&self, (x, y): (f32, f32)) -> Point<Pixels> {
+    pub(super) fn point(&self, (x, y): (f32, f32)) -> Point<Pixels> {
         point(
             px((x - self.camera.x) * self.camera.zoom + self.size.0 / 2.),
             px((y - self.camera.y) * self.camera.zoom + self.size.1 / 2.),
         )
     }
 
-    fn scaled(&self, value: f32) -> Pixels {
+    pub(super) fn scaled(&self, value: f32) -> Pixels {
         px(value * self.camera.zoom)
     }
 }
 
 /// What's lit over a scene: selected, under the pointer, on the paused
 /// program's stack, or just fired.
-struct Lit {
-    selected: Vec<String>,
-    hovered: Option<String>,
+pub(super) struct Lit {
+    pub(super) selected: Vec<String>,
+    pub(super) hovered: Option<String>,
     path: Vec<String>,
 }
 
@@ -60,7 +60,7 @@ impl MapView {
             .map_or("Project".into(), |name| name.to_string_lossy().into_owned());
         let mut crumbs = vec![project];
         match &self.level {
-            Level::Site => {}
+            Level::Site | Level::Domain => {}
             Level::Plan(Focus::Module(place)) => crumbs.push(place.trim_end_matches('/').into()),
             Level::Plan(Focus::Function(symbol)) => {
                 crumbs.push(symbol.file.clone());
@@ -120,7 +120,7 @@ impl MapView {
             .gap(px(2.))
             .rounded(px(6.))
             .bg(theme.foreground.opacity(0.06))
-            .children(["Code", "Plan", "Site"].into_iter().map(|name| {
+            .children(["Code", "Plan", "Site", "Domain"].into_iter().map(|name| {
                 let current = name == self.level.name();
                 div()
                     .id(name)
@@ -142,6 +142,25 @@ impl MapView {
                     .on_click(cx.listener(move |this, _, _, cx| this.go_to_level(name, cx)))
             }));
         let plan = matches!(self.level, Level::Plan(_));
+        let tints = (self.has_tints() && self.level != Level::Domain).then(|| {
+            h_flex()
+                .id("map-tints")
+                .gap_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(
+                    Switch::new("map-tints-switch")
+                        .small()
+                        .checked(!self.domains.tints_off)
+                        .on_click(cx.listener(|this, on: &bool, _, cx| this.set_tints(*on, cx))),
+                )
+                .child("Domains")
+                .tooltip(|window, cx| {
+                    Tooltip::new("Tint each box with its domain's colour").build(window, cx)
+                })
+        });
+        let domain_buttons = (self.level == Level::Domain).then(|| self.render_domain_buttons(cx));
+        let export = self.render_export_button(cx);
         h_flex()
             .flex_none()
             .h(px(BAR_HEIGHT))
@@ -167,6 +186,9 @@ impl MapView {
                 h_flex()
                     .flex_none()
                     .gap_2()
+                    .children(domain_buttons)
+                    .children(tints)
+                    .child(export)
                     .child(levels)
                     .when(plan, |this| {
                         this.child(
@@ -203,7 +225,12 @@ impl MapView {
     /// there.
     fn go_to_level(&mut self, name: &str, cx: &mut Context<Self>) {
         match (name, &self.level) {
-            ("Site", Level::Plan(_)) => self.step_out(cx),
+            ("Site", Level::Plan(_)) | ("Domain", Level::Site) => self.step_out(cx),
+            ("Domain", Level::Plan(_)) => self.show(Level::Domain, cx),
+            ("Site", Level::Domain) => self.step_in(cx),
+            ("Plan", Level::Domain) | ("Code", Level::Domain) => {
+                self.step_in(cx);
+            }
             ("Plan", Level::Site) | ("Code", Level::Site) => self.step_in(cx),
             ("Code", Level::Plan(_)) => {
                 if let Some(focus) = self
@@ -320,6 +347,7 @@ impl MapView {
             .child(current)
             .child(over)
             .children(self.render_marquee(cx))
+            .children(self.render_domain_overlay(cx))
             .children(self.render_hover(cx))
             .when(empty, |this| {
                 this.child(
@@ -394,6 +422,17 @@ impl MapView {
                 colour = blend(colour, theme.yellow, fired);
                 width *= 1. + fired;
             }
+            if !arrow.labels.is_empty() {
+                // Domain's links: steady, their flows labelled.
+                width = if joined(&arrow.keys.0) || joined(&arrow.keys.1) {
+                    3.
+                } else {
+                    2.
+                };
+                if live {
+                    labels.push(self.render_flow_label(ix, arrow, from, to, cx));
+                }
+            }
             lines.push(Line {
                 from,
                 to,
@@ -403,6 +442,7 @@ impl MapView {
                 across: arrow.across,
                 zoom: view.camera.zoom,
                 pulse: pulse.map(|t| (t, theme.yellow)),
+                heads: arrow.heads,
             });
             if let Some(calls) = &arrow.calls
                 && calls.count > 1
@@ -456,6 +496,11 @@ impl MapView {
             .iter()
             .map(|card| self.render_card(card, view, live, lit, now, cx))
             .collect();
+        let regions: Vec<AnyElement> = scene
+            .regions
+            .iter()
+            .map(|region| self.render_region(region, view, lit, cx))
+            .collect();
         let _ = window;
         let paint = paint_holder(paint.into_any_element());
         let (under, over) = if across {
@@ -469,6 +514,7 @@ impl MapView {
             .left_0()
             .size_full()
             .opacity(opacity)
+            .children(regions)
             .children(frames)
             .children(under)
             .children(cards)
@@ -494,7 +540,10 @@ impl MapView {
             .selected
             .iter()
             .any(|key| key == &format!("site:{}", frame.key));
-        let accent = look_colour(frame.look, cx);
+        let accent = match frame.tint {
+            Some(tint) => domain::colour(tint, theme.mode.is_dark()),
+            None => look_colour(frame.look, cx),
+        };
         let fixed = frame.look.fixed_text();
         let title_size = if fixed { px(12.) } else { view.scaled(11.) };
         let package = matches!(frame.look, Look::Package | Look::Project);
@@ -583,11 +632,14 @@ impl MapView {
             card.rect.width * view.camera.zoom,
             card.rect.height * view.camera.zoom,
         );
-        let accent = look_colour(card.look, cx);
+        let accent = match card.tint {
+            Some(tint) => domain::colour(tint, theme.mode.is_dark()),
+            None => look_colour(card.look, cx),
+        };
         let selected = lit
             .selected
             .iter()
-            .any(|key| key == &format!("site:{}", card.key));
+            .any(|key| key == &format!("site:{}", card.key) || key == &card.key);
         let hovered = lit.hovered.as_deref() == Some(card.key.as_str());
         let words = width >= 46. && height >= 16.;
         let more = height >= 38.;
@@ -614,7 +666,11 @@ impl MapView {
             .bg(blend(
                 theme.background,
                 accent,
-                if unread { 0.04 } else { 0.1 },
+                match (unread, card.tint.is_some()) {
+                    (true, _) => 0.04,
+                    (false, true) => 0.18,
+                    (false, false) => 0.1,
+                },
             ))
             .opacity(card.alpha)
             .when(words, |this| {
@@ -831,7 +887,18 @@ impl MapView {
             })
             .when(selected || on_path == Some(0), |this| this.shadow_lg())
             .when(!selected, |this| this.shadow_sm())
-            .bg(blend(theme::card(cx), theme.yellow, fired * 0.25))
+            .bg(blend(
+                match card.tint {
+                    Some(tint) => blend(
+                        theme::card(cx),
+                        domain::colour(tint, theme.mode.is_dark()),
+                        0.14,
+                    ),
+                    None => theme::card(cx),
+                },
+                theme.yellow,
+                fired * 0.25,
+            ))
             .opacity(card.alpha * if gone { 0.7 } else { 1. } * if dimmed { 0.5 } else { 1. })
             .text_color(theme.foreground)
             .text_size(scaled(11.5))
@@ -911,6 +978,27 @@ impl MapView {
                 let rect = self.placed.nodes[ix];
                 (self.to_canvas((rect.x, rect.bottom() + 6.)), lines, true)
             }
+            Hover::Arrow(ix, position) if self.level == Level::Domain => {
+                let arrow = self.drawn.borrow().arrows.get(*ix)?.clone();
+                let name = |key: &str| key.strip_prefix("domain:").unwrap_or(key).to_string();
+                let (a, b) = (name(&arrow.keys.0), name(&arrow.keys.1));
+                let lines = arrow
+                    .labels
+                    .iter()
+                    .map(|(forward, label)| {
+                        if *forward {
+                            format!("{a} → {b}: {label}")
+                        } else {
+                            format!("{b} → {a}: {label}")
+                        }
+                    })
+                    .collect();
+                (
+                    *position - self.bounds.get().origin + point(px(12.), px(12.)),
+                    lines,
+                    false,
+                )
+            }
             Hover::Arrow(ix, position) => {
                 let arrow = self.drawn.borrow().arrows.get(*ix)?.clone();
                 let calls = arrow.calls?;
@@ -968,8 +1056,14 @@ impl MapView {
             .map(|(text, _)| text.clone());
         let text = notice.unwrap_or_else(|| {
             match self.level {
+                Level::Domain if self.drafts() => {
+                    "Jig's own grouping, from folders and calls · zoom into a group for its files, further for Site · ⌘↓ or Enter enters"
+                }
+                Level::Domain => {
+                    "Zoom in for a domain's files, further for Site · drag a file onto another domain to move it, a domain onto another to merge · double-click a name to rename · ⌘Z undoes"
+                }
                 Level::Site => {
-                    "Pinch or ⌘-scroll to zoom: folders open as you go in, a file into its Plan · ⌘↓, Enter or double-click enters · ⌘↑ out"
+                    "Pinch or ⌘-scroll to zoom: folders open as you go in, a file into its Plan · ⌘↓, Enter or double-click enters · ⌘↑ out to Domain"
                 }
                 Level::Plan(_) => {
                     "Zoom into a function for its Plan, into this one for its code · double-click or Enter enters · ◀ ▶ open a hop · ⌘↑ out to Site · Esc back to the code"
@@ -1003,7 +1097,7 @@ fn paint_holder(paint: AnyElement) -> AnyElement {
 }
 
 /// The colour each kind of box is drawn in.
-fn look_colour(look: Look, cx: &App) -> Hsla {
+pub(super) fn look_colour(look: Look, cx: &App) -> Hsla {
     let theme = cx.theme();
     match look {
         Look::Function => theme.blue,
@@ -1018,7 +1112,7 @@ fn look_colour(look: Look, cx: &App) -> Hsla {
 }
 
 /// `a` turned `t` of the way to `b`.
-fn blend(a: Hsla, b: Hsla, t: f32) -> Hsla {
+pub(super) fn blend(a: Hsla, b: Hsla, t: f32) -> Hsla {
     let (a, b, t) = (Rgba::from(a), Rgba::from(b), t.clamp(0., 1.));
     Hsla::from(Rgba {
         r: a.r + (b.r - a.r) * t,
@@ -1039,6 +1133,8 @@ struct Line {
     zoom: f32,
     /// How far down it a pulse is, and its colour.
     pulse: Option<(f32, Hsla)>,
+    /// Heads where it leaves and where it arrives.
+    heads: (bool, bool),
 }
 
 impl Line {
@@ -1055,8 +1151,12 @@ impl Line {
         if let Ok(built) = path.build() {
             window.paint_path(built, self.colour);
         }
-        if !self.across {
-            self.paint_head(from, to, window);
+        let middle = bow_point(from, to, 0.5);
+        if self.heads.1 {
+            self.paint_head(middle, to, window);
+        }
+        if self.heads.0 {
+            self.paint_head(middle, from, window);
         }
         if let Some((t, colour)) = self.pulse {
             let at = cubic(from, a, b, to, t);
@@ -1083,8 +1183,8 @@ impl Line {
         (middle, middle)
     }
 
-    fn paint_head(&self, from: Point<Pixels>, to: Point<Pixels>, window: &mut Window) {
-        let middle = bow_point(from, to, 0.5);
+    /// A head at `to`, pointing along the line from `middle`.
+    fn paint_head(&self, middle: Point<Pixels>, to: Point<Pixels>, window: &mut Window) {
         let (dx, dy) = (f32::from(to.x - middle.x), f32::from(to.y - middle.y));
         let length = dx.hypot(dy).max(0.001);
         let (ux, uy) = (dx / length, dy / length);
@@ -1104,7 +1204,7 @@ impl Line {
 
 /// The point `t` along a bowed arrow from `from` to `to`: the control
 /// point sits off the middle, to the arrow's left.
-fn bow_point(from: Point<Pixels>, to: Point<Pixels>, t: f32) -> Point<Pixels> {
+pub(super) fn bow_point(from: Point<Pixels>, to: Point<Pixels>, t: f32) -> Point<Pixels> {
     let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
     let bend = 0.12;
     let control = point(
@@ -1176,7 +1276,7 @@ fn paint_grid(
 }
 
 /// The Map's colours over the theme's.
-mod theme {
+pub(super) mod theme {
     use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::*;
 

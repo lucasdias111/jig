@@ -2,11 +2,13 @@
 //! them and arrows between, in the level's drawing. A Plan's scene is its
 //! boxes as laid out; Site's depends on how far in the view is, each
 //! folder opening as it grows past a size on screen, what's inside
-//! fading in, and the calls counted between the boxes showing.
+//! fading in, and the calls counted between the boxes showing. Domain's
+//! is its regions, their files inside, and the links between them.
 
 use std::rc::Rc;
 use std::time::Instant;
 
+use super::super::domains::level::RegionKind;
 use super::super::layout::{HEADER_HEIGHT, Placed, Rect};
 use super::super::plan::Item;
 use super::super::site::{Calls, Kind, Site};
@@ -76,7 +78,10 @@ pub struct Card {
     pub unknown_target: bool,
     /// Its calls checked with the language server.
     pub checked: bool,
-    /// Which box it is on its level: a Plan's node or a Site's.
+    /// The saved domain it's tinted with.
+    pub tint: Option<usize>,
+    /// Which box it is on its level: a Plan's node, a Site's, or at Domain
+    /// the region it's in.
     pub ix: usize,
 }
 
@@ -89,6 +94,31 @@ pub struct FrameBox {
     pub note: String,
     pub look: Look,
     pub alpha: f32,
+    pub tint: Option<usize>,
+    pub ix: usize,
+}
+
+/// A domain at Domain, or Shared or Unsorted: a big region with its name,
+/// purpose and offers, its files inside.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionBox {
+    pub key: String,
+    pub rect: Rect,
+    pub name: String,
+    pub purpose: String,
+    pub offers: Vec<String>,
+    pub why: String,
+    /// How much it holds.
+    pub note: String,
+    pub kind: RegionKind,
+    /// One of Jig's drafts.
+    pub draft: bool,
+    /// Proposed by the agent, not yet kept.
+    pub proposed: bool,
+    /// How far its files show, from 0 to 1.
+    pub open: f32,
+    pub alpha: f32,
+    /// Its place in the level.
     pub ix: usize,
 }
 
@@ -105,10 +135,16 @@ pub struct Arrow {
     /// The calls it stands for, at Site.
     pub calls: Option<Calls>,
     pub alpha: f32,
+    /// Its heads, at where it leaves and where it arrives.
+    pub heads: (bool, bool),
+    /// What flows along it at Domain: forward (from where it leaves) or
+    /// back, and in words.
+    pub labels: Vec<(bool, String)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
+    pub regions: Vec<RegionBox>,
     pub frames: Vec<FrameBox>,
     pub cards: Vec<Card>,
     pub arrows: Vec<Arrow>,
@@ -140,6 +176,7 @@ impl MapView {
         match self.level {
             Level::Plan(_) => self.plan_scene(&self.drawn_plan(now), now),
             Level::Site => self.site_scene(camera),
+            Level::Domain => self.domain_scene(camera),
         }
     }
 
@@ -161,6 +198,7 @@ impl MapView {
                 note: String::new(),
                 look: Look::Owner,
                 alpha: 1.,
+                tint: None,
                 ix: *frame,
             });
         }
@@ -196,6 +234,7 @@ impl MapView {
                 checked: node
                     .function()
                     .is_some_and(|id| project.is_some_and(|p| p.checked(id))),
+                tint: self.plan_tint(&node.item),
                 ix,
             });
         }
@@ -211,6 +250,8 @@ impl MapView {
                 across: true,
                 dashed: wire.kind.dashed(),
                 calls: None,
+                heads: (false, false),
+                labels: Vec::new(),
                 alpha: self
                     .arriving(&self.plan.nodes[wire.from].key, now)
                     .min(self.arriving(&self.plan.nodes[wire.to].key, now)),
@@ -261,6 +302,9 @@ impl MapView {
                 Kind::File { read: false } => Look::Unread,
                 Kind::Type => Look::Type,
             };
+            let tint = matches!(node.kind, Kind::File { .. } | Kind::Type)
+                .then(|| self.tint_of(&node.place))
+                .flatten();
             if open > 0. {
                 scene.frames.push(FrameBox {
                     key: node.key.clone(),
@@ -270,6 +314,7 @@ impl MapView {
                     note: node.detail.clone(),
                     look,
                     alpha: shown * open,
+                    tint,
                     ix,
                 });
                 for &child in node.children.iter().rev() {
@@ -290,6 +335,7 @@ impl MapView {
                     hidden: [0; 3],
                     unknown_target: false,
                     checked: false,
+                    tint,
                     ix,
                 });
             }
@@ -322,6 +368,8 @@ impl MapView {
                 dashed: false,
                 calls: Some(arrow.calls.clone()),
                 alpha: alpha[arrow.from].min(alpha[arrow.to]).max(0.25),
+                heads: (false, true),
+                labels: Vec::new(),
             });
         }
         scene
@@ -355,7 +403,7 @@ impl MapView {
 
 /// Where an arrow from box `a` to box `b` leaves and arrives: on their
 /// edges, along the line between their middles.
-fn edge_points(a: Rect, b: Rect) -> ((f32, f32), (f32, f32)) {
+pub(super) fn edge_points(a: Rect, b: Rect) -> ((f32, f32), (f32, f32)) {
     let (ac, bc) = (a.centre(), b.centre());
     (border(a, bc), border(b, ac))
 }

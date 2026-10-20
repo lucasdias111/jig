@@ -117,7 +117,9 @@ actions!(
         NewTask,
         GoBack,
         GoForward,
-        ShowMap
+        ShowMap,
+        IndexDomains,
+        UpdateDomains
     ]
 );
 
@@ -737,6 +739,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(cx.listener(Self::show_map))
+            .on_action(cx.listener(Self::index_domains))
+            .on_action(cx.listener(Self::update_domains))
             .capture_any_mouse_down(cx.listener(Self::navigation_button))
             .capture_action(cx.listener(Self::on_escape))
             .capture_action(cx.listener(Self::on_accept_enter))

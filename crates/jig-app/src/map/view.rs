@@ -1,5 +1,5 @@
-//! The Map's canvas, in place of the code: one pan and zoom over two
-//! levels, Plan and Site. Pinch or ⌘-scroll zooms within a level; past a
+//! The Map's canvas, in place of the code: one pan and zoom over three
+//! levels, Plan, Site and Domain. Pinch or ⌘-scroll zooms within a level; past a
 //! threshold it cross-fades to the next, the box you enter growing into
 //! its contents or the one you leave shrinking into its parent; ⌘↑ and
 //! ⌘↓ step a level the same way, and Enter or a double click enters the
@@ -11,7 +11,10 @@
 //! boxes were dragged, the hops opened, where it was scrolled and zoomed
 //! to. Tidy lays a Plan out afresh. The canvas never changes code.
 
+mod domain;
+mod domain_draw;
 mod draw;
+mod export;
 mod input;
 mod scene;
 mod zoom;
@@ -27,6 +30,7 @@ use gpui_kit::*;
 use serde_json::{Value, json};
 
 use super::debug::{self, Firing, Stack};
+use super::domains::actions::Action;
 use super::index::{FnId, Project, Target};
 use super::layout::{self, Placed, Rect};
 use super::plan::{self, Focus, Item, Opened, Plan, function_key, slashed};
@@ -48,6 +52,8 @@ pub enum Level {
     Plan(Focus),
     /// The whole project, nested.
     Site,
+    /// The whole project as business areas.
+    Domain,
 }
 
 impl Level {
@@ -56,6 +62,7 @@ impl Level {
         match self {
             Level::Plan(_) => "Plan",
             Level::Site => "Site",
+            Level::Domain => "Domain",
         }
     }
 }
@@ -74,6 +81,9 @@ pub enum MapEvent {
     LiveLines,
     /// Escape with nothing to do: back to the code.
     Close,
+    /// Start a conversation for a Map action: what it is, and what the
+    /// agent is asked.
+    Ask(Action, String),
 }
 
 pub struct MapView {
@@ -116,6 +126,11 @@ pub struct MapView {
     live: bool,
     firing: Firing,
     notice: Option<(String, Instant)>,
+    /// The domains: saved, Jig's drafts, a proposal, and editing them.
+    domains: domain::DomainState,
+    /// Going into Site from Domain: the box entered, and the Site boxes it
+    /// stands for.
+    arriving_at: Option<(Rect, Vec<usize>)>,
 }
 
 impl EventEmitter<MapEvent> for MapView {}
@@ -157,6 +172,8 @@ impl MapView {
             live: true,
             firing: Firing::default(),
             notice: None,
+            domains: domain::DomainState::default(),
+            arriving_at: None,
         }
     }
 
@@ -185,6 +202,7 @@ impl MapView {
         }
         self.site = Some(Rc::new(Site::of(&project)));
         self.project = Some(project);
+        self.reload_domains();
         self.rebuild(true);
         self.on_stack = self.stack_functions();
         self.ask_server(cx);
@@ -361,6 +379,25 @@ impl MapView {
         let saved = self.load_view();
         self.rebuild(false);
         let (to, matched) = match (&left, &self.level) {
+            // Out to Domain: the region holding what was selected, picked.
+            (_, Level::Domain) => {
+                self.selected = self.domain_of_selection(&left);
+                let to = saved.unwrap_or_else(|| self.default_camera());
+                (to, None)
+            }
+            // Into Site from a domain or its file: what it stands for.
+            (Level::Domain, Level::Site) => match self.arriving_at.take() {
+                Some((entered, boxes)) => {
+                    let to = self.camera_on_site_boxes(&boxes);
+                    self.selected = match boxes.as_slice() {
+                        [one] => vec![site_key(&self.site_nodes()[*one].key)],
+                        _ => Vec::new(),
+                    };
+                    let rect = self.site_boxes_rect(&boxes);
+                    (to, rect.map(|rect| (entered, rect)))
+                }
+                None => (saved.unwrap_or_else(|| self.default_camera()), None),
+            },
             // Out to Site: centred on the box holding where this was.
             (Level::Plan(focus), Level::Site) => {
                 let anchor = self.site_box_of(focus);
@@ -418,7 +455,7 @@ impl MapView {
         };
         match &self.level {
             Level::Site => self.site_box_of(focus).map(|ix| self.site_nodes()[ix].rect),
-            Level::Plan(_) => None,
+            Level::Plan(_) | Level::Domain => None,
         }
     }
 
@@ -446,6 +483,7 @@ impl MapView {
         match &self.level {
             Level::Plan(_) => self.placed.bounds(),
             Level::Site => self.site_nodes().first().map(|root| root.rect),
+            Level::Domain => self.domain_level().and_then(|level| level.bounds()),
         }
     }
 
@@ -505,6 +543,7 @@ impl MapView {
     fn view_key(&self) -> String {
         match &self.level {
             Level::Site => "site".into(),
+            Level::Domain => "domain".into(),
             Level::Plan(Focus::Module(place)) => format!("plan:{place}"),
             Level::Plan(Focus::Function(symbol)) => {
                 format!("plan:{}#{}", symbol.file, symbol.title())

@@ -30,6 +30,7 @@ use jig_editor::EditorHandle;
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
+use crate::map::domains::actions::{Action, read_only_command};
 
 /// Why a conversation can't start.
 const NO_PROJECT: &str =
@@ -162,6 +163,9 @@ pub(super) struct AgentRun {
     /// Dragged somewhere by the user: it stays there rather than following
     /// the agent's edits.
     moved: bool,
+    /// The Map action this conversation is, whose answers the Map reads
+    /// back as proposals; it may run commands that only read.
+    pub(super) map_action: Option<Action>,
     _input_events: Subscription,
 }
 
@@ -280,6 +284,89 @@ impl Workspace {
         self.start_turn(id, TurnInput::Command { name, arguments }, window, cx);
     }
 
+    /// Start the conversation for a Map action in project `directory`:
+    /// named after the action, the agent asked `instruction`, beside the
+    /// Map rather than at the code.
+    pub(super) fn start_map_action(
+        &mut self,
+        action: Action,
+        instruction: String,
+        directory: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_edit_here() {
+            self.end_map_action(cx);
+            return self.show_note(
+                "Accept or reject the agent's edit first.".into(),
+                window,
+                cx,
+            );
+        }
+        self.close_chat(window, cx);
+        self.next_run_id += 1;
+        let id = self.next_run_id;
+        let title = action.title();
+        let width = px(jig_commands::chat::WIDTH);
+        let anchor = point(
+            (window.viewport_size().width - width - px(24.)).max(px(8.)),
+            px(super::TITLE_BAR_HEIGHT + 48.),
+        );
+        let mut agent = self.new_agent_run(Some(title.clone()), title, directory, window, cx);
+        agent.map_action = Some(action);
+        self.chat = Some(CommandRun {
+            id,
+            bubble: Bubble::Message(String::new()),
+            anchor,
+            target: self.editor().selection(cx),
+            preview: None,
+            agent: Some(agent),
+            _task: None,
+        });
+        self.start_turn(id, TurnInput::Prompt(instruction), window, cx);
+    }
+
+    /// The Map's action is over without an answer to read.
+    fn end_map_action(&self, cx: &mut App) {
+        if let Some(pane) = self.map.as_ref() {
+            pane.view.update(cx, |view, cx| view.action_ended(cx));
+        }
+    }
+
+    /// The agent answered a Map action: the Map reads its answer as a
+    /// proposal and shows it at Domain, or the conversation says why it
+    /// couldn't.
+    fn answer_map_action(
+        &mut self,
+        action: Action,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.map.as_ref().map(|pane| pane.view.clone()) else {
+            return;
+        };
+        let read = view.update(cx, |view, cx| view.answer(action, text, cx));
+        let proposed = read.is_ok();
+        let entry = match read {
+            Ok(()) => ChatEntry::Note(
+                "It's on the Map as a proposal: keep it there (⌘↩), edit it, or reply here to redo parts."
+                    .into(),
+            ),
+            Err(error) => ChatEntry::Error(format!(
+                "The Map couldn't read domains from that: {error} Reply to ask again."
+            )),
+        };
+        if let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) {
+            agent.entries.push(entry);
+            agent.scroll.scroll_to_bottom();
+        }
+        if proposed {
+            self.map_at(crate::map::view::Level::Domain, window, cx);
+        }
+        cx.notify();
+    }
+
     /// Pick up the earlier conversation `session_id` where it left off.
     pub(super) fn resume_agent(
         &mut self,
@@ -383,6 +470,14 @@ impl Workspace {
     /// conversation stays with the agent, in the history.
     pub(super) fn close_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settle_agent_edit(false, Some(window), cx);
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| agent.map_action.is_some() && !agent.finished)
+        {
+            self.end_map_action(cx);
+        }
         if self.chat.take().is_some() {
             self.editor().clear_highlights(cx);
             cx.notify();
@@ -740,6 +835,7 @@ impl Workspace {
             grab: None,
             resize: None,
             moved: false,
+            map_action: None,
             _input_events: input_events,
         }
     }
@@ -850,6 +946,7 @@ impl Workspace {
         let session = agent.session.clone();
         let directory = agent.directory.clone();
         let title = agent.title.clone();
+        let map_action = agent.map_action.clone();
         agent.last_input = Some(input.clone());
         let permissions = crate::settings::get(cx).agent.permissions;
         agent.step = LiveStep::default();
@@ -920,6 +1017,10 @@ impl Workspace {
             run.bubble = bubble;
             run._task = Some(task);
         }
+        if let (Some(action), Some(pane)) = (map_action, self.map.as_ref()) {
+            pane.view
+                .update(cx, |view, cx| view.working_on_action(action, cx));
+        }
         cx.notify();
     }
 
@@ -950,8 +1051,9 @@ impl Workspace {
             .update(cx, |input, cx| input.set_value("", window, cx));
         agent.entries.push(ChatEntry::User(text.clone()));
         agent.scroll.scroll_to_bottom();
-        // Back to the code, where the agent's edits are reviewed.
-        self.editor().focus(window, cx);
+        // Back to the code, where the agent's edits are reviewed, or the
+        // Map, where a Map action's answer is.
+        self.focus_code(window, cx);
         let input = self.slash_command(&text).unwrap_or(TurnInput::Prompt(text));
         self.start_turn(id, input, window, cx);
     }
@@ -1720,7 +1822,11 @@ impl Workspace {
             }
             Message::Event(AgentEvent::Done(text)) => {
                 agent.finished = true;
-                self.finish_agent(text, window, cx);
+                let action = agent.map_action.clone();
+                self.finish_agent(text.clone(), window, cx);
+                if let Some(action) = action {
+                    self.answer_map_action(action, &text, window, cx);
+                }
                 return false;
             }
             Message::SignIn(needed) => {
@@ -1731,12 +1837,19 @@ impl Workspace {
                     needed,
                     opened: false,
                 });
+                let mapped = agent.map_action.is_some();
+                if mapped {
+                    self.end_map_action(cx);
+                }
                 self.end_turn(ChatEntry::Note(said), window, cx);
                 return false;
             }
             Message::Failed(error) => {
                 agent.finished = true;
                 agent.loading = false;
+                if agent.map_action.is_some() {
+                    self.end_map_action(cx);
+                }
                 let error = super::commands::shorten(&error);
                 self.end_turn(ChatEntry::Error(error), window, cx);
                 return false;
@@ -1818,8 +1931,14 @@ impl Workspace {
             }
             // Asked in the conversation, answered with the review keys in
             // the code.
-            // Allowed always earlier in this conversation.
-            Some(Request::Permission(request)) if agent.always_allowed.contains(&request.title) => {
+            // Allowed always earlier in this conversation, or a command
+            // that only reads, for a Map action.
+            Some(Request::Permission(request))
+                if agent.always_allowed.contains(&request.title)
+                    || (agent.map_action.is_some()
+                        && request.title == "Run a command"
+                        && read_only_command(&request.detail)) =>
+            {
                 if let Some(session) = agent.session.clone() {
                     cx.background_executor()
                         .spawn(async move {

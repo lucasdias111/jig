@@ -1,16 +1,23 @@
 //! The mouse and keys on the Map. Click selects, Shift-click or a box
 //! several; dragging moves a Plan's boxes (and only moves them), right or
-//! middle drag pans, double-click enters a box. Resting on a Plan's
-//! function peeks at its code; on a Site arrow, lists its calls. Keys:
-//! ⌘↑ out, ⌘↓ or Enter in, ⌘A all, Esc clears the selection and then
-//! goes back to the code.
+//! middle drag pans, double-click enters a box. At Domain, dragging a
+//! file onto another region moves it there and dropping a domain onto
+//! another merges them; at Site, with the domains' tints showing, a file
+//! dragged onto a box of another domain moves to it. Double-clicking a
+//! domain's name renames it. Resting on a Plan's function peeks at its
+//! code; on a Site arrow, lists its calls. Keys: ⌘↑ out, ⌘↓ or Enter in,
+//! ⌘A all, ⌘Z and ⇧⌘Z undo and redo edits to domains, F2 renames the
+//! domain selected, ⌘↩ keeps a proposal, Esc clears the selection (or
+//! discards a proposal) and then goes back to the code.
 
 use std::time::Instant;
 
 use gpui_kit::*;
 
+use super::super::domains::level::RegionKind;
 use super::super::layout::Rect;
 use super::super::plan::Item;
+use super::domain::Field;
 use super::{Level, MapEvent, MapView, site_key};
 
 /// How far, in screen points, the pointer moves before a press drags.
@@ -43,6 +50,17 @@ pub(super) enum Drag {
     Pan {
         last: Point<Pixels>,
         moved: bool,
+    },
+    /// A file or type carried to another domain.
+    Member {
+        place: String,
+        title: String,
+        at: Point<Pixels>,
+    },
+    /// A domain, by its region, carried onto another to merge.
+    Region {
+        region: usize,
+        at: Point<Pixels>,
     },
 }
 
@@ -91,6 +109,7 @@ impl MapView {
                 .site_box_at(position)
                 .filter(|&ix| ix != 0)
                 .map(|ix| site_key(&self.site_nodes()[ix].key)),
+            Level::Domain => self.domain_key_at(position),
         }
     }
 
@@ -119,6 +138,19 @@ impl MapView {
 
     /// Into the box with key `key`, double-clicked.
     fn enter_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        if let Some(place) = key.strip_prefix("member:") {
+            let place = place.to_string();
+            return self.enter_member(&place, cx);
+        }
+        if key.starts_with("domain:") {
+            if let Some(ix) = self
+                .domain_level()
+                .and_then(|level| level.regions.iter().position(|r| r.key == key))
+            {
+                self.enter_region(ix, cx);
+            }
+            return;
+        }
         match key.strip_prefix("site:") {
             Some(key) => {
                 if let Some(ix) = self.site.as_ref().and_then(|site| site.index_of(key)) {
@@ -142,7 +174,18 @@ impl MapView {
         self.focus.focus(window, cx);
         self.transition = None;
         let position = event.position;
+        if self.domains.editing.is_some() {
+            self.finish_edit(true, cx);
+        }
         match self.key_at(position) {
+            Some(key) if event.click_count >= 2 && self.on_region_name(&key, position) => {
+                if let Some(domain) = self
+                    .region_by_key(&key)
+                    .and_then(|ix| self.domain_of_region(ix))
+                {
+                    self.begin_edit(domain, Field::Name, window, cx);
+                }
+            }
             Some(key) if event.click_count >= 2 => self.enter_key(&key, cx),
             Some(key) => {
                 self.drag = Some(Drag::Press {
@@ -196,7 +239,12 @@ impl MapView {
         }
         let position = event.position;
         let plan = matches!(self.level, Level::Plan(_));
+        let carried = match &drag {
+            Drag::Press { key, start, .. } if far(position, *start) => self.carry(key, position),
+            _ => None,
+        };
         self.drag = Some(match drag {
+            _ if carried.is_some() => carried.expect("checked"),
             // Site's boxes stay where the project puts them: a drag pans.
             Drag::Press { start, .. } if far(position, start) && !plan => {
                 self.offset += position - start;
@@ -253,6 +301,14 @@ impl MapView {
                         .filter(|card| card.rect.overlaps(&area))
                         .map(|card| site_key(&card.key))
                         .collect(),
+                    Level::Domain => self
+                        .drawn
+                        .borrow()
+                        .cards
+                        .iter()
+                        .filter(|card| card.rect.overlaps(&area))
+                        .map(|card| card.key.clone())
+                        .collect(),
                 };
                 for key in touched {
                     if !selected.contains(&key) {
@@ -273,6 +329,15 @@ impl MapView {
                     moved: true,
                 }
             }
+            Drag::Member { place, title, .. } => Drag::Member {
+                place,
+                title,
+                at: position,
+            },
+            Drag::Region { region, .. } => Drag::Region {
+                region,
+                at: position,
+            },
             other => other,
         });
         cx.notify();
@@ -309,8 +374,82 @@ impl MapView {
                     self.save_view();
                 }
             }
+            Drag::Member { place, at, .. } => {
+                if let Some((home, _)) = self.drop_home(at)
+                    && home != self.home_now(&place)
+                {
+                    self.move_to_region(&place, home, cx);
+                }
+            }
+            Drag::Region { region, at } => {
+                let into = self.region_at(at).and_then(|ix| self.domain_of_region(ix));
+                if let (Some(from), Some(into)) = (self.domain_of_region(region), into)
+                    && from != into
+                {
+                    self.merge_domains(from, into, cx);
+                }
+            }
         }
         cx.notify();
+    }
+
+    /// A press on box `key` moved far: carrying a file or type to another
+    /// domain, or a domain onto another, where that's what a drag does.
+    fn carry(&self, key: &str, position: Point<Pixels>) -> Option<Drag> {
+        let editable = !self.drafts();
+        match self.level {
+            Level::Domain if editable => {
+                if let Some(place) = key.strip_prefix("member:") {
+                    let title = place.rsplit('/').next().unwrap_or(place).to_string();
+                    return Some(Drag::Member {
+                        place: place.to_string(),
+                        title,
+                        at: position,
+                    });
+                }
+                let region = self.region_by_key(key)?;
+                self.domain_of_region(region)?;
+                Some(Drag::Region {
+                    region,
+                    at: position,
+                })
+            }
+            Level::Site if self.has_tints() && !self.domains.tints_off => {
+                let place = self.site_place(key)?;
+                let title = place.rsplit('/').next().unwrap_or(&place).to_string();
+                Some(Drag::Member {
+                    place,
+                    title,
+                    at: position,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Region `key`'s place in the Domain level.
+    pub(super) fn region_by_key(&self, key: &str) -> Option<usize> {
+        self.domain_level()?
+            .regions
+            .iter()
+            .position(|region| region.key == key)
+    }
+
+    /// Whether `position` is on the name of domain region `key`: the top
+    /// of the region, where its name is drawn.
+    fn on_region_name(&self, key: &str, position: Point<Pixels>) -> bool {
+        let Some(level) = self.domain_level() else {
+            return false;
+        };
+        let Some(region) = level.regions.iter().find(|region| region.key == key) else {
+            return false;
+        };
+        if !matches!(region.kind, RegionKind::Domain(_)) {
+            return false;
+        }
+        let top = self.bounds.get().origin.y + self.to_canvas((region.rect.x, region.rect.y)).y;
+        let y = f32::from(position.y - top);
+        (0. ..=34.).contains(&y)
     }
 
     /// The pointer moved, no button down: what it's over lights, and a
@@ -326,7 +465,7 @@ impl MapView {
             Level::Plan(_) => self
                 .plan_box_at(position)
                 .map(|ix| self.plan.nodes[ix].key.clone()),
-            Level::Site => None,
+            Level::Site | Level::Domain => None,
         };
         let hover = match card {
             Some(key) => match &self.hover {
@@ -439,18 +578,48 @@ impl MapView {
     pub(super) fn key_down(
         &mut self,
         event: &KeyDownEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Keys typed in a field on the Map are the field's.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let keystroke = &event.keystroke;
         let secondary = keystroke.modifiers.secondary();
         match keystroke.key.as_str() {
             "escape" => {
                 if self.drag.take().is_some() {
+                } else if self.domains.editing.is_some() {
+                    self.finish_edit(false, cx);
                 } else if !self.selected.is_empty() {
                     self.selected.clear();
+                } else if self.level == Level::Domain && self.domains.proposal.is_some() {
+                    self.discard_proposal(cx);
                 } else {
                     cx.emit(MapEvent::Close);
+                }
+            }
+            "enter" if secondary && self.domains.proposal.is_some() => self.keep_proposal(cx),
+            "z" if secondary && keystroke.modifiers.shift => {
+                if !self.redo_domains(cx) {
+                    return;
+                }
+            }
+            "z" if secondary => {
+                if !self.undo_domains(cx) {
+                    return;
+                }
+            }
+            "f2" => {
+                let domain = self
+                    .selected
+                    .iter()
+                    .find_map(|key| self.region_by_key(key))
+                    .and_then(|ix| self.domain_of_region(ix));
+                match domain {
+                    Some(domain) => self.begin_edit(domain, Field::Name, window, cx),
+                    None => return,
                 }
             }
             "up" if secondary => self.step_out(cx),
@@ -465,6 +634,13 @@ impl MapView {
                         .cards
                         .iter()
                         .map(|card| site_key(&card.key))
+                        .collect(),
+                    Level::Domain => self
+                        .drawn
+                        .borrow()
+                        .regions
+                        .iter()
+                        .map(|region| region.key.clone())
                         .collect(),
                 };
             }

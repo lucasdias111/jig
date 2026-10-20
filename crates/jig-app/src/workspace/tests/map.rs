@@ -266,7 +266,7 @@ fn folders_open_in_place_as_site_zooms_in(cx: &mut TestAppContext) {
     press(cx, window, "secondary-up");
     settle(cx, window, &view);
     // All the way out: the project, its folders closed.
-    press(cx, window, "secondary-up");
+    view.update(cx, |view, _| view.fit_site());
     settle(cx, window, &view);
     let before = cx.update(|cx| view.read(cx).site_showing());
     let net = before.iter().find(|(key, _)| key == "dir:src/net/");
