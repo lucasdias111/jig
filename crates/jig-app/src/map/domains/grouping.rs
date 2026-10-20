@@ -186,9 +186,9 @@ impl Grouping {
                 })
                 .collect(),
             flows: self
-                .calls
-                .iter()
-                .map(|&((from, to), count)| Flow {
+                .strongest_calls()
+                .into_iter()
+                .map(|((from, to), count)| Flow {
                     from: names[from].clone(),
                     to: names[to].clone(),
                     label: format!("{count} call{}", if count == 1 { "" } else { "s" }),
@@ -196,6 +196,28 @@ impl Grouping {
                 .collect(),
             shared: Default::default(),
         }
+    }
+
+    /// The calls between groups worth a link: each group's strongest few
+    /// either way, so the drafts aren't a web of every call.
+    fn strongest_calls(&self) -> Vec<((usize, usize), usize)> {
+        const PER_GROUP: usize = 2;
+        let mut kept: Vec<((usize, usize), usize)> = Vec::new();
+        for group in 0..self.groups.len() {
+            let mut mine: Vec<&((usize, usize), usize)> = self
+                .calls
+                .iter()
+                .filter(|((from, to), _)| *from == group || *to == group)
+                .collect();
+            mine.sort_by_key(|(pair, count)| (std::cmp::Reverse(*count), *pair));
+            for &&call in mine.iter().take(PER_GROUP) {
+                if !kept.contains(&call) {
+                    kept.push(call);
+                }
+            }
+        }
+        kept.sort();
+        kept
     }
 
     /// The grouping as Index Domains hands it over: every file by group,
@@ -675,7 +697,8 @@ mod tests {
             let domains = super::super::actions::Action::Index
                 .proposal(&reply, None)
                 .unwrap();
-            let level = super::super::level::DomainLevel::of(&project, &domains, false);
+            let site = super::super::super::site::Site::of(&project, &domains, Default::default());
+            let level = super::super::level::DomainLevel::of(&project, &domains, false, &site);
             for (_, region) in level.showing() {
                 println!("{}: {}", region.name, region.detail());
             }

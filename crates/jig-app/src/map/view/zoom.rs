@@ -2,8 +2,10 @@
 //! ⌘-scrolling zooms within a level; past its far end it steps out (Plan
 //! to Site), and past its near end over a box it steps into it (a Site
 //! box to its Plan, a Plan's function to its code, another function to
-//! its Plan); out past Site's is Domain, and in from Domain over a domain
-//! or its file is Site. A step cross-fades: the old level is drawn fading out while
+//! its Plan). Domain and Site are one drawing: zooming into a domain far
+//! enough that it opens is Site, and zooming out of Site until no region
+//! in view is open is Domain, the view staying where it is. A step
+//! cross-fades: the old level is drawn fading out while
 //! the new one fades in, the camera of each flying so that the box
 //! entered grows into its contents, or what's left shrinks into the box
 //! holding it. Once a gesture has changed level, it zooms no further
@@ -302,41 +304,109 @@ impl MapView {
         Camera { x, y, zoom }
     }
 
-    /// The whole project in view.
+    /// Site at its broadest: the region holding what's selected, else the
+    /// biggest, filling the view and open.
     fn site_fit(&self) -> Camera {
-        let (width, height) = self.canvas_size();
-        let Some(root) = self.site_nodes().first() else {
+        let Some(site) = self.site.as_ref() else {
             return Camera {
                 x: 0.,
                 y: 0.,
                 zoom: 1.,
             };
         };
-        let zoom = ((width - 60.) / root.rect.width.max(1.))
-            .min((height - 60.) / root.rect.height.max(1.))
-            .min(1.);
-        let (x, y) = root.rect.centre();
-        Camera { x, y, zoom }
-    }
-
-    /// How far out Site goes: the whole project, with room round it.
-    pub(super) fn site_min(&self) -> f32 {
-        self.site_fit().zoom * 0.8
-    }
-
-    /// Site centred on box `ix`, close enough that the box it's in is
-    /// open and it's a good size.
-    pub(super) fn camera_on_site_box(&self, ix: usize) -> Camera {
-        let (width, _) = self.canvas_size();
-        let nodes = self.site_nodes();
-        let rect = nodes[ix].rect;
-        let mut zoom = 0.3 * width / rect.width.max(1.);
-        if let Some(parent) = nodes[ix].parent.filter(|&p| p != 0) {
-            zoom = zoom.max(super::scene::OPEN_TO * 1.05 / nodes[parent].rect.width.max(1.));
+        let selected = self
+            .selected
+            .iter()
+            .find_map(|key| site.index_of(key.strip_prefix("site:")?))
+            .map(|ix| site.nodes[ix].region)
+            .filter(|&ix| ix != 0);
+        let biggest = site.regions().max_by(|&a, &b| {
+            let area = |ix: usize| site.nodes[ix].rect.width * site.nodes[ix].rect.height;
+            area(a).total_cmp(&area(b))
+        });
+        match selected.or(biggest) {
+            Some(region) => self.camera_on_site_box(region),
+            None => Camera {
+                x: 0.,
+                y: 0.,
+                zoom: 1.,
+            },
         }
-        let zoom = zoom.clamp(self.site_min(), SITE_MAX);
-        let (x, y) = rect.centre();
-        Camera { x, y, zoom }
+    }
+
+    /// How far out Site goes: past where every region in view has closed
+    /// it's Domain. All of Site's regions, without a camera.
+    pub(super) fn site_min(&self) -> f32 {
+        let Some(site) = self.site.as_ref() else {
+            return 0.01;
+        };
+        site.regions()
+            .filter(|&ix| site.nodes[ix].opens())
+            .map(|ix| site.nodes[ix].open_at)
+            .fold(f32::INFINITY, f32::min)
+            .min(SITE_MAX)
+    }
+
+    /// Whether any region in view at `zoom` around the camera now has
+    /// started opening.
+    fn any_region_open(&self, zoom: f32) -> bool {
+        let Some(site) = self.site.as_ref() else {
+            return false;
+        };
+        let (width, height) = self.canvas_size();
+        let camera = self.camera();
+        let view = Rect {
+            x: camera.x - width / 2. / zoom,
+            y: camera.y - height / 2. / zoom,
+            width: width / zoom,
+            height: height / zoom,
+        };
+        site.regions().any(|ix| {
+            let node = &site.nodes[ix];
+            node.rect.overlaps(&view) && node.opening(zoom) > 0.
+        })
+    }
+
+    /// Site showing box `ix`: a box that opens filling the view, open; a
+    /// file or type with the folder it's in, open, so its neighbours are
+    /// in view too.
+    pub(super) fn camera_on_site_box(&self, ix: usize) -> Camera {
+        let (width, height) = self.canvas_size();
+        let nodes = self.site_nodes();
+        let node = &nodes[ix];
+        let target = if node.opens() {
+            ix
+        } else {
+            node.parent.unwrap_or(0)
+        };
+        // Open enough for the box and every box it's in.
+        let mut need: f32 = 0.;
+        let mut at = Some(target);
+        while let Some(n) = at {
+            if n != 0 {
+                need = need.max(nodes[n].open_to() * 1.02);
+            }
+            at = nodes[n].parent;
+        }
+        let screen = Rect {
+            x: 40.,
+            y: 40.,
+            width: width - 80.,
+            height: height - 80.,
+        };
+        let fit = Camera::showing(nodes[target].rect, screen, (width, height));
+        // No closer than Site's natural size, so what's around shows too.
+        let zoom = fit.zoom.min(1.);
+        if zoom >= need {
+            return Camera { zoom, ..fit };
+        }
+        // Too big to fit open: centred on the box itself.
+        let (x, y) = node.rect.centre();
+        Camera {
+            x,
+            y,
+            zoom: need.min(SITE_MAX),
+        }
     }
 
     /// Zooming stays put while a gesture that changed level goes on.
@@ -385,7 +455,9 @@ impl MapView {
                 self.zoom_by(factor, around, min, super::domain::DOMAIN_MAX);
             }
             Level::Site => {
-                if factor < 1. && wanted < self.site_min() {
+                if factor < 1. && !self.any_region_open(wanted) {
+                    self.zoom_by(factor, around, 0., SITE_MAX);
+                    self.continuous = true;
                     return self.show(Level::Domain, cx);
                 }
                 if factor > 1.
@@ -400,8 +472,7 @@ impl MapView {
                         return self.show(Level::Plan(Focus::Module(place)), cx);
                     }
                 }
-                let min = self.site_min();
-                self.zoom_by(factor, around, min, SITE_MAX);
+                self.zoom_by(factor, around, 0., SITE_MAX);
             }
         }
         self.moved(cx);
@@ -483,19 +554,8 @@ impl MapView {
                 let path = node.place.split('#').next().unwrap_or(&node.place);
                 cx.emit(MapEvent::OpenFile(self.root.join(path)));
             }
-            Kind::Root | Kind::Folder { .. } => {
-                let (width, height) = self.canvas_size();
-                let screen = Rect {
-                    x: 40.,
-                    y: 40.,
-                    width: width - 80.,
-                    height: height - 80.,
-                };
-                let to = Camera::showing(node.rect, screen, (width, height));
-                let to = Camera {
-                    zoom: to.zoom.clamp(self.site_min(), SITE_MAX),
-                    ..to
-                };
+            _ => {
+                let to = self.camera_on_site_box(ix);
                 self.transition = Some(Transition::pan(self.camera(), to));
                 self.set_camera(to);
                 self.selected = vec![super::site_key(&node.key)];

@@ -1,9 +1,8 @@
 //! The mouse and keys on the Map. Click selects, Shift-click or a box
 //! several; dragging moves a Plan's boxes (and only moves them), right or
-//! middle drag pans, double-click enters a box. At Domain, dragging a
-//! file onto another region moves it there and dropping a domain onto
-//! another merges them; at Site, with the domains' tints showing, a file
-//! dragged onto a box of another domain moves to it. Double-clicking a
+//! middle drag pans, double-click enters a box. At Domain, dropping a
+//! domain onto another merges them; at Site, with the domains' tints
+//! showing, a file dragged into another domain's region moves to it. Double-clicking a
 //! domain's name renames it. Resting on a Plan's function peeks at its
 //! code; on a Site arrow, lists its calls. Keys: ⌘↑ out, ⌘↓ or Enter in,
 //! ⌘A all, ⌘Z and ⇧⌘Z undo and redo edits to domains, F2 renames the
@@ -138,10 +137,6 @@ impl MapView {
 
     /// Into the box with key `key`, double-clicked.
     fn enter_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        if let Some(place) = key.strip_prefix("member:") {
-            let place = place.to_string();
-            return self.enter_member(&place, cx);
-        }
         if key.starts_with("domain:") {
             if let Some(ix) = self
                 .domain_level()
@@ -399,14 +394,6 @@ impl MapView {
         let editable = !self.drafts();
         match self.level {
             Level::Domain if editable => {
-                if let Some(place) = key.strip_prefix("member:") {
-                    let title = place.rsplit('/').next().unwrap_or(place).to_string();
-                    return Some(Drag::Member {
-                        place: place.to_string(),
-                        title,
-                        at: position,
-                    });
-                }
                 let region = self.region_by_key(key)?;
                 self.domain_of_region(region)?;
                 Some(Drag::Region {

@@ -258,69 +258,6 @@ fn zooming_past_a_level_crosses_into_the_next(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn folders_open_in_place_as_site_zooms_in(cx: &mut TestAppContext) {
-    let (_dir, window, workspace) = open_project(cx);
-    press(cx, window, "secondary-b");
-    read_level(cx, &workspace);
-    let view = map(cx, &workspace).unwrap();
-    press(cx, window, "secondary-up");
-    settle(cx, window, &view);
-    // All the way out: the project, its folders closed.
-    view.update(cx, |view, _| view.fit_site());
-    settle(cx, window, &view);
-    let before = cx.update(|cx| view.read(cx).site_showing());
-    let net = before.iter().find(|(key, _)| key == "dir:src/net/");
-    let rect = cx.update(|cx| {
-        let site = view.read(cx).site().unwrap();
-        site.nodes[site.index_of("dir:src/net/").unwrap()].rect
-    });
-    // A file the index doesn't read has a place too.
-    let site_keys: Vec<String> = cx.update(|cx| {
-        view.read(cx)
-            .site()
-            .unwrap()
-            .nodes
-            .iter()
-            .map(|n| n.key.clone())
-            .collect()
-    });
-    assert!(site_keys.contains(&"file:web/App.svelte".to_string()));
-    for _ in 0..30 {
-        let at = cx.update(|cx| view.read(cx).site_point("dir:src/net/"));
-        zoom_scroll(cx, window, at, -100.);
-        draw(cx, window);
-        let showing = cx.update(|cx| view.read(cx).site_showing());
-        if showing
-            .iter()
-            .any(|(key, open)| key == "dir:src/net/" && *open)
-        {
-            break;
-        }
-    }
-    let after = cx.update(|cx| view.read(cx).site_showing());
-    assert!(
-        after
-            .iter()
-            .any(|(key, open)| key == "dir:src/net/" && *open),
-        "net opened: {after:?}, before {net:?}"
-    );
-    assert!(
-        after.iter().any(|(key, _)| key == "file:src/net/client.rs"),
-        "its file shows inside"
-    );
-    assert_eq!(
-        level(cx, &workspace),
-        Some(Level::Site),
-        "never another screen"
-    );
-    let still = cx.update(|cx| {
-        let site = view.read(cx).site().unwrap();
-        site.nodes[site.index_of("dir:src/net/").unwrap()].rect
-    });
-    assert_eq!(rect, still, "nothing moved");
-}
-
-#[gpui_kit::test]
 fn a_pinch_out_in_the_code_shows_the_map(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = open_project(cx);
     draw(cx, window);
@@ -403,22 +340,18 @@ fn map_of_jig_live(cx: &mut TestAppContext) {
     press(cx, window, "secondary-up");
     settle(cx, window, &view);
     let selected = cx.update(|cx| view.read(cx).selected_keys().to_vec());
-    // Its type's box, in its file.
-    assert_eq!(
-        selected,
-        ["site:type:crates/jig-app/src/workspace.rs#Workspace"]
+    // Its type's box, or its file's when that's the type's.
+    assert!(
+        selected.len() == 1 && selected[0].contains(":crates/jig-app/src/workspace.rs"),
+        "{selected:?}"
     );
     let showing = cx.update(|cx| view.read(cx).site_showing());
     println!("Site around workspace.rs: {} boxes showing", showing.len());
     press(cx, window, "secondary-up");
     settle(cx, window, &view);
-    let all = cx.update(|cx| view.read(cx).site_showing());
     println!(
-        "The whole project: {:?}",
-        all.iter()
-            .map(|(key, open)| (key.as_str(), *open))
-            .take(12)
-            .collect::<Vec<_>>()
+        "The domains: {:?}",
+        cx.update(|cx| view.read(cx).domain_regions())
     );
     let middle = point(px(400.), px(240.));
     for _ in 0..12 {
@@ -777,4 +710,80 @@ fn fires_off_in_swift_live(cx: &mut TestAppContext) {
         "main.swift",
         "command = \"./app\"\nprogram = \"app\"\nbuild = \"swiftc -g -Onone main.swift -o app\"\n",
     );
+}
+
+/// Pictures of a project's Map, to look at the design without a screen,
+/// written to `JIG_PICTURES`: its Plan, Site and Domain at stepped zooms,
+/// then a zoom from Domain into the region holding the function, on
+/// through Site to its Plan. `JIG_MAP_ROOT=<project> JIG_MAP_FILE=<file>
+/// JIG_MAP_AT=<text in a function> JIG_PICTURES=<dir> cargo test -p jig-app
+/// map_pictures_live -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn map_pictures_live(cx: &mut TestAppContext) {
+    let file = std::path::PathBuf::from(std::env::var("JIG_MAP_FILE").unwrap());
+    let at = std::env::var("JIG_MAP_AT").unwrap();
+    let out = std::path::PathBuf::from(std::env::var("JIG_PICTURES").unwrap());
+    std::fs::create_dir_all(&out).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    let (window, workspace) = match std::env::var_os("JIG_MAP_ROOT") {
+        Some(root) => {
+            let (window, workspace) = open(cx, std::path::Path::new(&root));
+            open_file(cx, window, &workspace, &file);
+            (window, workspace)
+        }
+        None => open(cx, &file),
+    };
+    let inside = text.find(&at).unwrap() + 1;
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .editor()
+            .clone()
+            .select(inside..inside, cx)
+    });
+    press(cx, window, "secondary-b");
+    println!("arrived at {:?}", read_level(cx, &workspace));
+    let view = map(cx, &workspace).unwrap();
+    draw(cx, window);
+    let write = |name: String, bytes: Vec<u8>| {
+        let path = out.join(format!("{name}.png"));
+        std::fs::write(&path, bytes).unwrap();
+        println!("wrote {}", path.display());
+    };
+    let save = |level: &str, view: &Entity<MapView>, cx: &mut TestAppContext| {
+        for (name, bytes) in view.update(cx, |view, cx| view.pictures(cx)) {
+            write(format!("{level}-{name}"), bytes);
+        }
+    };
+    save("1-plan", &view, cx);
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    let selected = cx.update(|cx| view.read(cx).selected_keys().to_vec());
+    println!("site selected: {selected:?}");
+    let target = selected[0].trim_start_matches("site:").to_string();
+    save("2-site", &view, cx);
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    save("3-domain", &view, cx);
+    // The whole of Domain, then zooming over the function's file: Domain
+    // and Site share their drawing, so it's where it'll be at Site.
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    for n in 0..60 {
+        let at = cx.update(|cx| view.read(cx).site_point(&target));
+        zoom_scroll(cx, window, at, -40.);
+        view.update(cx, |view, _| view.end_gesture());
+        draw(cx, window);
+        if n % 3 == 2 {
+            let now = level(cx, &workspace);
+            println!("step {n}: {now:?}");
+            if let Some(bytes) = view.update(cx, |view, cx| view.picture_now(cx)) {
+                write(format!("4-zoom-{:02}", n / 3), bytes);
+            }
+            if !matches!(now, Some(Level::Domain) | Some(Level::Site)) {
+                break;
+            }
+        }
+    }
 }

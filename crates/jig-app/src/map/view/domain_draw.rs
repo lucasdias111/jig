@@ -15,7 +15,7 @@ use gpui_kit::*;
 use jig_commands::surface::{agent_accent, agent_icon};
 
 use super::super::domains::actions::Action;
-use super::super::domains::level::{HEADER, RegionKind};
+use super::super::domains::level::RegionKind;
 use super::domain::{self, Field};
 use super::draw::{Lit, View, blend, bow_point, theme};
 use super::input::Drag;
@@ -147,7 +147,7 @@ impl MapView {
         let selected = lit.selected.contains(&region.key);
         let target = self.drop_target() == Some(region.ix);
         let header = if region.open > 0. {
-            view.scaled(HEADER).min(height)
+            view.scaled(region.header).min(height)
         } else {
             height
         };

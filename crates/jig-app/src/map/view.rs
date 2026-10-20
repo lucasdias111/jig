@@ -34,7 +34,7 @@ use super::domains::actions::Action;
 use super::index::{FnId, Project, Target};
 use super::layout::{self, Placed, Rect};
 use super::plan::{self, Focus, Item, Opened, Plan, function_key, slashed};
-use super::site::{Kind, Site};
+use super::site::{Kind, Show, Site};
 use scene::Scene;
 use zoom::{Camera, Transition};
 
@@ -118,7 +118,12 @@ pub struct MapView {
     /// The scene as last drawn, for finding what's under the pointer.
     drawn: RefCell<Scene>,
     /// Site's arrows for the boxes showing, kept while they stay the same.
-    site_arrows: RefCell<Option<(u64, Rc<Vec<super::site::Arrow>>)>>,
+    site_arrows: RefCell<Option<(u64, SiteArrows)>>,
+    /// Tests, and calls into Shared, shown at Site.
+    site_show: Show,
+    /// The level is changing by zooming on, not by a jump: the view stays
+    /// where it is, since Domain and Site share their drawing.
+    continuous: bool,
     /// The paused program's stack, and its functions on the Plan.
     stack: Stack,
     on_stack: Vec<FnId>,
@@ -167,6 +172,8 @@ impl MapView {
             hover: None,
             drawn: RefCell::new(Scene::default()),
             site_arrows: RefCell::new(None),
+            site_show: Show::default(),
+            continuous: false,
             stack: Vec::new(),
             on_stack: Vec::new(),
             live: true,
@@ -200,13 +207,23 @@ impl MapView {
                 self.level = Level::Plan(Focus::Function(found));
             }
         }
-        self.site = Some(Rc::new(Site::of(&project)));
         self.project = Some(project);
         self.reload_domains();
         self.rebuild(true);
         self.on_stack = self.stack_functions();
         self.ask_server(cx);
         cx.emit(MapEvent::LiveLines);
+        cx.notify();
+    }
+
+    /// Tests, or calls into Shared, shown at Site or not: Site laid out
+    /// again.
+    pub fn set_site_show(&mut self, show: Show, cx: &mut Context<Self>) {
+        if show == self.site_show {
+            return;
+        }
+        self.site_show = show;
+        self.domains_changed();
         cx.notify();
     }
 
@@ -374,18 +391,35 @@ impl MapView {
         // What the old level was showing, in its own drawing.
         let old_content = self.content_rect();
         let entered = self.entered_rect(&level);
+        let continuous = std::mem::take(&mut self.continuous);
         self.save_view();
         self.level = level;
         let saved = self.load_view();
         self.rebuild(false);
+        let same = self.content_rect().map(|rect| (rect, rect));
         let (to, matched) = match (&left, &self.level) {
+            // Zoomed out of Site: Domain is the same drawing, the regions
+            // closing where they are.
+            (Level::Site, Level::Domain) if continuous => {
+                self.selected = self.domain_of_selection_at(&left, old_camera);
+                let to = Camera {
+                    zoom: old_camera.zoom.clamp(self.domain_min(), domain::DOMAIN_MAX),
+                    ..old_camera
+                };
+                (to, same)
+            }
             // Out to Domain: the region holding what was selected, picked.
             (_, Level::Domain) => {
-                self.selected = self.domain_of_selection(&left);
+                self.selected = self.domain_of_selection_at(&left, old_camera);
                 let to = saved.unwrap_or_else(|| self.default_camera());
                 (to, None)
             }
-            // Into Site from a domain or its file: what it stands for.
+            // Zoomed into a region: Site carries on where Domain was.
+            (Level::Domain, Level::Site) if continuous => {
+                self.arriving_at = None;
+                (old_camera, same)
+            }
+            // Into Site from a domain: what it stands for.
             (Level::Domain, Level::Site) => match self.arriving_at.take() {
                 Some((entered, boxes)) => {
                     let to = self.camera_on_site_boxes(&boxes);
@@ -740,6 +774,9 @@ pub enum Expand {
 
 use plan::Node;
 
+/// Site's arrows and stubs for the boxes showing.
+type SiteArrows = Rc<(Vec<super::site::Arrow>, Vec<super::site::Stub>)>;
+
 /// A Site box's key as selections keep it, apart from Plan's.
 fn site_key(key: &str) -> String {
     format!("site:{key}")
@@ -868,6 +905,39 @@ impl MapView {
                     .map(|card| (card.key.clone(), false)),
             )
             .collect()
+    }
+
+    /// The words on the arrows drawn: flows, and calls leaving a region.
+    pub fn drawn_labels(&self) -> Vec<String> {
+        self.drawn
+            .borrow()
+            .arrows
+            .iter()
+            .flat_map(|arrow| arrow.labels.iter().map(|(_, label)| label.clone()))
+            .collect()
+    }
+
+    /// The regions drawn, by key, and how far each is open.
+    pub fn drawn_regions(&self) -> Vec<(String, Rect, f32)> {
+        self.drawn
+            .borrow()
+            .regions
+            .iter()
+            .map(|region| (region.key.clone(), region.rect, region.open))
+            .collect()
+    }
+
+    /// Where box `key` of Site is drawn in the window, if it's in view.
+    pub fn site_box_on_screen(&self, key: &str) -> Option<Rect> {
+        let site = self.site.as_ref()?;
+        let rect = site.nodes[site.index_of(key)?].rect;
+        let at = self.to_canvas((rect.x, rect.y));
+        Some(Rect {
+            x: f32::from(at.x),
+            y: f32::from(at.y),
+            width: rect.width * self.zoom,
+            height: rect.height * self.zoom,
+        })
     }
 
     /// The Plan's functions lit as the debugger's path.

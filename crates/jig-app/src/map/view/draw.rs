@@ -159,6 +159,42 @@ impl MapView {
                     Tooltip::new("Tint each box with its domain's colour").build(window, cx)
                 })
         });
+        let site = self.level == Level::Site;
+        let switch = |id: &'static str, label: &'static str, on: bool, tip: &'static str| {
+            h_flex()
+                .id(id)
+                .gap_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(Switch::new(id).small().checked(on).on_click(cx.listener(
+                    move |this, on: &bool, _, cx| {
+                        let mut show = this.site_show;
+                        match id {
+                            "map-tests" => show.tests = *on,
+                            _ => show.shared = *on,
+                        }
+                        this.set_site_show(show, cx)
+                    },
+                )))
+                .child(label)
+                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+        };
+        let site_switches = site.then(|| {
+            h_flex()
+                .gap_2()
+                .child(switch(
+                    "map-tests",
+                    "Tests",
+                    self.site_show.tests,
+                    "Show the test files, and the calls they make",
+                ))
+                .child(switch(
+                    "map-shared",
+                    "Shared",
+                    self.site_show.shared,
+                    "Show the calls into and out of Shared",
+                ))
+        });
         let domain_buttons = (self.level == Level::Domain).then(|| self.render_domain_buttons(cx));
         let export = self.render_export_button(cx);
         h_flex()
@@ -187,6 +223,7 @@ impl MapView {
                     .flex_none()
                     .gap_2()
                     .children(domain_buttons)
+                    .children(site_switches)
                     .children(tints)
                     .child(export)
                     .child(levels)
@@ -545,8 +582,15 @@ impl MapView {
             None => look_colour(frame.look, cx),
         };
         let fixed = frame.look.fixed_text();
-        let title_size = if fixed { px(12.) } else { view.scaled(11.) };
-        let package = matches!(frame.look, Look::Package | Look::Project);
+        // Site's titles fit their title bar, at most the size cards use.
+        let bar = frame.header * view.camera.zoom;
+        let title_size = if fixed {
+            px((bar * 0.55).min(12.))
+        } else {
+            view.scaled(11.)
+        };
+        let words = !fixed || bar >= 13.;
+        let package = frame.look == Look::Package;
         div()
             .absolute()
             .left(at.x)
@@ -564,40 +608,33 @@ impl MapView {
             .bg(accent.opacity(0.035))
             .opacity(frame.alpha)
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .px(if fixed { px(10.) } else { view.scaled(10.) })
-                    .pt(if fixed { px(6.) } else { view.scaled(5.) })
-                    .gap_2()
-                    .min_w_0()
-                    .text_size(title_size)
-                    .child(
-                        div()
-                            .flex_none()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground.opacity(0.8))
-                            .child(frame.title.clone()),
-                    )
-                    .when(!frame.note.is_empty() && fixed, |this| {
-                        this.child(
+            .when(words, |this| {
+                this.child(
+                    h_flex()
+                        .h(if fixed { px(bar) } else { view.scaled(24.) })
+                        .px(if fixed { px(10.) } else { view.scaled(10.) })
+                        .gap_2()
+                        .min_w_0()
+                        .items_center()
+                        .text_size(title_size)
+                        .child(
                             div()
                                 .flex_none()
-                                .text_size(px(10.5))
-                                .text_color(theme.muted_foreground)
-                                .child(frame.note.clone()),
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.foreground.opacity(0.8))
+                                .child(frame.title.clone()),
                         )
-                    })
-                    .when(!frame.detail.is_empty() && fixed, |this| {
-                        this.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(10.5))
-                                .text_color(theme.muted_foreground.opacity(0.85))
-                                .child(frame.detail.clone()),
-                        )
-                    }),
-            )
+                        .when(!frame.note.is_empty() && fixed, |this| {
+                            this.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px((bar * 0.48).min(10.5)))
+                                    .text_color(theme.muted_foreground)
+                                    .child(frame.note.clone()),
+                            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 
@@ -642,9 +679,12 @@ impl MapView {
             .any(|key| key == &format!("site:{}", card.key) || key == &card.key);
         let hovered = lit.hovered.as_deref() == Some(card.key.as_str());
         let words = width >= 46. && height >= 16.;
-        let more = height >= 38.;
-        let most = height >= 54.;
         let unread = card.look == Look::Unread;
+        // As many lines as fit: the title (two at most), what it's for or
+        // holds, then how much.
+        let lines = ((height - 10.) / 14.).floor().max(1.) as usize;
+        let title_lines = if lines >= 3 { 2 } else { 1 };
+        let detail_lines = lines.saturating_sub(title_lines + 1);
         div()
             .absolute()
             .left(at.x)
@@ -677,11 +717,12 @@ impl MapView {
                 this.child(
                     v_flex()
                         .px(px(8.))
-                        .py(px(if more { 5. } else { 1. }))
+                        .py(px(if lines >= 2 { 5. } else { 1. }))
                         .gap(px(1.))
                         .child(
                             div()
-                                .truncate()
+                                .line_height(px(14.))
+                                .line_clamp(title_lines)
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if unread {
@@ -691,16 +732,17 @@ impl MapView {
                                 })
                                 .child(card.title.clone()),
                         )
-                        .when(more && !card.detail.is_empty(), |this| {
+                        .when(detail_lines > 0 && !card.detail.is_empty(), |this| {
                             this.child(
                                 div()
-                                    .truncate()
+                                    .line_height(px(13.))
+                                    .line_clamp(detail_lines)
                                     .text_size(px(10.5))
                                     .text_color(theme.foreground.opacity(0.7))
                                     .child(card.detail.clone()),
                             )
                         })
-                        .when(most || (more && card.detail.is_empty()), |this| {
+                        .when(lines >= 2, |this| {
                             this.child(
                                 div()
                                     .truncate()
@@ -1057,13 +1099,13 @@ impl MapView {
         let text = notice.unwrap_or_else(|| {
             match self.level {
                 Level::Domain if self.drafts() => {
-                    "Jig's own grouping, from folders and calls · zoom into a group for its files, further for Site · ⌘↓ or Enter enters"
+                    "Jig's own grouping, from folders and calls · zoom into a group to open it onto its code · ⌘↓ or Enter enters"
                 }
                 Level::Domain => {
-                    "Zoom in for a domain's files, further for Site · drag a file onto another domain to move it, a domain onto another to merge · double-click a name to rename · ⌘Z undoes"
+                    "Zoom into a domain to open it onto its code · drop a domain onto another to merge · double-click a name to rename · ⌘Z undoes"
                 }
                 Level::Site => {
-                    "Pinch or ⌘-scroll to zoom: folders open as you go in, a file into its Plan · ⌘↓, Enter or double-click enters · ⌘↑ out to Domain"
+                    "Zoom in: each domain opens onto its components, folders and files, a file into its Plan · ⌘↓, Enter or double-click enters · ⌘↑ or zoom out to Domain"
                 }
                 Level::Plan(_) => {
                     "Zoom into a function for its Plan, into this one for its code · double-click or Enter enters · ◀ ▶ open a hop · ⌘↑ out to Site · Esc back to the code"
@@ -1104,7 +1146,7 @@ pub(super) fn look_colour(look: Look, cx: &App) -> Hsla {
         Look::Abstract => theme.cyan,
         Look::External | Look::More | Look::Gone => theme.muted_foreground,
         Look::Folder | Look::Owner => theme.foreground,
-        Look::Package | Look::Project => theme.magenta,
+        Look::Package => theme.magenta,
         Look::File => theme.blue,
         Look::Unread => theme.muted_foreground,
         Look::Type => theme.green,

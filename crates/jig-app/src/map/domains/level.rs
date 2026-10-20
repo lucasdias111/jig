@@ -1,30 +1,15 @@
-//! The Domain level laid out: each domain a big region, sized by how much
-//! code it holds, with its name, purpose and offers at the top and its
-//! files and types packed below, shown as you zoom in. Shared and
-//! Unsorted sit apart below the domains, smaller. Between two domains
-//! there's one link, carrying what flows each way.
+//! The Domain level: each domain a big region with its name, purpose and
+//! offers, Shared and Unsorted apart below the domains. Between two
+//! domains there's one link, carrying what flows each way. The regions
+//! are where Site puts them, sized by what they hold, so zooming into one
+//! carries on into Site without anything moving.
 
 use std::collections::HashMap;
 
 use super::super::index::Project;
 use super::super::layout::Rect;
+use super::super::site::Site;
 use super::{Domains, Home, all_files, place_of};
-
-/// Room at a region's top for its name, purpose and offers.
-pub const HEADER: f32 = 190.;
-const PAD: f32 = 18.;
-pub const MEMBER_WIDTH: f32 = 190.;
-pub const MEMBER_HEIGHT: f32 = 46.;
-const GAP: f32 = 10.;
-/// Between regions: room for the links' labels.
-const REGION_GAP: f32 = 200.;
-/// A region's width, from the least code to the most.
-const MIN_WIDTH: f32 = 560.;
-const MAX_WIDTH: f32 = 1500.;
-/// Between the domains and Shared and Unsorted below them.
-const APART: f32 = 280.;
-/// How much wider than tall regions and their members are packed.
-const ASPECT: f32 = 1.6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionKind {
@@ -45,6 +30,8 @@ pub struct Region {
     pub why: String,
     pub members: Vec<Member>,
     pub rect: Rect,
+    /// Its header's height, where Site puts what's inside below it.
+    pub header: f32,
     /// How much code it holds, in bytes.
     pub weight: u64,
     pub files: usize,
@@ -81,7 +68,6 @@ pub struct Member {
     pub title: String,
     /// The folder it's in, or the file a type is in.
     pub folder: String,
-    pub rect: Rect,
     /// Read by the index, not only placed by its folder.
     pub read: bool,
     pub functions: usize,
@@ -108,8 +94,9 @@ pub struct DomainLevel {
 }
 
 impl DomainLevel {
-    /// `domains` over `project`, laid out.
-    pub fn of(project: &Project, domains: &Domains, draft: bool) -> DomainLevel {
+    /// `domains` over `project`, where `site` (made from the same
+    /// domains) puts them.
+    pub fn of(project: &Project, domains: &Domains, draft: bool, site: &Site) -> DomainLevel {
         let mut regions: Vec<Region> = domains
             .domains
             .iter()
@@ -123,6 +110,7 @@ impl DomainLevel {
                 why: domain.why.clone(),
                 members: Vec::new(),
                 rect: Rect::default(),
+                header: 0.,
                 weight: 0,
                 files: 0,
                 functions: 0,
@@ -138,6 +126,7 @@ impl DomainLevel {
             why: String::new(),
             members: Vec::new(),
             rect: Rect::default(),
+            header: 0.,
             weight: 0,
             files: 0,
             functions: 0,
@@ -151,6 +140,7 @@ impl DomainLevel {
             why: String::new(),
             members: Vec::new(),
             rect: Rect::default(),
+            header: 0.,
             weight: 0,
             files: 0,
             functions: 0,
@@ -219,7 +209,6 @@ impl DomainLevel {
                         place: typed,
                         title: ty.name.clone(),
                         folder: file_name(&place),
-                        rect: Rect::default(),
                         read: true,
                         functions: n,
                     });
@@ -237,7 +226,6 @@ impl DomainLevel {
                     .map_or("", |(dir, _)| dir)
                     .to_string(),
                 place,
-                rect: Rect::default(),
                 read: file.is_some(),
                 functions: count,
             });
@@ -282,7 +270,12 @@ impl DomainLevel {
             draft,
             by_place: HashMap::new(),
         };
-        level.place_regions();
+        for region in &mut level.regions {
+            if let Some(ix) = site.index_of(&region.key) {
+                region.rect = site.nodes[ix].rect;
+                region.header = site.nodes[ix].header;
+            }
+        }
         level.by_place = level
             .regions
             .iter()
@@ -319,107 +312,6 @@ impl DomainLevel {
             .flat_map(|region| region.members.iter().map(|m| m.place.clone()))
             .collect()
     }
-
-    /// Each region sized by its code and members, the domains packed in
-    /// rows and Shared and Unsorted below them, apart.
-    fn place_regions(&mut self) {
-        let heaviest = self
-            .regions
-            .iter()
-            .filter(|region| matches!(region.kind, RegionKind::Domain(_)))
-            .map(|region| region.weight)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        for region in &mut self.regions {
-            let by_code = match region.kind {
-                RegionKind::Domain(_) => {
-                    let share = (region.weight as f32 / heaviest as f32).sqrt();
-                    MIN_WIDTH + (MAX_WIDTH - MIN_WIDTH) * share
-                }
-                _ => MIN_WIDTH * 0.75,
-            };
-            let count = region.members.len().max(1) as f32;
-            let columns_fit = (ASPECT * count * (MEMBER_HEIGHT + GAP) / (MEMBER_WIDTH + GAP))
-                .sqrt()
-                .ceil();
-            let width = by_code.max(columns_fit * (MEMBER_WIDTH + GAP) - GAP + 2. * PAD);
-            let columns = ((width - 2. * PAD + GAP) / (MEMBER_WIDTH + GAP))
-                .floor()
-                .max(1.) as usize;
-            for (ix, member) in region.members.iter_mut().enumerate() {
-                member.rect = Rect {
-                    x: PAD + (ix % columns) as f32 * (MEMBER_WIDTH + GAP),
-                    y: HEADER + (ix / columns) as f32 * (MEMBER_HEIGHT + GAP),
-                    width: MEMBER_WIDTH,
-                    height: MEMBER_HEIGHT,
-                };
-            }
-            let rows = region.members.len().div_ceil(columns) as f32;
-            let grid = (rows * (MEMBER_HEIGHT + GAP) - GAP).max(0.);
-            let height = (HEADER + grid + PAD).max(width / ASPECT * 0.7);
-            region.rect = Rect {
-                x: 0.,
-                y: 0.,
-                width,
-                height,
-            };
-        }
-        // The domains in rows, as near `ASPECT` as they pack.
-        let domains: Vec<usize> = (0..self.regions.len())
-            .filter(|&ix| matches!(self.regions[ix].kind, RegionKind::Domain(_)))
-            .collect();
-        let area: f32 = domains
-            .iter()
-            .map(|&ix| {
-                let r = self.regions[ix].rect;
-                (r.width + REGION_GAP) * (r.height + REGION_GAP)
-            })
-            .sum();
-        let widest = domains
-            .iter()
-            .map(|&ix| self.regions[ix].rect.width)
-            .fold(0., f32::max);
-        let row = (area * ASPECT).sqrt().max(widest);
-        let (mut x, mut y, mut tallest, mut right) = (0f32, 0f32, 0f32, 0f32);
-        for &ix in &domains {
-            let rect = &mut self.regions[ix].rect;
-            if x > 0. && x + rect.width > row {
-                x = 0.;
-                y += tallest + REGION_GAP;
-                tallest = 0.;
-            }
-            rect.x = x;
-            rect.y = y;
-            x += rect.width + REGION_GAP;
-            right = right.max(x - REGION_GAP);
-            tallest = tallest.max(rect.height);
-        }
-        // Shared and Unsorted apart, below.
-        let mut x = 0.;
-        let below = if domains.is_empty() {
-            0.
-        } else {
-            y + tallest + APART
-        };
-        for region in &mut self.regions {
-            if matches!(region.kind, RegionKind::Domain(_)) || region.members.is_empty() {
-                continue;
-            }
-            region.rect.x = x;
-            region.rect.y = below;
-            x += region.rect.width + REGION_GAP;
-        }
-        // Members where their region is.
-        for region in &mut self.regions {
-            let (rx, ry) = (region.rect.x, region.rect.y);
-            for member in &mut region.members {
-                member.rect.x += rx;
-                member.rect.y += ry;
-            }
-        }
-        let _ = right;
-    }
 }
 
 fn file_name(place: &str) -> String {
@@ -440,7 +332,13 @@ fn plural(count: usize, what: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::super::index::tests::fixture;
+    use super::super::super::site::Show;
     use super::*;
+
+    fn level_of(project: &Project, domains: &Domains) -> DomainLevel {
+        let site = Site::of(project, domains, Show::default());
+        DomainLevel::of(project, domains, false, &site)
+    }
 
     fn domains() -> Domains {
         toml::from_str(
@@ -476,7 +374,7 @@ members = ["client/src/net/"]
     fn regions_hold_their_members_and_shared_and_unsorted_sit_apart() {
         let dir = fixture();
         let project = Project::read(dir.path());
-        let level = DomainLevel::of(&project, &domains(), false);
+        let level = level_of(&project, &domains());
         let names: Vec<&str> = level.showing().map(|(_, r)| r.name.as_str()).collect();
         assert_eq!(names, ["Bug Reports", "Rooms", "Shared", "Unsorted"]);
         let bugs = &level.regions[0];
@@ -492,14 +390,13 @@ members = ["client/src/net/"]
             level.unsorted(),
             ["server/src/org/demo/users/UserService.java"]
         );
-        // Members inside their region, below its header.
-        for region in &level.regions {
-            for member in &region.members {
-                assert!(member.rect.right() <= region.rect.right() + 0.01);
-                assert!(member.rect.bottom() <= region.rect.bottom() + 0.01);
-                assert!(member.rect.y >= region.rect.y + HEADER);
-            }
-        }
+        // Where Site puts them.
+        assert!(
+            level
+                .regions
+                .iter()
+                .all(|r| r.rect.width > 0. && r.header > 0.)
+        );
         // Shared and Unsorted below every domain.
         let lowest = level.regions[..2]
             .iter()
@@ -513,7 +410,7 @@ members = ["client/src/net/"]
     fn one_link_per_pair_carries_both_ways() {
         let dir = fixture();
         let project = Project::read(dir.path());
-        let level = DomainLevel::of(&project, &domains(), false);
+        let level = level_of(&project, &domains());
         assert_eq!(
             level.links,
             [Link {
@@ -529,8 +426,9 @@ members = ["client/src/net/"]
     fn more_code_makes_a_bigger_region() {
         let dir = fixture();
         let project = Project::read(dir.path());
-        let level = DomainLevel::of(&project, &domains(), false);
+        let level = level_of(&project, &domains());
         assert!(level.regions[0].weight > level.regions[1].weight);
-        assert!(level.regions[0].rect.width > level.regions[1].rect.width);
+        let area = |r: &Region| r.rect.width * r.rect.height;
+        assert!(area(&level.regions[0]) >= area(&level.regions[1]));
     }
 }

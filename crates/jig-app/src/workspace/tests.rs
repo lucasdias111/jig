@@ -18,6 +18,7 @@ mod occurrences;
 mod quick_fix;
 mod servers;
 mod session;
+mod site;
 mod tabs;
 mod tasks;
 mod update;

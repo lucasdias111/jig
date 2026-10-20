@@ -1,25 +1,25 @@
 //! What the canvas draws, the same way for every level: frames, boxes on
 //! them and arrows between, in the level's drawing. A Plan's scene is its
-//! boxes as laid out; Site's depends on how far in the view is, each
-//! folder opening as it grows past a size on screen, what's inside
-//! fading in, and the calls counted between the boxes showing. Domain's
-//! is its regions, their files inside, and the links between them.
+//! boxes as laid out. Domain's is its regions and the links between them;
+//! Site's is the same regions, each opening onto its share of the code as
+//! it grows on screen, every box inside opening the same way once what's
+//! in it would read, and the calls between boxes side by side.
 
 use std::rc::Rc;
 use std::time::Instant;
 
+use super::super::domains::Home;
 use super::super::domains::level::RegionKind;
 use super::super::layout::{HEADER_HEIGHT, Placed, Rect};
 use super::super::plan::Item;
 use super::super::site::{Calls, Kind, Site};
+use super::domain::link_arrow;
 use super::zoom::Camera;
 use super::zoom::FADE_OUT;
 use super::{Level, MapView};
 
-/// A Site box this wide on screen starts opening, and is open at the
-/// second.
-pub const OPEN_FROM: f32 = 280.;
-pub const OPEN_TO: f32 = 400.;
+/// How long a stub for calls leaving a region is, on screen.
+const STUB: f32 = 70.;
 /// More arrows than this at Site, and only those with the most calls.
 const MAX_ARROWS: usize = 160;
 
@@ -34,7 +34,6 @@ pub enum Look {
     Gone,
     Folder,
     Package,
-    Project,
     File,
     /// A file the index can't read, placed by its folder.
     Unread,
@@ -89,6 +88,8 @@ pub struct Card {
 pub struct FrameBox {
     pub key: String,
     pub rect: Rect,
+    /// Its title bar's height, in the drawing.
+    pub header: f32,
     pub title: String,
     pub detail: String,
     pub note: String,
@@ -104,6 +105,8 @@ pub struct FrameBox {
 pub struct RegionBox {
     pub key: String,
     pub rect: Rect,
+    /// Where its name, purpose and offers go, above what's inside.
+    pub header: f32,
     pub name: String,
     pub purpose: String,
     pub offers: Vec<String>,
@@ -164,12 +167,6 @@ impl Scene {
     }
 }
 
-/// How far a box `width` wide on screen has opened, from 0 to 1.
-pub fn opening(width: f32) -> f32 {
-    let t = ((width - OPEN_FROM) / (OPEN_TO - OPEN_FROM)).clamp(0., 1.);
-    t * t * (3. - 2. * t)
-}
-
 impl MapView {
     /// The level showing as drawn by `camera` now.
     pub(super) fn scene(&self, camera: Camera, now: Instant) -> Scene {
@@ -200,6 +197,7 @@ impl MapView {
                 alpha: 1.,
                 tint: None,
                 ix: *frame,
+                header: HEADER_HEIGHT,
             });
         }
         for (ix, node) in self.plan.nodes.iter().enumerate() {
@@ -260,11 +258,14 @@ impl MapView {
         scene
     }
 
-    /// Site as `camera` sees it: the boxes showing in view, open ones as
-    /// frames with what's inside fading in, and the arrows between them.
+    /// Site as `camera` sees it: the regions, those grown big enough open
+    /// onto their share of the code, every box inside showing as a frame
+    /// with what's inside fading in once that would read; the arrows
+    /// between boxes side by side, calls leaving a region as stubs at its
+    /// edge, and the domains' flows between regions still closed.
     fn site_scene(&self, camera: Camera) -> Scene {
         let mut scene = Scene::default();
-        let Some(site) = self.site.as_ref() else {
+        let (Some(site), Some(level)) = (self.site.as_ref(), self.domain_level()) else {
             return scene;
         };
         let (width, height) = self.canvas_size();
@@ -274,37 +275,50 @@ impl MapView {
             width: width / camera.zoom,
             height: height / camera.zoom,
         };
-        let opened = |ix: usize| {
-            ix == 0
-                || (site.nodes[ix].opens() && opening(site.nodes[ix].rect.width * camera.zoom) > 0.)
-        };
+        let zoom = camera.zoom;
+        let tints = self.has_tints() && !self.domains.tints_off;
         // How opaque each box is: what's inside a box opening fades in.
         let mut alpha = vec![0f32; site.nodes.len()];
-        let mut stack = vec![(0usize, 1f32)];
+        let mut stack: Vec<(usize, f32)> = Vec::new();
+        for region in site.regions() {
+            let node = &site.nodes[region];
+            let Some(at) = level.regions.iter().position(|r| r.key == node.key) else {
+                continue;
+            };
+            let open = node.opening(zoom);
+            scene.regions.push(self.region_box(&level, at, open));
+            alpha[region] = 1.;
+            if open > 0. && node.rect.overlaps(&view) {
+                for &child in node.children.iter().rev() {
+                    stack.push((child, open));
+                }
+            }
+        }
         while let Some((ix, shown)) = stack.pop() {
             let node = &site.nodes[ix];
             alpha[ix] = shown;
-            if !node.rect.overlaps(&view) && ix != 0 {
+            if !node.rect.overlaps(&view) {
                 continue;
             }
-            let open = if ix == 0 {
-                1.
-            } else if node.opens() {
-                opening(node.rect.width * camera.zoom)
-            } else {
-                0.
-            };
+            let open = node.opening(zoom);
             let look = match node.kind {
-                Kind::Root => Look::Project,
-                Kind::Folder { package: true } => Look::Package,
-                Kind::Folder { .. } => Look::Folder,
+                Kind::Component => Look::Package,
+                Kind::Folder | Kind::Root | Kind::Region(_) => Look::Folder,
                 Kind::File { read: true } => Look::File,
                 Kind::File { read: false } => Look::Unread,
                 Kind::Type => Look::Type,
             };
-            let tint = matches!(node.kind, Kind::File { .. } | Kind::Type)
-                .then(|| self.tint_of(&node.place))
-                .flatten();
+            let tint = match site.nodes[node.region].kind {
+                Kind::Region(Home::Domain(domain)) if tints => Some(domain),
+                _ => None,
+            };
+            let about = node.purpose.clone().unwrap_or_else(|| {
+                if matches!(node.kind, Kind::Folder | Kind::Component) {
+                    node.contents.clone()
+                } else {
+                    String::new()
+                }
+            });
             if open > 0. {
                 scene.frames.push(FrameBox {
                     key: node.key.clone(),
@@ -316,6 +330,7 @@ impl MapView {
                     alpha: shown * open,
                     tint,
                     ix,
+                    header: node.header,
                 });
                 for &child in node.children.iter().rev() {
                     stack.push((child, shown * open));
@@ -326,7 +341,7 @@ impl MapView {
                     key: node.key.clone(),
                     rect: node.rect,
                     title: node.title.clone(),
-                    detail: node.purpose.clone().unwrap_or_default(),
+                    detail: about,
                     note: node.detail.clone(),
                     badges: Vec::new(),
                     look,
@@ -342,11 +357,11 @@ impl MapView {
         }
         // Inner boxes after outer ones, so they're drawn over them.
         scene.cards.sort_by_key(|card| card.ix);
+        scene.frames.sort_by_key(|frame| frame.ix);
         // Arrows join the boxes showing, as a box is counted open half way.
-        let shown = site.shown_as(|ix| {
-            opened(ix) && (ix == 0 || opening(site.nodes[ix].rect.width * camera.zoom) >= 0.5)
-        });
-        let arrows = self.site_arrows(site, &shown);
+        let shown = site.shown_as(|ix| site.nodes[ix].opening(zoom) >= 0.5);
+        let found = self.site_arrows(site, &shown);
+        let (arrows, stubs) = (&found.0, &found.1);
         for arrow in arrows
             .iter()
             .filter(|arrow| {
@@ -372,12 +387,60 @@ impl MapView {
                 labels: Vec::new(),
             });
         }
+        // Calls leaving an open region, or coming into it: at its edge,
+        // facing the domain at the other end.
+        for stub in stubs {
+            let (region, other) = (&site.nodes[stub.region], &site.nodes[stub.other]);
+            let open = region.opening(zoom);
+            if open < 0.5 {
+                continue;
+            }
+            let edge = border(region.rect, other.rect.centre());
+            let (dx, dy) = (
+                other.rect.centre().0 - edge.0,
+                other.rect.centre().1 - edge.1,
+            );
+            let length = dx.hypot(dy).max(0.001);
+            let (ux, uy) = (dx / length, dy / length);
+            // Out and in side by side, not on each other.
+            let side = if stub.outgoing { 9. } else { -9. } / zoom;
+            let at = (edge.0 - uy * side, edge.1 + ux * side);
+            let far = (at.0 + ux * STUB / zoom, at.1 + uy * STUB / zoom);
+            let (from, to) = if stub.outgoing { (at, far) } else { (far, at) };
+            let label = format!(
+                "{} {} · {}",
+                if stub.outgoing { "to" } else { "from" },
+                other.title,
+                plural(stub.calls.count, "call")
+            );
+            scene.arrows.push(Arrow {
+                from,
+                to,
+                keys: (region.key.clone(), other.key.clone()),
+                across: false,
+                dashed: false,
+                calls: Some(stub.calls.clone()),
+                alpha: open,
+                heads: (false, true),
+                labels: vec![(true, label)],
+            });
+        }
+        // Between regions still closed, the domains' flows.
+        for link in &level.links {
+            let closed = |at: usize| {
+                site.index_of(&level.regions[at].key)
+                    .is_none_or(|ix| site.nodes[ix].opening(zoom) < 0.5)
+            };
+            if closed(link.a) && closed(link.b) {
+                scene.arrows.push(link_arrow(&level, link));
+            }
+        }
         scene
     }
 
     /// The arrows between the Site boxes `shown`, worked out again only
     /// when which boxes show changes.
-    fn site_arrows(&self, site: &Site, shown: &[usize]) -> Rc<Vec<super::super::site::Arrow>> {
+    fn site_arrows(&self, site: &Site, shown: &[usize]) -> super::SiteArrows {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         shown.hash(&mut hasher);
@@ -409,7 +472,7 @@ pub(super) fn edge_points(a: Rect, b: Rect) -> ((f32, f32), (f32, f32)) {
 }
 
 /// Where the line from `rect`'s middle towards `to` leaves it.
-fn border(rect: Rect, to: (f32, f32)) -> (f32, f32) {
+pub(super) fn border(rect: Rect, to: (f32, f32)) -> (f32, f32) {
     let (cx, cy) = rect.centre();
     let (dx, dy) = (to.0 - cx, to.1 - cy);
     if dx == 0. && dy == 0. {
@@ -429,17 +492,13 @@ fn border(rect: Rect, to: (f32, f32)) -> (f32, f32) {
     (cx + dx * s, cy + dy * s)
 }
 
+fn plural(count: usize, what: &str) -> String {
+    format!("{count} {what}{}", if count == 1 { "" } else { "s" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn boxes_open_smoothly_between_two_sizes() {
-        assert_eq!(opening(OPEN_FROM - 1.), 0.);
-        assert_eq!(opening(OPEN_TO + 1.), 1.);
-        let half = opening((OPEN_FROM + OPEN_TO) / 2.);
-        assert!((half - 0.5).abs() < 0.01);
-    }
 
     #[test]
     fn arrows_leave_from_the_edges() {

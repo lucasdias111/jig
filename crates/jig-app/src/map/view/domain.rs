@@ -1,8 +1,9 @@
 //! The Domain level on the canvas. Before Index Domains has been kept it
 //! shows Jig's own grouping as drafts under a banner; after, the saved
-//! domains, each a region in its own colour, sized by its code, its files
-//! fading in as you zoom into it. Zooming into a region, or one of its
-//! files, goes to Site there; out of Site comes back here.
+//! domains, each a region in its own colour, its name, purpose and offers
+//! only. Domain and Site are one drawing: zooming into a region carries on
+//! into Site, the region opening onto its share of the code where it is;
+//! zooming out of Site closes them again.
 //!
 //! Index Domains, Update Domains and splitting a domain start a normal
 //! conversation with the agent; its answer shows here as a proposal in
@@ -26,21 +27,13 @@ use super::super::domains::level::{DomainLevel, RegionKind};
 use super::super::domains::{Domains, Home};
 use super::super::layout::Rect;
 use super::super::plan::{Focus, Item};
-use super::super::site::Kind;
-use super::scene::{Arrow, Card, Look, RegionBox, Scene};
+use super::super::site::{Kind, Site};
+use super::scene::{Arrow, RegionBox, Scene};
 use super::zoom::{Camera, Transition};
 use super::{Level, MapEvent, MapView};
 
 /// Domain's closest zoom.
 pub(super) const DOMAIN_MAX: f32 = 3.;
-/// A region this wide on screen starts showing its files, and shows them
-/// fully at the second.
-pub const OPEN_FROM: f32 = 640.;
-pub const OPEN_TO: f32 = 860.;
-/// Zoomed in over a file so it's this much of the canvas wide: into Site.
-const MEMBER_IN: f32 = 0.45;
-/// Zoomed in over a region past this many canvas widths: into Site.
-const REGION_IN: f32 = 2.6;
 
 #[derive(Default)]
 pub(super) struct DomainState {
@@ -91,12 +84,6 @@ pub enum Field {
     Purpose,
 }
 
-/// How far a region `width` wide on screen shows its files, from 0 to 1.
-pub fn opening(width: f32) -> f32 {
-    let t = ((width - OPEN_FROM) / (OPEN_TO - OPEN_FROM)).clamp(0., 1.);
-    t * t * (3. - 2. * t)
-}
-
 /// Domain number `ix`'s colour: distinct hues, none the agent's orange.
 pub fn colour(ix: usize, dark: bool) -> Hsla {
     const HUES: [f32; 10] = [212., 146., 276., 186., 52., 340., 104., 242., 312., 166.];
@@ -118,10 +105,15 @@ impl MapView {
         self.domains_changed();
     }
 
-    /// What the domains show changed: laid out again, the tints too.
-    fn domains_changed(&mut self) {
+    /// What the domains show changed: Site and Domain laid out again,
+    /// the tints too.
+    pub(super) fn domains_changed(&mut self) {
         *self.domains.level.borrow_mut() = None;
+        *self.site_arrows.borrow_mut() = None;
         self.domains.homes.clear();
+        if let (Some(project), Some(domains)) = (self.project.clone(), self.shown_domains()) {
+            self.site = Some(Rc::new(Site::of(&project, &domains, self.site_show)));
+        }
         let (Some(saved), Some(site)) = (&self.domains.saved, &self.site) else {
             return;
         };
@@ -169,7 +161,8 @@ impl MapView {
         }
         let project = self.project.clone()?;
         let domains = self.shown_domains()?;
-        let level = Rc::new(DomainLevel::of(&project, &domains, self.drafts()));
+        let site = self.site.clone()?;
+        let level = Rc::new(DomainLevel::of(&project, &domains, self.drafts(), &site));
         *self.domains.level.borrow_mut() = Some(level.clone());
         Some(level)
     }
@@ -222,100 +215,42 @@ impl MapView {
         self.domain_fit().zoom * 0.8
     }
 
-    /// Domain as `camera` sees it: each region, its files fading in as
-    /// it grows on screen, and one link between each pair that has flows.
-    pub(super) fn domain_scene(&self, camera: Camera) -> Scene {
+    /// Domain as `camera` sees it: each region's name, purpose and offers,
+    /// and one link between each pair that has flows.
+    pub(super) fn domain_scene(&self, _camera: Camera) -> Scene {
         let mut scene = Scene::default();
         let Some(level) = self.domain_level() else {
             return scene;
         };
-        let (width, height) = self.canvas_size();
-        let view = Rect {
-            x: camera.x - width / 2. / camera.zoom,
-            y: camera.y - height / 2. / camera.zoom,
-            width: width / camera.zoom,
-            height: height / camera.zoom,
-        };
-        let proposed = self.domains.proposal.is_some();
-        for (ix, region) in level.showing() {
-            let open = opening(region.rect.width * camera.zoom);
-            scene.regions.push(RegionBox {
-                key: region.key.clone(),
-                rect: region.rect,
-                name: region.name.clone(),
-                purpose: region.purpose.clone(),
-                offers: region.offers.clone(),
-                why: region.why.clone(),
-                note: region.detail(),
-                kind: region.kind,
-                draft: level.draft,
-                proposed: proposed && matches!(region.kind, RegionKind::Domain(_)),
-                open,
-                alpha: 1.,
-                ix,
-            });
-            if open <= 0. || !region.rect.overlaps(&view) {
-                continue;
-            }
-            let tint = match region.kind {
-                RegionKind::Domain(ix) if !level.draft => Some(ix),
-                _ => None,
-            };
-            for member in &region.members {
-                let look = if member.place.contains('#') {
-                    Look::Type
-                } else if member.read {
-                    Look::File
-                } else {
-                    Look::Unread
-                };
-                scene.cards.push(Card {
-                    key: member.key.clone(),
-                    rect: member.rect,
-                    title: member.title.clone(),
-                    detail: member.folder.clone(),
-                    note: if member.read {
-                        plural(member.functions, "function")
-                    } else {
-                        "not read".into()
-                    },
-                    badges: Vec::new(),
-                    look,
-                    alpha: open,
-                    focus: false,
-                    hidden: [0; 3],
-                    unknown_target: false,
-                    checked: false,
-                    tint,
-                    ix,
-                });
-            }
+        for (ix, _) in level.showing() {
+            scene.regions.push(self.region_box(&level, ix, 0.));
         }
         for link in &level.links {
-            let (a, b) = (level.regions[link.a].rect, level.regions[link.b].rect);
-            let (from, to) = super::scene::edge_points(a, b);
-            let labels = link
-                .forward
-                .iter()
-                .map(|label| (true, label.clone()))
-                .chain(link.backward.iter().map(|label| (false, label.clone())))
-                .collect();
-            scene.arrows.push(Arrow {
-                from,
-                to,
-                keys: (
-                    level.regions[link.a].key.clone(),
-                    level.regions[link.b].key.clone(),
-                ),
-                across: false,
-                dashed: level.draft,
-                calls: None,
-                alpha: 1.,
-                heads: (!link.backward.is_empty(), !link.forward.is_empty()),
-                labels,
-            });
+            scene.arrows.push(link_arrow(&level, link));
         }
         scene
+    }
+
+    /// Region `ix` of the level as drawn, opened `open` of the way.
+    pub(super) fn region_box(&self, level: &DomainLevel, ix: usize, open: f32) -> RegionBox {
+        let region = &level.regions[ix];
+        RegionBox {
+            key: region.key.clone(),
+            rect: region.rect,
+            header: region.header,
+            name: region.name.clone(),
+            purpose: region.purpose.clone(),
+            offers: region.offers.clone(),
+            why: region.why.clone(),
+            note: region.detail(),
+            kind: region.kind,
+            draft: level.draft,
+            proposed: self.domains.proposal.is_some()
+                && matches!(region.kind, RegionKind::Domain(_)),
+            open,
+            alpha: 1.,
+            ix,
+        }
     }
 
     /// The region under `position`, by its place in the level.
@@ -328,74 +263,46 @@ impl MapView {
             .map(|(ix, _)| ix)
     }
 
-    /// The file or type under `position`, if its region shows them: its
-    /// region and place.
-    pub(super) fn member_at(&self, position: Point<Pixels>) -> Option<(usize, String)> {
-        let at = self.to_drawing(position);
-        let drawn = self.drawn.borrow();
-        let card = drawn
-            .cards
-            .iter()
-            .rev()
-            .find(|card| card.key.starts_with("member:") && card.rect.contains(at))?;
-        Some((card.ix, card.key["member:".len()..].to_string()))
-    }
-
-    /// The key a Domain box under `position` is selected by: a file's or
-    /// type's, else its region's.
+    /// The key a Domain box under `position` is selected by: its region's.
     pub(super) fn domain_key_at(&self, position: Point<Pixels>) -> Option<String> {
-        if let Some((_, place)) = self.member_at(position) {
-            return Some(format!("member:{place}"));
-        }
         let level = self.domain_level()?;
         self.region_at(position)
             .map(|ix| level.regions[ix].key.clone())
     }
 
-    /// Zoomed in at Domain far enough over a file or a region: into Site
-    /// there. Whether it went.
+    /// Zoomed in at Domain far enough over a region that it opens: into
+    /// Site, carrying on where it is. Whether it went.
     pub(super) fn zoom_into_domain(
         &mut self,
         wanted: f32,
         around: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let (width, _) = self.canvas_size();
-        if let Some((_, place)) = self.member_at(around) {
-            let rect = self
-                .domain_level()
-                .and_then(|level| member_rect(&level, &place));
-            if rect.is_some_and(|rect| rect.width * wanted > MEMBER_IN * width) {
-                self.enter_member(&place, cx);
-                return true;
-            }
-            return false;
-        }
         let Some(ix) = self.region_at(around) else {
             return false;
         };
         let level = self.domain_level().expect("a region");
-        if level.regions[ix].rect.width * wanted > REGION_IN * width {
-            self.enter_region(ix, cx);
+        let Some(site) = self.site.clone() else {
+            return false;
+        };
+        let Some(node) = site.index_of(&level.regions[ix].key) else {
+            return false;
+        };
+        if site.nodes[node].opens() && wanted >= site.nodes[node].open_at * 1.08 {
+            self.zoom_by(wanted / self.zoom, around, 0., f32::MAX);
+            self.continuous = true;
+            self.show(Level::Site, cx);
             return true;
         }
         false
     }
 
-    /// ⌘↓ or Enter at Domain: into the file or region selected, else the
-    /// region in the middle.
+    /// ⌘↓ or Enter at Domain: into the region selected, else the one in
+    /// the middle.
     pub(super) fn step_into_domain(&mut self, cx: &mut Context<Self>) {
         let Some(level) = self.domain_level() else {
             return;
         };
-        if let Some(place) = self
-            .selected
-            .iter()
-            .find_map(|key| key.strip_prefix("member:"))
-        {
-            let place = place.to_string();
-            return self.enter_member(&place, cx);
-        }
         let picked = self
             .selected
             .iter()
@@ -406,36 +313,19 @@ impl MapView {
         }
     }
 
-    /// Into Site from region `ix`: where its files are.
+    /// Into Site from region `ix`: it fills the view, open.
     pub(super) fn enter_region(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(level) = self.domain_level() else {
             return;
         };
         let region = &level.regions[ix];
-        let boxes: Vec<usize> = region
-            .members
-            .iter()
-            .filter_map(|member| self.site.as_ref()?.box_of(&member.place))
-            .collect();
-        self.arriving_at = Some((region.rect, boxes));
-        self.show(Level::Site, cx);
-    }
-
-    /// Into Site from file or type `place`: its box.
-    pub(super) fn enter_member(&mut self, place: &str, cx: &mut Context<Self>) {
-        let Some(level) = self.domain_level() else {
-            return;
-        };
-        let Some(rect) = member_rect(&level, place) else {
-            return;
-        };
         let boxes: Vec<usize> = self
             .site
             .as_ref()
-            .and_then(|site| site.box_of(place))
+            .and_then(|site| site.index_of(&region.key))
             .into_iter()
             .collect();
-        self.arriving_at = Some((rect, boxes));
+        self.arriving_at = Some((region.rect, boxes));
         self.show(Level::Site, cx);
     }
 
@@ -468,20 +358,36 @@ impl MapView {
         }
     }
 
-    /// Coming out to Domain from `left`: the region holding what was
-    /// selected or focused there, selected (you are here).
-    pub(super) fn domain_of_selection(&self, left: &Level) -> Vec<String> {
+    /// Coming out to Domain from `left`, seen by `camera`: the region
+    /// holding what was selected or focused there, selected (you are
+    /// here); from Site with nothing selected, the region in the middle.
+    pub(super) fn domain_of_selection_at(&self, left: &Level, camera: Camera) -> Vec<String> {
         let Some(level) = self.domain_level() else {
             return Vec::new();
         };
         let place = match left {
             Level::Plan(Focus::Function(symbol)) => Some(symbol.file.clone()),
             Level::Plan(Focus::Module(place)) => Some(place.clone()),
-            Level::Site => self.selected.iter().find_map(|key| {
-                let key = key.strip_prefix("site:")?;
-                let ix = self.site.as_ref()?.index_of(key)?;
-                Some(self.site_nodes()[ix].place.clone())
-            }),
+            Level::Site => {
+                let site = self.site.as_ref();
+                let picked = self
+                    .selected
+                    .iter()
+                    .find_map(|key| site?.index_of(key.strip_prefix("site:")?))
+                    .or_else(|| {
+                        let site = site?;
+                        site.regions()
+                            .find(|&ix| site.nodes[ix].rect.contains((camera.x, camera.y)))
+                    });
+                if let Some(ix) = picked {
+                    let region = self.site_nodes()[ix].region;
+                    let key = &self.site_nodes()[region].key;
+                    if level.regions.iter().any(|r| &r.key == key) {
+                        return vec![key.clone()];
+                    }
+                }
+                None
+            }
             Level::Domain => None,
         };
         let Some(place) = place else {
@@ -885,13 +791,14 @@ impl MapView {
             Level::Site => {
                 let saved = self.domains.saved.as_ref()?;
                 let ix = self.site_box_at(position)?;
-                let node = &self.site_nodes()[ix];
-                match saved.home_of(&node.place) {
-                    Home::Domain(domain) => {
-                        Some((Home::Domain(domain), saved.domains[domain].name.clone()))
-                    }
-                    Home::Shared => Some((Home::Shared, "Shared".into())),
-                    Home::Unsorted => None,
+                let region = &self.site_nodes()[self.site_nodes()[ix].region];
+                match region.kind {
+                    Kind::Region(Home::Domain(domain)) => Some((
+                        Home::Domain(domain),
+                        saved.domains.get(domain)?.name.clone(),
+                    )),
+                    Kind::Region(Home::Shared) => Some((Home::Shared, "Shared".into())),
+                    _ => None,
                 }
             }
             Level::Plan(_) => None,
@@ -934,14 +841,30 @@ impl MapView {
     }
 }
 
-/// File or type `place`'s box at Domain.
-fn member_rect(level: &DomainLevel, place: &str) -> Option<Rect> {
-    let region = level.region_of(place)?;
-    level.regions[region]
-        .members
+/// The link between two regions, its flows labelled.
+pub(super) fn link_arrow(level: &DomainLevel, link: &super::super::domains::level::Link) -> Arrow {
+    let (a, b) = (level.regions[link.a].rect, level.regions[link.b].rect);
+    let (from, to) = super::scene::edge_points(a, b);
+    let labels = link
+        .forward
         .iter()
-        .find(|member| member.place == place)
-        .map(|member| member.rect)
+        .map(|label| (true, label.clone()))
+        .chain(link.backward.iter().map(|label| (false, label.clone())))
+        .collect();
+    Arrow {
+        from,
+        to,
+        keys: (
+            level.regions[link.a].key.clone(),
+            level.regions[link.b].key.clone(),
+        ),
+        across: false,
+        dashed: level.draft,
+        calls: None,
+        alpha: 1.,
+        heads: (!link.backward.is_empty(), !link.forward.is_empty()),
+        labels,
+    }
 }
 
 fn plural(count: usize, what: &str) -> String {
@@ -950,12 +873,6 @@ fn plural(count: usize, what: &str) -> String {
 
 #[cfg(test)]
 impl MapView {
-    /// Site with the whole project in view.
-    pub fn fit_site(&mut self) {
-        let to = self.default_camera();
-        self.set_camera(to);
-    }
-
     /// Site close in on box `key`, the folder it's in open.
     pub fn show_site_box(&mut self, key: &str) {
         let ix = self
@@ -971,6 +888,15 @@ impl MapView {
         self.domain_level()
             .map(|level| level.showing().map(|(_, r)| r.name.clone()).collect())
             .unwrap_or_default()
+    }
+
+    /// Where region `key` is at Domain.
+    pub fn domain_rect(&self, key: &str) -> Option<Rect> {
+        let level = self.domain_level()?;
+        level
+            .showing()
+            .find(|(_, region)| region.key == key)
+            .map(|(_, region)| region.rect)
     }
 
     pub fn has_proposal(&self) -> bool {

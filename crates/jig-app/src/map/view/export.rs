@@ -186,8 +186,17 @@ fn draw_svg(
         } else {
             blend(colour, palette.foreground, 0.25)
         };
+        // An open region's words stay in its header, above what's inside.
+        let bottom = if region.open > 0. {
+            y + (region.header * camera.zoom).min(h) - 4.
+        } else {
+            y + h - 8.
+        };
         let mut line_y = y + 30.;
         let size = if quiet { 13. } else { 16. };
+        if line_y > bottom + 4. {
+            continue;
+        }
         text(
             &mut out,
             x + 14.,
@@ -215,7 +224,7 @@ fn draw_svg(
         line_y += 8.;
         for line in wrap(about, w - 28., 12.5) {
             line_y += 17.;
-            if line_y > y + h - 8. {
+            if line_y > bottom {
                 break;
             }
             text(
@@ -232,7 +241,7 @@ fn draw_svg(
             line_y += 6.;
             for line in wrap(&region.offers.join("  ·  "), w - 28., 10.5) {
                 line_y += 15.;
-                if line_y > y + h - 8. {
+                if line_y > bottom {
                     break;
                 }
                 text(&mut out, x + 14., line_y, 10.5, palette.muted, false, &line);
@@ -251,20 +260,37 @@ fn draw_svg(
             hex(accent),
             hex(accent),
         );
+        let bar = frame.header * camera.zoom;
         let size = if frame.look.fixed_text() {
-            12.
+            (bar * 0.55).min(12.)
         } else {
             11. * camera.zoom
         };
+        if frame.look.fixed_text() && bar < 13. {
+            continue;
+        }
+        let baseline = y + bar / 2. + size * 0.35;
         text(
             &mut out,
             x + 10.,
-            y + 6. + size,
+            baseline,
             size,
             palette.foreground,
             true,
             &frame.title,
         );
+        let note_x = x + 10. + frame.title.chars().count() as f32 * size * 0.6 + 10.;
+        if note_x < x + w - 40. {
+            text(
+                &mut out,
+                note_x,
+                baseline,
+                (bar * 0.48).min(10.5),
+                palette.muted,
+                false,
+                &frame.note,
+            );
+        }
     }
     let paint_arrows = |out: &mut String| {
         for arrow in &scene.arrows {
@@ -383,26 +409,39 @@ fn draw_svg(
                 hex(accent),
             );
             if w >= 46. && h >= 16. {
-                text(
-                    &mut out,
-                    x + 8.,
-                    y + 15.,
-                    12.,
-                    palette.foreground,
-                    true,
-                    &clip(&card.title, w - 16., 12.),
-                );
-            }
-            if h >= 38. && !card.detail.is_empty() {
-                text(
-                    &mut out,
-                    x + 8.,
-                    y + 30.,
-                    10.5,
-                    palette.muted,
-                    false,
-                    &clip(&card.detail, w - 16., 10.5),
-                );
+                // As the canvas draws it: the title on two lines at most,
+                // what it's for in the lines left, then how much.
+                let lines = ((h - 10.) / 14.).floor().max(1.) as usize;
+                let title_lines = if lines >= 3 { 2 } else { 1 };
+                let detail_lines = lines.saturating_sub(title_lines + 1);
+                let mut line_y = y + 4.;
+                for line in clamp_lines(&card.title, w - 16., 12., title_lines) {
+                    line_y += 14.;
+                    text(
+                        &mut out,
+                        x + 8.,
+                        line_y,
+                        12.,
+                        palette.foreground,
+                        true,
+                        &line,
+                    );
+                }
+                for line in clamp_lines(&card.detail, w - 16., 10.5, detail_lines) {
+                    line_y += 13.;
+                    text(&mut out, x + 8., line_y, 10.5, palette.muted, false, &line);
+                }
+                if lines >= 2 {
+                    text(
+                        &mut out,
+                        x + 8.,
+                        line_y + 14.,
+                        10.,
+                        palette.muted,
+                        false,
+                        &clip(&card.note, w - 16., 10.),
+                    );
+                }
             }
         } else {
             let header = HEADER_HEIGHT * camera.zoom;
@@ -533,6 +572,22 @@ fn wrap(text: &str, width: f32, size: f32) -> Vec<String> {
     lines
 }
 
+/// `text` wrapped to fit `width` at `size`, at most `most` lines, the
+/// last cut short if there's more.
+fn clamp_lines(text: &str, width: f32, size: f32, most: usize) -> Vec<String> {
+    let mut lines = wrap(text, width, size);
+    if lines.len() > most {
+        lines.truncate(most);
+        if let Some(last) = lines.last_mut() {
+            *last = clip(&format!("{last} …"), width, size);
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| clip(&line, width, size))
+        .collect()
+}
+
 /// `text` cut to fit `width` at `size`, roughly.
 fn clip(text: &str, width: f32, size: f32) -> String {
     let fits = ((width / (size * 0.55)) as usize).max(1);
@@ -560,6 +615,63 @@ fn hex(colour: Hsla) -> String {
         byte(rgba.g),
         byte(rgba.b)
     )
+}
+
+#[cfg(test)]
+impl MapView {
+    /// For `map_pictures_live`: the level showing at several zooms around where the
+    /// camera is (fitted whole, as it is, and closer), as PNGs.
+    pub fn pictures(&mut self, cx: &App) -> Vec<(String, Vec<u8>)> {
+        self.transition = None;
+        let size = self.canvas_size();
+        let here = self.camera();
+        let mut cameras = vec![("here".to_string(), here)];
+        if let Some(whole) = self.content_rect() {
+            let screen = Rect {
+                x: MARGIN,
+                y: MARGIN,
+                width: size.0 - 2. * MARGIN,
+                height: size.1 - 2. * MARGIN,
+            };
+            cameras.insert(0, ("whole".into(), Camera::showing(whole, screen, size)));
+        }
+        // The way from the whole to here, in even steps of zoom.
+        if let Some((_, whole)) = cameras.first().cloned() {
+            let steps = 7;
+            for step in 1..steps {
+                let t = step as f32 / steps as f32;
+                let zoom = whole.zoom * (here.zoom / whole.zoom).powf(t);
+                // Zooming about where it lands, as a pinch there would.
+                cameras.push((format!("step{step}"), Camera { zoom, ..here }));
+            }
+        }
+        let mut out = Vec::new();
+        for (name, camera) in cameras {
+            self.set_camera(camera);
+            let svg = self.export_svg(cx);
+            if let Ok(bytes) = png(&svg) {
+                out.push((name, bytes));
+            }
+        }
+        self.set_camera(here);
+        out
+    }
+
+    /// For `map_pictures_live`: the canvas as it is now, as a PNG.
+    pub fn picture_now(&mut self, cx: &App) -> Option<Vec<u8>> {
+        self.transition = None;
+        let palette = Palette {
+            background: theme::canvas(cx),
+            foreground: cx.theme().foreground,
+            muted: cx.theme().muted_foreground,
+            card: cx.theme().background,
+            agent: jig_commands::surface::agent_accent(cx),
+            dark: cx.theme().mode.is_dark(),
+        };
+        let camera = self.camera();
+        let scene = self.scene(camera, Instant::now());
+        png(&draw_svg(&scene, camera, self.canvas_size(), &palette, cx)).ok()
+    }
 }
 
 #[cfg(test)]
