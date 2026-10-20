@@ -13,7 +13,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::super::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT};
+use super::super::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT, Rect};
 use super::super::plan::Focus;
 use super::input::Hover;
 use super::scene::{Card, FrameBox, Look, Scene};
@@ -431,6 +431,17 @@ impl MapView {
         // The arrows: Plan's behind its boxes, Site's over them.
         let mut lines = Vec::new();
         let mut labels = Vec::new();
+        // Flow labels go where they cover no region, no region's name and
+        // no other label.
+        let mut avoid = obstacles(scene, |rect| {
+            let at = view.point((rect.x, rect.y));
+            Rect {
+                x: f32::from(at.x),
+                y: f32::from(at.y),
+                width: rect.width * view.camera.zoom,
+                height: rect.height * view.camera.zoom,
+            }
+        });
         for (ix, arrow) in scene.arrows.iter().enumerate() {
             let (from, to) = (view.point(arrow.from), view.point(arrow.to));
             let joined = |key: &str| {
@@ -467,7 +478,40 @@ impl MapView {
                     2.
                 };
                 if live {
-                    labels.push(self.render_flow_label(ix, arrow, from, to, cx));
+                    let ends = (
+                        (f32::from(from.x), f32::from(from.y)),
+                        (f32::from(to.x), f32::from(to.y)),
+                    );
+                    let size = flow_label_size(&arrow.labels);
+                    let screen = Rect {
+                        x: 0.,
+                        y: 0.,
+                        width: view.size.0,
+                        height: view.size.1,
+                    };
+                    let spot = label_spot(ends.0, ends.1, size, &avoid, screen);
+                    let placed = Rect {
+                        x: spot.0,
+                        y: spot.1,
+                        width: size.0,
+                        height: size.1,
+                    };
+                    avoid.push(placed);
+                    // Pushed out of the way: a faint line back to its arrow.
+                    if let Some((a, b)) = leader(ends.0, ends.1, placed) {
+                        lines.push(Line {
+                            from: point(px(a.0), px(a.1)),
+                            to: point(px(b.0), px(b.1)),
+                            colour: theme.foreground.opacity(0.22 * arrow.alpha),
+                            width: 1.,
+                            dashed: true,
+                            across: false,
+                            zoom: 1.,
+                            pulse: None,
+                            heads: (false, false),
+                        });
+                    }
+                    labels.push(self.render_flow_label(ix, arrow, spot, size, from, to, cx));
                 }
             }
             lines.push(Line {
@@ -536,7 +580,7 @@ impl MapView {
         let regions: Vec<AnyElement> = scene
             .regions
             .iter()
-            .map(|region| self.render_region(region, view, lit, cx))
+            .flat_map(|region| self.render_region(region, view, lit, cx))
             .collect();
         let _ = window;
         let paint = paint_holder(paint.into_any_element());
@@ -892,11 +936,22 @@ impl MapView {
                     Tooltip::new("Calls checked with the language server").build(window, cx)
                 })
         });
-        let body = (detail.is_some() || badges.is_some()).then(|| {
+        let note = (!card.note.is_empty()).then(|| {
+            div()
+                .h(scaled(ROW_HEIGHT))
+                .px(scaled(10.))
+                .truncate()
+                .italic()
+                .text_size(scaled(10.5))
+                .text_color(theme.muted_foreground)
+                .child(card.note.clone())
+        });
+        let body = (detail.is_some() || badges.is_some() || note.is_some()).then(|| {
             v_flex()
                 .py(scaled(PADDING))
                 .children(detail)
                 .children(badges)
+                .children(note)
         });
         let border = if selected {
             theme.primary
@@ -1150,6 +1205,8 @@ pub(super) fn look_colour(look: Look, cx: &App) -> Hsla {
         Look::File => theme.blue,
         Look::Unread => theme.muted_foreground,
         Look::Type => theme.green,
+        Look::Source => theme.cyan,
+        Look::UnreadSource => theme.muted_foreground,
     }
 }
 
@@ -1242,6 +1299,174 @@ impl Line {
             window.paint_path(built, self.colour);
         }
     }
+}
+
+/// What flow labels keep clear of, on screen (`screen` turns a drawing
+/// rect into one): each region, and its name above it.
+pub(super) fn obstacles(scene: &Scene, screen: impl Fn(Rect) -> Rect) -> Vec<Rect> {
+    let mut avoid = Vec::new();
+    for region in &scene.regions {
+        let rect = screen(region.rect);
+        let quiet = !matches!(
+            region.kind,
+            super::super::domains::level::RegionKind::Domain(_)
+        );
+        let zoom = rect.width / region.rect.width.max(0.0001);
+        let name = super::domain_draw::name_label(
+            &region.name,
+            quiet,
+            super::domain_draw::name_room(rect.width, zoom),
+        );
+        avoid.push(rect);
+        avoid.push(Rect {
+            x: rect.x,
+            y: rect.y - name.height,
+            width: name.width,
+            height: name.height,
+        });
+    }
+    avoid
+}
+
+/// The widest a flow label gets, on screen.
+pub(super) const FLOW_LABEL_WIDTH: f32 = 180.;
+
+/// How big a flow label is on screen, roughly: its lines at 10.5 points,
+/// wrapping at `FLOW_LABEL_WIDTH`.
+pub(super) fn flow_label_size(labels: &[(bool, String)]) -> (f32, f32) {
+    let per_char = 5.9;
+    let room = FLOW_LABEL_WIDTH - 14.;
+    let widest = labels
+        .iter()
+        .map(|(_, label)| (label.chars().count() + 2) as f32 * per_char)
+        .fold(0., f32::max);
+    let lines: f32 = labels
+        .iter()
+        .map(|(_, label)| {
+            (((label.chars().count() + 2) as f32 * per_char) / room)
+                .ceil()
+                .max(1.)
+        })
+        .sum();
+    ((widest + 14.).min(FLOW_LABEL_WIDTH), lines * 14. + 6.)
+}
+
+/// Where a label `size` big goes for the bowed arrow from `from` to `to`,
+/// on screen: its top left. On the arrow when that's clear, else the
+/// clear spot nearest it, looking further out step by step, inside
+/// `within` and covering none of `avoid`; if nothing near is clear, the
+/// spot covering least.
+pub(super) fn label_spot(
+    from: (f32, f32),
+    to: (f32, f32),
+    size: (f32, f32),
+    avoid: &[Rect],
+    within: Rect,
+) -> (f32, f32) {
+    let curve: Vec<(f32, f32)> = (0..=16)
+        .map(|step| {
+            let at = bow_point(
+                point(px(from.0), px(from.1)),
+                point(px(to.0), px(to.1)),
+                step as f32 / 16.,
+            );
+            (f32::from(at.x), f32::from(at.y))
+        })
+        .collect();
+    let middle = curve[8];
+    let place = |centre: (f32, f32)| Rect {
+        x: centre.0 - size.0 / 2.,
+        y: centre.1 - size.1 / 2.,
+        width: size.0,
+        height: size.1,
+    };
+    let covered = |rect: &Rect| -> f32 {
+        let outside = rect.width * rect.height - overlap(rect, &within);
+        avoid.iter().map(|other| overlap(rect, other)).sum::<f32>() + outside
+    };
+    // How far a spot is from the arrow, and from its middle.
+    let away = |rect: &Rect| {
+        let nearest = curve
+            .iter()
+            .map(|p| {
+                let q = (
+                    p.0.clamp(rect.x, rect.right()),
+                    p.1.clamp(rect.y, rect.bottom()),
+                );
+                (p.0 - q.0).hypot(p.1 - q.1)
+            })
+            .fold(f32::MAX, f32::min);
+        let centre = rect.centre();
+        nearest + (centre.0 - middle.0).hypot(centre.1 - middle.1) * 0.15
+    };
+    let mut best: Option<(Rect, f32)> = None;
+    let mut least: Option<(Rect, f32)> = None;
+    const STEP: f32 = 18.;
+    for &on in curve.iter().skip(4).step_by(2).take(5) {
+        for ring in 0..=18i32 {
+            for dx in -ring..=ring {
+                for dy in -ring..=ring {
+                    if dx.abs().max(dy.abs()) != ring {
+                        continue;
+                    }
+                    let rect = place((on.0 + dx as f32 * STEP, on.1 + dy as f32 * STEP));
+                    let cover = covered(&rect);
+                    if cover <= 0. {
+                        let distance = away(&rect);
+                        if best.is_none_or(|(_, d)| distance < d) {
+                            best = Some((rect, distance));
+                        }
+                    } else if least.is_none_or(|(_, c)| cover < c) {
+                        least = Some((rect, cover));
+                    }
+                }
+            }
+            // A clear spot this close won't be beaten by one further out.
+            if best.is_some_and(|(_, d)| d <= ring as f32 * STEP) {
+                break;
+            }
+        }
+    }
+    best.or(least).map_or(
+        (middle.0 - size.0 / 2., middle.1 - size.1 / 2.),
+        |(rect, _)| (rect.x, rect.y),
+    )
+}
+
+/// The line from the bowed arrow from `from` to `to` to its label at
+/// `label`, when the label sits apart from it.
+pub(super) fn leader(
+    from: (f32, f32),
+    to: (f32, f32),
+    label: Rect,
+) -> Option<((f32, f32), (f32, f32))> {
+    let near_label = |at: (f32, f32)| {
+        (
+            at.0.clamp(label.x, label.right()),
+            at.1.clamp(label.y, label.bottom()),
+        )
+    };
+    let (on, edge) = (0..=20)
+        .map(|step| {
+            let at = bow_point(
+                point(px(from.0), px(from.1)),
+                point(px(to.0), px(to.1)),
+                step as f32 / 20.,
+            );
+            let at = (f32::from(at.x), f32::from(at.y));
+            (at, near_label(at))
+        })
+        .min_by(|a, b| {
+            let d = |(p, q): &((f32, f32), (f32, f32))| (p.0 - q.0).hypot(p.1 - q.1);
+            d(a).total_cmp(&d(b))
+        })?;
+    ((on.0 - edge.0).hypot(on.1 - edge.1) > 14.).then_some((on, edge))
+}
+
+fn overlap(a: &Rect, b: &Rect) -> f32 {
+    let w = (a.right().min(b.right()) - a.x.max(b.x)).max(0.);
+    let h = (a.bottom().min(b.bottom()) - a.y.max(b.y)).max(0.);
+    w * h
 }
 
 /// The point `t` along a bowed arrow from `from` to `to`: the control

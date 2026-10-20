@@ -40,6 +40,9 @@ pub enum Look {
     Type,
     /// A Plan's frame: a type or a file its functions are in.
     Owner,
+    /// A file as a whole at Plan: one the index reads, or one it can't.
+    Source,
+    UnreadSource,
 }
 
 impl Look {
@@ -54,6 +57,8 @@ impl Look {
                 | Look::More
                 | Look::Gone
                 | Look::Owner
+                | Look::Source
+                | Look::UnreadSource
         )
     }
 }
@@ -212,13 +217,15 @@ impl MapView {
                 Item::External(_) => Look::External,
                 Item::More { .. } => Look::More,
                 Item::Gone(_) => Look::Gone,
+                Item::File { read: true, .. } => Look::Source,
+                Item::File { read: false, .. } => Look::UnreadSource,
             };
             scene.cards.push(Card {
                 key: node.key.clone(),
                 rect: placed.nodes[ix],
                 title: node.title.clone(),
                 detail: node.detail.clone(),
-                note: String::new(),
+                note: node.note.clone(),
                 badges: node.badges.clone(),
                 look,
                 alpha: self.arriving(&node.key, now),

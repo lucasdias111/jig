@@ -1242,7 +1242,7 @@ fn npm_package(path: &str) -> String {
 }
 
 /// `a/b/../c` as `a/c`.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {
         match part {

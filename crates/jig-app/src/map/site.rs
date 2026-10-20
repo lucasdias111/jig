@@ -38,9 +38,9 @@ const GAP: f32 = 14.;
 /// Room at a region's top for its name, purpose and offers, at least.
 pub const REGION_HEADER: f32 = 190.;
 const REGION_PAD: f32 = 22.;
-const REGION_MIN_WIDTH: f32 = 560.;
-/// Between regions: room for the links' labels.
-const REGION_GAP: f32 = 220.;
+const REGION_MIN_WIDTH: f32 = 720.;
+/// Between regions: room for the links' labels and the names above.
+pub const REGION_GAP: f32 = 300.;
 /// Between the domains and Shared and Unsorted below them.
 const APART: f32 = 300.;
 /// How much wider than tall contents are packed, and the regions.

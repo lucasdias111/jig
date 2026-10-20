@@ -715,7 +715,7 @@ fn fires_off_in_swift_live(cx: &mut TestAppContext) {
 /// Pictures of a project's Map, to look at the design without a screen,
 /// written to `JIG_PICTURES`: its Plan, Site and Domain at stepped zooms,
 /// then a zoom from Domain into the region holding the function, on
-/// through Site to its Plan. `JIG_MAP_ROOT=<project> JIG_MAP_FILE=<file>
+/// through Site to its Plan, in a window 1600 by 1000. `JIG_MAP_ROOT=<project> JIG_MAP_FILE=<file>
 /// JIG_MAP_AT=<text in a function> JIG_PICTURES=<dir> cargo test -p jig-app
 /// map_pictures_live -- --ignored --nocapture`.
 #[gpui_kit::test]
@@ -734,6 +734,9 @@ fn map_pictures_live(cx: &mut TestAppContext) {
         }
         None => open(cx, &file),
     };
+    // A laptop's window, not the tests' small one.
+    cx.simulate_window_resize(window, gpui_kit::size(px(1600.), px(1000.)));
+    draw(cx, window);
     let inside = text.find(&at).unwrap() + 1;
     cx.update(|cx| {
         workspace
@@ -770,6 +773,9 @@ fn map_pictures_live(cx: &mut TestAppContext) {
     // and Site share their drawing, so it's where it'll be at Site.
     press(cx, window, "secondary-up");
     settle(cx, window, &view);
+    if let Some(bytes) = view.update(cx, |view, cx| view.picture_now(cx)) {
+        write("3-domain-canvas".into(), bytes);
+    }
     for n in 0..60 {
         let at = cx.update(|cx| view.read(cx).site_point(&target));
         zoom_scroll(cx, window, at, -40.);

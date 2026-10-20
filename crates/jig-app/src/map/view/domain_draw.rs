@@ -1,6 +1,7 @@
 //! Drawing the Domain level: each domain a big region in its own colour,
-//! its name and full purpose at the top with what it offers people, how
-//! much it holds, and its files below once you zoom in; Shared and
+//! its name above it in that colour, never cut short, and inside at the
+//! top how much it holds, its full purpose and what it offers people;
+//! Shared and
 //! Unsorted greyer, apart. Jig's drafts are dashed and colourless under a
 //! banner asking to index them; a proposal is outlined in the agent's
 //! colour with Keep and Discard. Each link carries its flows as a label.
@@ -17,10 +18,65 @@ use jig_commands::surface::{agent_accent, agent_icon};
 use super::super::domains::actions::Action;
 use super::super::domains::level::RegionKind;
 use super::domain::{self, Field};
-use super::draw::{Lit, View, blend, bow_point, theme};
+use super::draw::{Lit, View, blend, theme};
 use super::input::Drag;
 use super::scene::{Arrow, RegionBox};
 use super::{Level, MapView};
+
+/// A region's name, above it: at most this big on screen.
+const NAME_SIZE: f32 = 16.;
+const QUIET_NAME_SIZE: f32 = 13.;
+/// It shrinks to fit the room above its region down to this, then wraps.
+const SMALLEST_NAME: f32 = 11.;
+
+/// A region's name as drawn above it, on screen: its size, its lines
+/// (never cut short) and how much room they take.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameLabel {
+    pub size: f32,
+    pub lines: Vec<String>,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Region `name` laid out to fit `room` points across: at its size if it
+/// fits, else smaller, else on more lines.
+pub fn name_label(name: &str, quiet: bool, room: f32) -> NameLabel {
+    let most = if quiet { QUIET_NAME_SIZE } else { NAME_SIZE };
+    let width_at = |text: &str, size: f32| text.chars().count() as f32 * size * 0.6;
+    let size = (most * room / width_at(name, most).max(1.)).clamp(SMALLEST_NAME, most);
+    let mut lines: Vec<String> = Vec::new();
+    for word in name.split_whitespace() {
+        match lines.last_mut() {
+            Some(line) if width_at(&format!("{line} {word}"), size) <= room => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    let width = lines
+        .iter()
+        .map(|line| width_at(line, size))
+        .fold(0., f32::max)
+        + 8.;
+    let height = lines.len() as f32 * (size * 1.25) + 6.;
+    NameLabel {
+        size,
+        lines,
+        width,
+        height,
+    }
+}
+
+/// The room a region `width` points wide on screen has for its name: its
+/// width and most of the gap beside it, at `zoom`.
+pub fn name_room(width: f32, zoom: f32) -> f32 {
+    width + super::super::site::REGION_GAP * zoom * 0.8 - 8.
+}
 
 impl MapView {
     /// The header's actions at Domain: Index Domains, Update Domains when
@@ -123,14 +179,14 @@ impl MapView {
             .into_any_element()
     }
 
-    /// A domain, Shared or Unsorted, as a region.
+    /// A domain, Shared or Unsorted, as a region, and its name above it.
     pub(super) fn render_region(
         &self,
         region: &RegionBox,
         view: View,
         lit: &Lit,
         cx: &Context<Self>,
-    ) -> AnyElement {
+    ) -> [AnyElement; 2] {
         let theme = cx.theme();
         let dark = theme.mode.is_dark();
         let agent = agent_accent(cx);
@@ -188,7 +244,7 @@ impl MapView {
         } else {
             region.purpose.clone()
         };
-        div()
+        let body = div()
             .id(("map-region", ix))
             .debug_selector(move || format!("map-region-{ix}"))
             .absolute()
@@ -226,16 +282,6 @@ impl MapView {
                             .child(
                                 div()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_size(px(if quiet { 13. } else { 16. }))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(name_colour)
-                                    .when(editing == Some(Field::Name), |this| this.opacity(0.))
-                                    .child(region.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
                                     .text_size(px(10.5))
                                     .text_color(theme.muted_foreground)
                                     .child(region.note.clone()),
@@ -271,56 +317,68 @@ impl MapView {
                     })
                     .children(offers),
             )
-            .into_any_element()
+            .into_any_element();
+        // The name above the region, in its colour, as long as it is.
+        let name = name_label(
+            &region.name,
+            quiet,
+            name_room(f32::from(width), view.camera.zoom),
+        );
+        let label = v_flex()
+            .id(("map-region-name", ix))
+            .debug_selector(move || format!("map-region-name-{ix}"))
+            .absolute()
+            .left(at.x + px(4.))
+            .top(at.y - px(name.height))
+            .h(px(name.height - 4.))
+            .justify_end()
+            .whitespace_nowrap()
+            .text_size(px(name.size))
+            .line_height(px(name.size * 1.25))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(name_colour)
+            .opacity(region.alpha)
+            .when(editing == Some(Field::Name), |this| this.opacity(0.))
+            .children(name.lines.into_iter().map(|line| div().child(line)))
+            .into_any_element();
+        [body, label]
     }
 
-    /// What flows along a link, each way, in a label at its middle.
+    /// What flows along a link, each way, in a label at `spot` (its top
+    /// left, out of every region's way), `size` big.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_flow_label(
         &self,
         ix: usize,
         arrow: &Arrow,
+        spot: (f32, f32),
+        size: (f32, f32),
         from: Point<Pixels>,
         to: Point<Pixels>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let middle = bow_point(from, to, 0.5);
         let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
-        let glyph = |forward: bool| {
-            let (dx, dy) = if forward { (dx, dy) } else { (-dx, -dy) };
-            if dx.abs() >= dy.abs() {
-                if dx >= 0. { "→" } else { "←" }
-            } else if dy >= 0. {
-                "↓"
-            } else {
-                "↑"
-            }
-        };
-        const WIDTH: f32 = 190.;
         v_flex()
             .id(("map-flow", ix))
+            .debug_selector(move || format!("map-flow-{ix}"))
             .absolute()
-            .left(middle.x - px(WIDTH / 2.))
-            .top(middle.y - px(10.))
-            .w(px(WIDTH))
-            .items_center()
-            .child(
-                v_flex()
-                    .max_w(px(WIDTH))
-                    .px(px(6.))
-                    .py(px(2.))
-                    .rounded(px(6.))
-                    .bg(theme::canvas(cx))
-                    .border_1()
-                    .border_color(theme.foreground.opacity(0.18))
-                    .text_size(px(10.5))
-                    .line_height(px(14.))
-                    .text_color(theme.foreground.opacity(0.75))
-                    .opacity(arrow.alpha)
-                    .children(arrow.labels.iter().map(|(forward, label)| {
-                        div().child(format!("{} {label}", glyph(*forward)))
-                    })),
-            )
+            .left(px(spot.0))
+            .top(px(spot.1))
+            .w(px(size.0))
+            .px(px(6.))
+            .py(px(2.))
+            .rounded(px(6.))
+            .bg(theme::canvas(cx))
+            .border_1()
+            .border_color(theme.foreground.opacity(0.18))
+            .text_size(px(10.5))
+            .line_height(px(14.))
+            .text_color(theme.foreground.opacity(0.75))
+            .opacity(arrow.alpha)
+            .children(arrow.labels.iter().map(|(forward, label)| {
+                div().child(format!("{} {label}", glyph(*forward, dx, dy)))
+            }))
             .into_any_element()
     }
 
@@ -515,8 +573,8 @@ impl MapView {
         let at = self.to_canvas((rect.x, rect.y));
         let width = (rect.width * self.zoom - 24.).clamp(200., 560.);
         let top = match editing.field {
-            Field::Name => px(6.),
-            Field::Purpose => px(34.),
+            Field::Name => px(-34.),
+            Field::Purpose => px(30.),
         };
         let theme = cx.theme();
         Some(
@@ -572,5 +630,18 @@ impl MapView {
                 .children(to.map(|to| div().text_color(theme.primary).child(to)))
                 .into_any_element(),
         )
+    }
+}
+
+/// The arrow a flow going forward (from where the link leaves) or back
+/// reads with, for a link running `dx`, `dy`.
+pub(super) fn glyph(forward: bool, dx: f32, dy: f32) -> &'static str {
+    let (dx, dy) = if forward { (dx, dy) } else { (-dx, -dy) };
+    if dx.abs() >= dy.abs() {
+        if dx >= 0. { "→" } else { "←" }
+    } else if dy >= 0. {
+        "↓"
+    } else {
+        "↑"
     }
 }

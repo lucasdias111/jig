@@ -1,12 +1,14 @@
 //! The Map's Site level, made from the domains: each region opening onto
 //! its share of each component as Domain zooms on into it, coming out of a
 //! Plan onto the folder holding the function, calls between regions ending
-//! at their edges, tests and Shared's calls when asked, and Jig's drafts
-//! standing in before Index Domains.
+//! at their edges, tests and Shared's calls when asked, Jig's drafts
+//! standing in before Index Domains, and the Plan of a file the index
+//! can't read.
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
 
 use super::*;
+use crate::map::plan::Focus;
 use crate::map::site::Show;
 use crate::map::view::{Level, MapView};
 
@@ -72,6 +74,14 @@ fn open_project(
     write(
         "web/src/bookings/form.ts",
         "export function submitBooking() {}\n",
+    );
+    write(
+        "web/src/bookings/Form.svelte",
+        "<script>\n  import { submitBooking } from './form';\n</script>\n<form></form>\n",
+    );
+    write(
+        "web/src/bookings/page.svelte",
+        "<script>\n  import Form from './Form.svelte';\n</script>\n<Form />\n",
     );
     write(
         "web/src/events/page.ts",
@@ -361,4 +371,56 @@ fn drafts_stand_in_before_indexing(cx: &mut TestAppContext) {
     // The function's file is in one of them, open.
     let selected = cx.update(|cx| view.read(cx).selected_keys().to_vec());
     assert_eq!(selected, ["site:file:api/src/bookings/book.rs"]);
+}
+
+#[gpui_kit::test]
+fn a_file_the_index_cannot_read_has_a_plan_of_what_links_to_it(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx, true);
+    let view = to_plan(cx, window, &workspace);
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    // Into the Svelte component from Site: its Plan, not its code.
+    view.update(cx, |view, cx| {
+        let ix = view
+            .site()
+            .unwrap()
+            .index_of("file:web/src/bookings/Form.svelte")
+            .unwrap();
+        view.enter_site_box(ix, cx)
+    });
+    settle(cx, window, &view);
+    assert_eq!(
+        level(cx, &view),
+        Level::Plan(Focus::Module("web/src/bookings/Form.svelte".into()))
+    );
+    let (boxes, wires, focus) = cx.update(|cx| {
+        let plan = view.read(cx).plan();
+        let boxes: Vec<(String, String, String, i32)> = plan
+            .nodes
+            .iter()
+            .map(|n| (n.title.clone(), n.detail.clone(), n.note.clone(), n.column))
+            .collect();
+        (boxes, plan.wires.len(), plan.focus)
+    });
+    // The file as one box, what it is, and that its functions aren't read.
+    let (title, detail, note, _) = &boxes[0];
+    assert_eq!(focus, Some(0));
+    assert_eq!(title, "Form.svelte");
+    assert!(detail.starts_with("Svelte component · 4 lines"), "{detail}");
+    assert_eq!(note, "Its functions can't be read yet");
+    // The page importing it on the left, what it imports on the right.
+    assert!(
+        boxes.contains(&("page.svelte".into(), "imports it".into(), String::new(), -1)),
+        "{boxes:?}"
+    );
+    assert!(
+        boxes.contains(&("form.ts".into(), "imported by it".into(), String::new(), 1)),
+        "{boxes:?}"
+    );
+    assert_eq!(wires, 2);
+    // Enter on it: its code.
+    press(cx, window, "enter");
+    assert!(map(cx, &workspace).is_none(), "into its code");
+    let title = cx.update(|cx| workspace.read(cx).document().title());
+    assert_eq!(title, "Form.svelte");
 }

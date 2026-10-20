@@ -134,7 +134,9 @@ impl Placed {
 
 /// The rows below a box's title: its signature or detail, its badges.
 pub fn rows(node: &Node) -> usize {
-    usize::from(!node.detail.is_empty()) + usize::from(!node.badges.is_empty())
+    usize::from(!node.detail.is_empty())
+        + usize::from(!node.badges.is_empty())
+        + usize::from(!node.note.is_empty())
 }
 
 pub fn node_height(node: &Node) -> f32 {
@@ -147,7 +149,7 @@ pub fn node_height(node: &Node) -> f32 {
 pub fn node_width(node: &Node) -> f32 {
     match node.item {
         Item::External(_) | Item::More { .. } | Item::Gone(_) => 200.,
-        Item::Function(_) => NODE_WIDTH,
+        Item::Function(_) | Item::File { .. } => NODE_WIDTH,
     }
 }
 

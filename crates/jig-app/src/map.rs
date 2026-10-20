@@ -3,12 +3,14 @@
 //! for understanding and deciding, and never changes code.
 //!
 //! `outline` reads a file, `index` the whole project; `plan` builds the
-//! neighbourhood of a function or a module, `site` the whole project
-//! nested; `layout` places Plan's boxes; `view` draws the canvas, zooms
-//! between the levels and takes the gestures.
+//! neighbourhood of a function or a module (`files` the links of a file
+//! the index can't read), `site` the whole project nested; `layout`
+//! places Plan's boxes; `view` draws the canvas, zooms between the levels
+//! and takes the gestures.
 
 pub mod debug;
 pub mod domains;
+pub mod files;
 pub mod index;
 pub mod layout;
 pub mod outline;

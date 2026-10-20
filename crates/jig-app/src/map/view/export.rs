@@ -11,8 +11,11 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 
 use super::super::domains::level::RegionKind;
-use super::super::layout::{HEADER_HEIGHT, Rect};
-use super::draw::{blend, bow_point, look_colour, theme};
+use super::super::layout::{HEADER_HEIGHT, ROW_HEIGHT, Rect};
+use super::domain_draw::{glyph, name_label, name_room};
+use super::draw::{
+    blend, bow_point, flow_label_size, label_spot, leader, look_colour, obstacles, theme,
+};
 use super::scene::{Look, Scene};
 use super::zoom::Camera;
 use super::{Level, MapView, domain};
@@ -192,30 +195,28 @@ fn draw_svg(
         } else {
             y + h - 8.
         };
-        let mut line_y = y + 30.;
-        let size = if quiet { 13. } else { 16. };
-        if line_y > bottom + 4. {
-            continue;
+        // Its name above it, as long as it is; inside, how much it holds.
+        let name = name_label(&region.name, quiet, name_room(w, camera.zoom));
+        for (n, line) in name.lines.iter().enumerate() {
+            let from_bottom = (name.lines.len() - 1 - n) as f32;
+            text(
+                &mut out,
+                x + 4.,
+                y - 8. - from_bottom * name.size * 1.25,
+                name.size,
+                name_colour,
+                true,
+                line,
+            );
         }
-        text(
-            &mut out,
-            x + 14.,
-            line_y,
-            size,
-            name_colour,
-            true,
-            &region.name,
-        );
-        let note_x = x + 14. + region.name.chars().count() as f32 * size * 0.58 + 10.;
-        text(
-            &mut out,
-            note_x,
-            line_y,
-            10.5,
-            palette.muted,
-            false,
-            &region.note,
-        );
+        let mut line_y = y + 4.;
+        for line in wrap(&region.note, w - 28., 10.5) {
+            line_y += 18.;
+            if line_y > bottom + 4. {
+                break;
+            }
+            text(&mut out, x + 14., line_y, 10.5, palette.muted, false, &line);
+        }
         let about = if region.draft {
             &region.why
         } else {
@@ -292,7 +293,17 @@ fn draw_svg(
             );
         }
     }
-    let paint_arrows = |out: &mut String| {
+    let mut avoid = obstacles(scene, |rect| {
+        let (x, y, width, height) = rect_of(rect);
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    });
+    let size_of_picture = size;
+    let mut paint_arrows = |out: &mut String| {
         for arrow in &scene.arrows {
             let (from, to) = (at(arrow.from), at(arrow.to));
             let colour = palette.foreground;
@@ -335,48 +346,52 @@ fn draw_svg(
                 head(out, middle, from, width, colour);
             }
             if !arrow.labels.is_empty() {
+                let (dx, dy) = (to.0 - from.0, to.1 - from.1);
                 let lines: Vec<String> = arrow
                     .labels
                     .iter()
-                    .map(|(forward, label)| {
-                        let (dx, dy) = if *forward {
-                            (to.0 - from.0, to.1 - from.1)
-                        } else {
-                            (from.0 - to.0, from.1 - to.1)
-                        };
-                        let glyph = if dx.abs() >= dy.abs() {
-                            if dx >= 0. { "→" } else { "←" }
-                        } else if dy >= 0. {
-                            "↓"
-                        } else {
-                            "↑"
-                        };
-                        format!("{glyph} {label}")
-                    })
+                    .map(|(forward, label)| format!("{} {label}", glyph(*forward, dx, dy)))
                     .collect();
-                let width = lines
-                    .iter()
-                    .map(|line| line.chars().count() as f32 * 10.5 * 0.55)
-                    .fold(0., f32::max)
-                    + 12.;
-                let height = lines.len() as f32 * 14. + 6.;
-                let (x, y) = (middle.0 - width / 2., middle.1 - 10.);
+                let size = flow_label_size(&arrow.labels);
+                let picture = Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: size_of_picture.0,
+                    height: size_of_picture.1,
+                };
+                let (x, y) = label_spot(from, to, size, &avoid, picture);
+                let placed = Rect {
+                    x,
+                    y,
+                    width: size.0,
+                    height: size.1,
+                };
+                avoid.push(placed);
+                if let Some((a, b)) = leader(from, to, placed) {
+                    let _ = write!(
+                        out,
+                        r#"<path d="M{} {} L{} {}" stroke="{}" stroke-opacity="0.25" stroke-dasharray="3 3"/>"#,
+                        a.0,
+                        a.1,
+                        b.0,
+                        b.1,
+                        hex(palette.foreground),
+                    );
+                }
                 let _ = write!(
                     out,
-                    r#"<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="6" fill="{}" stroke="{}" stroke-opacity="0.18"/>"#,
+                    r#"<rect x="{x}" y="{y}" width="{}" height="{}" rx="6" fill="{}" stroke="{}" stroke-opacity="0.18"/>"#,
+                    size.0,
+                    size.1,
                     hex(palette.background),
                     hex(palette.foreground),
                 );
-                for (n, line) in lines.iter().enumerate() {
-                    text(
-                        out,
-                        x + 6.,
-                        y + 14. + n as f32 * 14.,
-                        10.5,
-                        palette.foreground,
-                        false,
-                        line,
-                    );
+                let mut line_y = y + 14.;
+                for line in &lines {
+                    for part in wrap(line, size.0 - 12., 10.5) {
+                        text(out, x + 6., line_y, 10.5, palette.foreground, false, &part);
+                        line_y += 14.;
+                    }
                 }
             }
         }
@@ -467,17 +482,22 @@ fn draw_svg(
                 true,
                 &clip(&card.title, w - 16. * camera.zoom, size),
             );
-            if !card.detail.is_empty() {
-                let size = 10.5 * camera.zoom;
+            let size = 10.5 * camera.zoom;
+            let mut line_y = y + header + 16. * camera.zoom;
+            for line in [&card.detail, &card.note] {
+                if line.is_empty() {
+                    continue;
+                }
                 text(
                     &mut out,
                     x + 10. * camera.zoom,
-                    y + header + 16. * camera.zoom,
+                    line_y,
                     size,
                     palette.muted,
                     false,
-                    &clip(&card.detail, w - 20. * camera.zoom, size),
+                    &clip(line, w - 20. * camera.zoom, size),
                 );
+                line_y += ROW_HEIGHT * camera.zoom;
             }
         }
     }

@@ -4,7 +4,9 @@
 //! file or a type) is its functions framed by type, called ones right of
 //! their callers, with the calls in from elsewhere on the left and out to
 //! elsewhere on the right. Functions sit in frames for their type or
-//! file.
+//! file. A file the index can't read (a Svelte component, a page) is
+//! one box with what links to it on the left and what it links to on the
+//! right, its functions not read.
 //!
 //! What would drown the picture is folded: past 8 callers or callees on a
 //! side the rest are one "+N more" box, a side's tests are one box, calls
@@ -38,6 +40,11 @@ pub enum Item {
     Gone(Symbol),
     /// Calls into a package outside the project.
     External(String),
+    /// A file, as a whole: one the index can't read, or one linked to it.
+    File {
+        path: String,
+        read: bool,
+    },
     /// Functions folded away: on a side, or the rest of a module.
     More {
         ids: Vec<FnId>,
@@ -58,6 +65,8 @@ pub struct Node {
     pub detail: String,
     /// Hubs it calls, folded: `log ×3`.
     pub badges: Vec<String>,
+    /// A line under it all, in words: why a file's functions aren't shown.
+    pub note: String,
     /// Callers and callees not drawn, for its expand buttons.
     pub hidden_callers: usize,
     pub hidden_callees: usize,
@@ -77,6 +86,7 @@ impl Node {
             title,
             detail: String::new(),
             badges: Vec::new(),
+            note: String::new(),
             hidden_callers: 0,
             hidden_callees: 0,
             implementations: 0,
@@ -175,8 +185,89 @@ pub fn plan(project: &Project, focus: &Focus, opened: &Opened) -> Plan {
             Some(id) => neighbourhood(project, id, opened),
             None => gone(symbol),
         },
+        Focus::Module(place) if project.others.iter().any(|other| slashed(other) == *place) => {
+            unread_file(project, place)
+        }
         Focus::Module(place) => module(project, place, opened),
     }
+}
+
+/// The Plan of a file the index can't read: the file as one box, its
+/// kind and size and that its functions aren't read, with the files
+/// linking to it on the left and those it links to on the right.
+pub fn unread_file(project: &Project, place: &str) -> Plan {
+    let mut plan = Plan::default();
+    let mut centre = file_node(project, place, 0);
+    centre.detail = match super::files::size_of(&project.root, place) {
+        Some(size) => format!("{} · {size}", super::files::kind_of(place)),
+        None => super::files::kind_of(place),
+    };
+    centre.note = "Its functions can't be read yet".into();
+    plan.nodes.push(centre);
+    plan.focus = Some(0);
+    let (into, out) = super::files::links_of(project, place);
+    for (links, column, inward) in [(into, -1, true), (out, 1, false)] {
+        for link in links {
+            let mut node = file_node(project, &link.path, column);
+            node.detail = link.how(inward);
+            let ix = plan.nodes.len();
+            plan.nodes.push(node);
+            if inward {
+                plan.wire(ix, 0, WireKind::Call);
+            } else {
+                plan.wire(0, ix, WireKind::Call);
+            }
+        }
+    }
+    tell_files_apart(&mut plan);
+    plan
+}
+
+/// Files with the same name (`+page.svelte` in each route) titled with as
+/// many of their folders as tell them apart: `hold/[id]/+page.svelte`.
+fn tell_files_apart(plan: &mut Plan) {
+    let paths: Vec<(usize, String)> = plan
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, node)| match &node.item {
+            Item::File { path, .. } => Some((ix, path.clone())),
+            _ => None,
+        })
+        .collect();
+    let tail = |path: &str, parts: usize| {
+        let all: Vec<&str> = path.split('/').collect();
+        all[all.len().saturating_sub(parts)..].join("/")
+    };
+    for (ix, path) in &paths {
+        let parts = (1..=path.split('/').count())
+            .find(|&parts| {
+                let mine = tail(path, parts);
+                paths
+                    .iter()
+                    .all(|(other, theirs)| other == ix || tail(theirs, parts) != mine)
+            })
+            .unwrap_or(1);
+        plan.nodes[*ix].title = tail(path, parts);
+    }
+}
+
+/// File `place` as a box in a Plan, in column `column`.
+fn file_node(project: &Project, place: &str, column: i32) -> Node {
+    let read = project
+        .files
+        .iter()
+        .any(|file| slashed(&file.path) == place);
+    let title = place.rsplit('/').next().unwrap_or(place).to_string();
+    Node::new(
+        format!("file:{place}"),
+        Item::File {
+            path: place.to_string(),
+            read,
+        },
+        title,
+        column,
+    )
 }
 
 /// The key a function keeps on every level.

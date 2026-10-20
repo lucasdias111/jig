@@ -546,6 +546,12 @@ impl MapView {
                 cx.emit(MapEvent::LiveLines);
                 cx.notify();
             }
+            // A file as a whole: the Plan's own into its code, another to
+            // its Plan.
+            Item::File { path, .. } if self.plan.focus == Some(ix) => {
+                cx.emit(MapEvent::OpenFile(self.root.join(path)));
+            }
+            Item::File { path, .. } => self.show(Level::Plan(Focus::Module(path)), cx),
             Item::External(_) | Item::Gone(_) => {}
         }
     }
@@ -955,7 +961,12 @@ impl MapView {
     }
 }
 
-/// Whether `kind` is a box that opens into a Plan of its functions.
+/// Whether `kind` is a box that opens into a Plan: of its functions, or
+/// of a file the index can't read as a whole.
 fn has_plan(kind: Kind, functions: usize) -> bool {
-    matches!(kind, Kind::File { read: true } | Kind::Type) && functions > 0
+    match kind {
+        Kind::File { read: false } => true,
+        Kind::File { read: true } | Kind::Type => functions > 0,
+        _ => false,
+    }
 }

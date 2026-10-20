@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::*;
 
 use super::super::layout::Rect;
-use super::super::plan::Focus;
+use super::super::plan::{Focus, Item};
 use super::super::site::Kind;
 use super::scene::Scene;
 use super::{Level, MapEvent, MapView, has_plan};
@@ -441,7 +441,8 @@ impl MapView {
                 if factor > 1.
                     && wanted > PLAN_IN
                     && let Some(ix) = self.plan_box_at(around)
-                    && self.plan.nodes[ix].function().is_some()
+                    && (self.plan.nodes[ix].function().is_some()
+                        || matches!(self.plan.nodes[ix].item, Item::File { .. }))
                 {
                     return self.enter_plan_box(ix, cx);
                 }

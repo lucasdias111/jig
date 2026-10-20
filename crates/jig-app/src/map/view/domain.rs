@@ -195,11 +195,13 @@ impl MapView {
                 zoom: 1.,
             };
         };
-        let top = if self.domain_banner().is_some() {
-            56.
-        } else {
-            24.
-        };
+        // Room above for the banner, and the top row's names.
+        let top = 28.
+            + if self.domain_banner().is_some() {
+                56.
+            } else {
+                24.
+            };
         let zoom = ((width - 60.) / bounds.width.max(1.))
             .min((height - 40. - top) / bounds.height.max(1.))
             .min(1.);
@@ -253,14 +255,29 @@ impl MapView {
         }
     }
 
-    /// The region under `position`, by its place in the level.
+    /// The region under `position`, or whose name is, by its place in the
+    /// level.
     pub(super) fn region_at(&self, position: Point<Pixels>) -> Option<usize> {
         let at = self.to_drawing(position);
         let level = self.domain_level()?;
         level
             .showing()
-            .find(|(_, region)| region.rect.contains(at))
+            .find(|(_, region)| region.rect.contains(at) || self.label_rect(region).contains(at))
             .map(|(ix, _)| ix)
+    }
+
+    /// Where region `region`'s name is drawn, above it, in the drawing.
+    pub(super) fn label_rect(&self, region: &super::super::domains::level::Region) -> Rect {
+        let quiet = !matches!(region.kind, RegionKind::Domain(_));
+        let zoom = self.zoom.max(0.0001);
+        let room = super::domain_draw::name_room(region.rect.width * zoom, zoom);
+        let name = super::domain_draw::name_label(&region.name, quiet, room);
+        Rect {
+            x: region.rect.x,
+            y: region.rect.y - name.height / zoom,
+            width: name.width / zoom,
+            height: name.height / zoom,
+        }
     }
 
     /// The key a Domain box under `position` is selected by: its region's.
@@ -907,8 +924,8 @@ impl MapView {
         self.domain_banner()
     }
 
-    /// Where region `name` is in the window: its middle, or a point just
-    /// inside its top left, past the name.
+    /// Where region `name` is in the window: its middle, or a point on its
+    /// name, above it.
     pub fn region_point(&self, name: &str, middle: bool) -> Point<Pixels> {
         let level = self.domain_level().expect("domains");
         let region = level
@@ -921,7 +938,7 @@ impl MapView {
         } else {
             (
                 region.rect.x + 30. / self.zoom,
-                region.rect.y + 12. / self.zoom,
+                region.rect.y - 12. / self.zoom,
             )
         };
         self.bounds.get().origin + self.to_canvas(at)

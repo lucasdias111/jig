@@ -417,3 +417,29 @@ fn the_domains_are_copied_as_markdown_and_drawn_as_an_image(cx: &mut TestAppCont
     assert!(svg.starts_with("<svg"));
     assert!(svg.contains(">Bookings</text>") && svg.contains("asks for events"));
 }
+
+#[gpui_kit::test]
+fn names_sit_above_their_regions_and_flows_in_the_gaps(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx, true);
+    to_domain(cx, window, &workspace);
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    let selector = |name: String| -> &'static str { Box::leak(name.into_boxed_str()) };
+    let regions: Vec<gpui_kit::Bounds<gpui_kit::Pixels>> = (0..4)
+        .filter_map(|ix| vcx.debug_bounds(selector(format!("map-region-{ix}"))))
+        .collect();
+    assert!(regions.len() >= 2, "{regions:?}");
+    for (ix, region) in regions.iter().enumerate() {
+        let name = vcx
+            .debug_bounds(selector(format!("map-region-name-{ix}")))
+            .expect("a name");
+        // Above its region, whole.
+        assert!(name.bottom() <= region.top() + px(0.5), "{name:?}");
+        assert!(name.size.width > px(0.));
+    }
+    // The flow's label covers no region.
+    let flow = vcx.debug_bounds("map-flow-0").expect("a flow label");
+    for region in &regions {
+        assert!(!flow.intersects(region), "{flow:?} covers {region:?}");
+    }
+}

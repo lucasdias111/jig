@@ -422,8 +422,8 @@ impl MapView {
             .position(|region| region.key == key)
     }
 
-    /// Whether `position` is on the name of domain region `key`: the top
-    /// of the region, where its name is drawn.
+    /// Whether `position` is on the name of domain region `key`, drawn
+    /// above it.
     fn on_region_name(&self, key: &str, position: Point<Pixels>) -> bool {
         let Some(level) = self.domain_level() else {
             return false;
@@ -434,9 +434,7 @@ impl MapView {
         if !matches!(region.kind, RegionKind::Domain(_)) {
             return false;
         }
-        let top = self.bounds.get().origin.y + self.to_canvas((region.rect.x, region.rect.y)).y;
-        let y = f32::from(position.y - top);
-        (0. ..=34.).contains(&y)
+        self.label_rect(region).contains(self.to_drawing(position))
     }
 
     /// The pointer moved, no button down: what it's over lights, and a
