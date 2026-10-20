@@ -18,8 +18,6 @@ use super::zoom::Camera;
 use super::zoom::FADE_OUT;
 use super::{Level, MapView};
 
-/// How long a stub for calls leaving a region is, on screen.
-const STUB: f32 = 70.;
 /// More arrows than this at Site, and only those with the most calls.
 const MAX_ARROWS: usize = 160;
 
@@ -148,6 +146,9 @@ pub struct Arrow {
     /// What flows along it at Domain: forward (from where it leaves) or
     /// back, and in words.
     pub labels: Vec<(bool, String)>,
+    /// A link between two domains, drawn steady whether it's labelled or
+    /// not.
+    pub link: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -257,6 +258,7 @@ impl MapView {
                 calls: None,
                 heads: (false, false),
                 labels: Vec::new(),
+                link: false,
                 alpha: self
                     .arriving(&self.plan.nodes[wire.from].key, now)
                     .min(self.arriving(&self.plan.nodes[wire.to].key, now)),
@@ -367,8 +369,7 @@ impl MapView {
         scene.frames.sort_by_key(|frame| frame.ix);
         // Arrows join the boxes showing, as a box is counted open half way.
         let shown = site.shown_as(|ix| site.nodes[ix].opening(zoom) >= 0.5);
-        let found = self.site_arrows(site, &shown);
-        let (arrows, stubs) = (&found.0, &found.1);
+        let arrows = self.site_arrows(site, &shown);
         for arrow in arrows
             .iter()
             .filter(|arrow| {
@@ -392,55 +393,22 @@ impl MapView {
                 alpha: alpha[arrow.from].min(alpha[arrow.to]).max(0.25),
                 heads: (false, true),
                 labels: Vec::new(),
+                link: false,
             });
         }
-        // Calls leaving an open region, or coming into it: at its edge,
-        // facing the domain at the other end.
-        for stub in stubs {
-            let (region, other) = (&site.nodes[stub.region], &site.nodes[stub.other]);
-            let open = region.opening(zoom);
-            if open < 0.5 {
-                continue;
-            }
-            let edge = border(region.rect, other.rect.centre());
-            let (dx, dy) = (
-                other.rect.centre().0 - edge.0,
-                other.rect.centre().1 - edge.1,
-            );
-            let length = dx.hypot(dy).max(0.001);
-            let (ux, uy) = (dx / length, dy / length);
-            // Out and in side by side, not on each other.
-            let side = if stub.outgoing { 9. } else { -9. } / zoom;
-            let at = (edge.0 - uy * side, edge.1 + ux * side);
-            let far = (at.0 + ux * STUB / zoom, at.1 + uy * STUB / zoom);
-            let (from, to) = if stub.outgoing { (at, far) } else { (far, at) };
-            let label = format!(
-                "{} {} · {}",
-                if stub.outgoing { "to" } else { "from" },
-                other.title,
-                plural(stub.calls.count, "call")
-            );
-            scene.arrows.push(Arrow {
-                from,
-                to,
-                keys: (region.key.clone(), other.key.clone()),
-                across: false,
-                dashed: false,
-                calls: Some(stub.calls.clone()),
-                alpha: open,
-                heads: (false, true),
-                labels: vec![(true, label)],
-            });
-        }
-        // Between regions still closed, the domains' flows.
+        // Between regions, the domains' links, one per pair; what flows
+        // along them only on the selected domain's.
+        let picked = self.selected_region();
         for link in &level.links {
-            let closed = |at: usize| {
-                site.index_of(&level.regions[at].key)
-                    .is_none_or(|ix| site.nodes[ix].opening(zoom) < 0.5)
-            };
-            if closed(link.a) && closed(link.b) {
-                scene.arrows.push(link_arrow(&level, link));
+            let mut arrow = link_arrow(&level, link);
+            let ends = [&level.regions[link.a].key, &level.regions[link.b].key];
+            if !ends
+                .iter()
+                .any(|key| Some(key.as_str()) == picked.as_deref())
+            {
+                arrow.labels.clear();
             }
+            scene.arrows.push(arrow);
         }
         scene
     }
@@ -497,10 +465,6 @@ pub(super) fn border(rect: Rect, to: (f32, f32)) -> (f32, f32) {
     };
     let s = sx.min(sy);
     (cx + dx * s, cy + dy * s)
-}
-
-fn plural(count: usize, what: &str) -> String {
-    format!("{count} {what}{}", if count == 1 { "" } else { "s" })
 }
 
 #[cfg(test)]

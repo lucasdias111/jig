@@ -15,6 +15,7 @@ use gpui_kit::*;
 
 use super::super::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT, Rect};
 use super::super::plan::Focus;
+use super::super::site::Show;
 use super::input::Hover;
 use super::scene::{Card, FrameBox, Look, Scene};
 use super::zoom::Camera;
@@ -160,40 +161,24 @@ impl MapView {
                 })
         });
         let site = self.level == Level::Site;
-        let switch = |id: &'static str, label: &'static str, on: bool, tip: &'static str| {
+        let tests = site.then(|| {
             h_flex()
-                .id(id)
+                .id("map-tests")
                 .gap_1()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(Switch::new(id).small().checked(on).on_click(cx.listener(
-                    move |this, on: &bool, _, cx| {
-                        let mut show = this.site_show;
-                        match id {
-                            "map-tests" => show.tests = *on,
-                            _ => show.shared = *on,
-                        }
-                        this.set_site_show(show, cx)
-                    },
-                )))
-                .child(label)
-                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
-        };
-        let site_switches = site.then(|| {
-            h_flex()
-                .gap_2()
-                .child(switch(
-                    "map-tests",
-                    "Tests",
-                    self.site_show.tests,
-                    "Show the test files, and the calls they make",
-                ))
-                .child(switch(
-                    "map-shared",
-                    "Shared",
-                    self.site_show.shared,
-                    "Show the calls into and out of Shared",
-                ))
+                .child(
+                    Switch::new("map-tests-switch")
+                        .small()
+                        .checked(self.site_show.tests)
+                        .on_click(cx.listener(|this, on: &bool, _, cx| {
+                            this.set_site_show(Show { tests: *on }, cx)
+                        })),
+                )
+                .child("Tests")
+                .tooltip(|window, cx| {
+                    Tooltip::new("Show the test files, and the calls they make").build(window, cx)
+                })
         });
         let domain_buttons = (self.level == Level::Domain).then(|| self.render_domain_buttons(cx));
         let export = self.render_export_button(cx);
@@ -223,7 +208,7 @@ impl MapView {
                     .flex_none()
                     .gap_2()
                     .children(domain_buttons)
-                    .children(site_switches)
+                    .children(tests)
                     .children(tints)
                     .child(export)
                     .child(levels)
@@ -470,14 +455,14 @@ impl MapView {
                 colour = blend(colour, theme.yellow, fired);
                 width *= 1. + fired;
             }
-            if !arrow.labels.is_empty() {
-                // Domain's links: steady, their flows labelled.
+            if arrow.link {
+                // Domains' links: steady, their flows labelled where shown.
                 width = if joined(&arrow.keys.0) || joined(&arrow.keys.1) {
                     3.
                 } else {
                     2.
                 };
-                if live {
+                if live && !arrow.labels.is_empty() {
                     let ends = (
                         (f32::from(from.x), f32::from(from.y)),
                         (f32::from(to.x), f32::from(to.y)),
@@ -525,34 +510,6 @@ impl MapView {
                 pulse: pulse.map(|t| (t, theme.yellow)),
                 heads: arrow.heads,
             });
-            if let Some(calls) = &arrow.calls
-                && calls.count > 1
-                && live
-            {
-                let middle = bow_point(from, to, 0.5);
-                labels.push(
-                    div()
-                        .id(("map-arrow-count", ix))
-                        .absolute()
-                        .left(middle.x - px(12.))
-                        .top(middle.y - px(8.))
-                        .min_w(px(24.))
-                        .h(px(16.))
-                        .px_1()
-                        .flex()
-                        .justify_center()
-                        .items_center()
-                        .rounded(px(8.))
-                        .bg(theme::canvas(cx))
-                        .border_1()
-                        .border_color(theme.foreground.opacity(0.18))
-                        .text_size(px(10.))
-                        .text_color(theme.muted_foreground)
-                        .opacity(arrow.alpha)
-                        .child(calls.count.to_string())
-                        .into_any_element(),
-                );
-            }
         }
         let across = scene.arrows.first().is_some_and(|a| a.across);
         let paint = canvas(

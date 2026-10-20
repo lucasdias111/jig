@@ -309,7 +309,7 @@ fn draw_svg(
             let colour = palette.foreground;
             let width = match &arrow.calls {
                 Some(calls) => (1. + (calls.count as f32).sqrt() * 0.9).clamp(1.2, 7.),
-                None if !arrow.labels.is_empty() => 2.,
+                None if arrow.link => 2.,
                 None => (2. * camera.zoom).max(1.),
             };
             let (c1, c2) = if arrow.across {

@@ -14,8 +14,8 @@
 //! so opening one as you zoom in only shows what's inside it: nothing
 //! moves. A box opens once what's inside would read on screen. Calls are
 //! counted between files and types, and drawn only between boxes side by
-//! side; calls leaving a region end at its edge, naming the domain they
-//! go to.
+//! side inside a region; between regions there's only the domains' one
+//! link per pair, as at Domain.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -153,8 +153,6 @@ impl Calls {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Show {
     pub tests: bool,
-    /// Calls into and out of Shared.
-    pub shared: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -172,16 +170,6 @@ pub struct Site {
 pub struct Arrow {
     pub from: usize,
     pub to: usize,
-    pub calls: Calls,
-}
-
-/// Calls leaving an open region for another, or coming in from one,
-/// ending at its edge.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stub {
-    pub region: usize,
-    pub other: usize,
-    pub outgoing: bool,
     pub calls: Calls,
 }
 
@@ -409,32 +397,18 @@ impl Site {
     }
 
     /// The arrows between the boxes showing, `shown` from `shown_as`: each
-    /// call drawn between the two boxes side by side that hold its ends,
-    /// summed, one arrow per direction; and the calls between regions as
-    /// stubs at the edge of an open one. Calls into and out of Shared only
-    /// when asked for. Most calls first.
-    pub fn arrows(&self, shown: &[usize]) -> (Vec<Arrow>, Vec<Stub>) {
+    /// call inside a region drawn between the two boxes side by side that
+    /// hold its ends, summed, one arrow per direction. Calls between
+    /// regions aren't drawn: the domains' links say what goes between
+    /// them. Most calls first.
+    pub fn arrows(&self, shown: &[usize]) -> Vec<Arrow> {
         let mut summed: HashMap<(usize, usize), Calls> = HashMap::new();
-        let mut stubs: HashMap<(usize, usize, bool), Calls> = HashMap::new();
         for (&(from, to), calls) in &self.calls {
-            let (ra, rb) = (self.nodes[from].region, self.nodes[to].region);
-            if !self.show.shared
-                && (self.nodes[ra].kind == Kind::Region(Home::Shared)
-                    || self.nodes[rb].kind == Kind::Region(Home::Shared))
-            {
+            if self.nodes[from].region != self.nodes[to].region {
                 continue;
             }
             let (a, b) = (shown[from], shown[to]);
             if a == b {
-                continue;
-            }
-            if ra != rb {
-                if shown[ra] == ra && a != ra {
-                    stubs.entry((ra, rb, true)).or_default().add(calls);
-                }
-                if shown[rb] == rb && b != rb {
-                    stubs.entry((rb, ra, false)).or_default().add(calls);
-                }
                 continue;
             }
             let Some((a, b)) = self.side_by_side(a, b) else {
@@ -452,22 +426,7 @@ impl Site {
                 .cmp(&a.calls.count)
                 .then((a.from, a.to).cmp(&(b.from, b.to)))
         });
-        let mut stubs: Vec<Stub> = stubs
-            .into_iter()
-            .map(|((region, other, outgoing), calls)| Stub {
-                region,
-                other,
-                outgoing,
-                calls,
-            })
-            .collect();
-        stubs.sort_by(|a, b| {
-            b.calls
-                .count
-                .cmp(&a.calls.count)
-                .then((a.region, a.other, a.outgoing).cmp(&(b.region, b.other, b.outgoing)))
-        });
-        (arrows, stubs)
+        arrows
     }
 
     /// The two boxes side by side, in the box holding both, that hold `a`
@@ -1245,10 +1204,7 @@ members = ["client/src/net/"]
         let place = "file:server/src/test/org/demo/bugs/BugServiceTest.java";
         let site = Site::of(&project, &domains(), Show::default());
         assert!(site.index_of(place).is_none());
-        let tests = Show {
-            tests: true,
-            ..Show::default()
-        };
+        let tests = Show { tests: true };
         assert!(
             Site::of(&project, &domains(), tests)
                 .index_of(place)
@@ -1257,30 +1213,18 @@ members = ["client/src/net/"]
     }
 
     #[test]
-    fn arrows_join_boxes_side_by_side_and_calls_leaving_end_at_the_edge() {
+    fn arrows_join_boxes_side_by_side_and_never_cross_regions() {
         let dir = fixture();
         let project = Project::read(dir.path());
         let site = Site::of(&project, &domains(), Show::default());
-        let bugs = site.index_of("domain:Bug Reports").unwrap();
-        let people = site.index_of("domain:People").unwrap();
-        let service = site
-            .box_of("server/src/org/demo/bugs/BugService.java")
-            .unwrap();
-        let mail = site
-            .box_of("server/src/org/demo/bugs/MailNotifier.java")
-            .unwrap();
-        // Everything open: BugService calls into People, out at the edge.
+        // Everything open: BugService calls into People, but that's for
+        // the domains' link to say, not an arrow.
         let open = site.shown_as(|_| true);
-        let (arrows, stubs) = site.arrows(&open);
-        let out = stubs
-            .iter()
-            .find(|s| s.region == bugs && s.other == people && s.outgoing)
-            .expect("a stub to People");
-        assert_eq!(out.calls.examples, ["BugService.create → UserService.find"]);
+        let arrows = site.arrows(&open);
         assert!(
-            stubs
+            arrows
                 .iter()
-                .any(|s| s.region == people && s.other == bugs && !s.outgoing)
+                .all(|a| site.nodes[a.from].region == site.nodes[a.to].region)
         );
         // Calls inside a region join the boxes side by side.
         assert!(
@@ -1288,11 +1232,9 @@ members = ["client/src/net/"]
                 .iter()
                 .all(|a| site.nodes[a.from].parent == site.nodes[a.to].parent)
         );
-        let _ = (service, mail);
-        // Regions closed: no stubs, those are the domains' flows.
+        // Regions closed: nothing.
         let closed = site.shown_as(|ix| ix == 0);
-        let (arrows, stubs) = site.arrows(&closed);
-        assert!(arrows.is_empty() && stubs.is_empty());
+        assert!(site.arrows(&closed).is_empty());
     }
 
     #[test]
@@ -1307,7 +1249,7 @@ members = ["client/src/net/"]
             .box_of("server/src/org/demo/bugs/BugService.java")
             .unwrap();
         let open = site.shown_as(|_| true);
-        let (arrows, _) = site.arrows(&open);
+        let arrows = site.arrows(&open);
         // BugService → UserService: both inside `server`, between its
         // folders `bugs` and `users`.
         let bugs = site.nodes[service].parent.unwrap();
@@ -1401,7 +1343,7 @@ members = ["client/src/net/"]
         for zoom in [fit, fit * 4., fit * 16., fit * 64.] {
             let started = Instant::now();
             let shown = site.shown_as(|ix| site.nodes[ix].opening(zoom) >= 0.5);
-            let (arrows, _) = site.arrows(&shown);
+            let arrows = site.arrows(&shown);
             within(
                 &format!("a frame at {zoom:.3}x ({} arrows)", arrows.len()),
                 started.elapsed(),

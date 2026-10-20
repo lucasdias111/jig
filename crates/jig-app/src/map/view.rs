@@ -780,8 +780,8 @@ pub enum Expand {
 
 use plan::Node;
 
-/// Site's arrows and stubs for the boxes showing.
-type SiteArrows = Rc<(Vec<super::site::Arrow>, Vec<super::site::Stub>)>;
+/// Site's arrows for the boxes showing.
+type SiteArrows = Rc<Vec<super::site::Arrow>>;
 
 /// A Site box's key as selections keep it, apart from Plan's.
 fn site_key(key: &str) -> String {
@@ -921,6 +921,11 @@ impl MapView {
             .iter()
             .flat_map(|arrow| arrow.labels.iter().map(|(_, label)| label.clone()))
             .collect()
+    }
+
+    /// How many links between domains are drawn.
+    pub fn drawn_links(&self) -> usize {
+        self.drawn.borrow().arrows.iter().filter(|a| a.link).count()
     }
 
     /// The regions drawn, by key, and how far each is open.

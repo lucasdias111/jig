@@ -430,6 +430,17 @@ impl MapView {
             .unwrap_or_default()
     }
 
+    /// The domain picked at Site, by its region's key: the one selected
+    /// (there, or at Domain before zooming in), or the one holding the box
+    /// selected.
+    pub(super) fn selected_region(&self) -> Option<String> {
+        let site = self.site.as_ref()?;
+        self.selected.iter().find_map(|key| {
+            let ix = site.index_of(key.strip_prefix("site:").unwrap_or(key))?;
+            Some(site.nodes[site.nodes[ix].region].key.clone())
+        })
+    }
+
     /// The banner over Domain, if it has one: drafts to index, an action
     /// under way, or a proposal to review.
     pub(super) fn domain_banner(&self) -> Option<String> {
@@ -881,6 +892,7 @@ pub(super) fn link_arrow(level: &DomainLevel, link: &super::super::domains::leve
         alpha: 1.,
         heads: (!link.backward.is_empty(), !link.forward.is_empty()),
         labels,
+        link: true,
     }
 }
 

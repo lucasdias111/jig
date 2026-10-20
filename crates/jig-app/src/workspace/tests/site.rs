@@ -294,33 +294,23 @@ fn domain_and_site_are_one_zoom(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn calls_leaving_a_region_end_at_its_edge(cx: &mut TestAppContext) {
+fn between_domains_only_their_links_worded_for_the_one_selected(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = open_project(cx, true);
     let view = to_plan(cx, window, &workspace);
     press(cx, window, "secondary-up");
     settle(cx, window, &view);
-    view.update(cx, |view, _| view.show_site_box("domain:Bookings"));
+    // book.rs is selected, in Bookings: its two links say what flows.
+    let mut labels = cx.update(|cx| view.read(cx).drawn_labels());
+    labels.sort();
+    assert_eq!(labels, ["asks for events", "asks to be paid"]);
+    // No call counts between domains, whatever is open.
+    assert!(!labels.iter().any(|label| label.contains("call")));
+    assert_eq!(cx.update(|cx| view.read(cx).drawn_links()), 2);
+    // Nothing selected: the links stay, without words.
+    press(cx, window, "escape");
     draw(cx, window);
-    let labels = cx.update(|cx| view.read(cx).drawn_labels());
-    assert!(
-        labels.contains(&"to Payments · 1 call".into()),
-        "{labels:?}"
-    );
-    assert!(labels.contains(&"to Events · 1 call".into()), "{labels:?}");
-    // Shared's calls only when asked for.
-    assert!(!labels.iter().any(|label| label.contains("Shared")));
-    view.update(cx, |view, cx| {
-        view.set_site_show(
-            Show {
-                shared: true,
-                ..Show::default()
-            },
-            cx,
-        )
-    });
-    draw(cx, window);
-    let labels = cx.update(|cx| view.read(cx).drawn_labels());
-    assert!(labels.contains(&"to Shared · 1 call".into()), "{labels:?}");
+    assert!(cx.update(|cx| view.read(cx).drawn_labels()).is_empty());
+    assert_eq!(cx.update(|cx| view.read(cx).drawn_links()), 2);
 }
 
 #[gpui_kit::test]
@@ -337,15 +327,7 @@ fn tests_show_when_asked(cx: &mut TestAppContext) {
         })
     };
     assert!(!has_test(cx));
-    view.update(cx, |view, cx| {
-        view.set_site_show(
-            Show {
-                tests: true,
-                ..Show::default()
-            },
-            cx,
-        )
-    });
+    view.update(cx, |view, cx| view.set_site_show(Show { tests: true }, cx));
     assert!(has_test(cx));
     let _ = window;
 }
