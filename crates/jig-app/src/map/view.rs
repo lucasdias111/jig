@@ -939,6 +939,29 @@ impl MapView {
         self.drawn.borrow().arrows.iter().filter(|a| a.link).count()
     }
 
+    /// The regions drawn lit, by key.
+    pub fn lit_regions(&self) -> Vec<String> {
+        self.drawn
+            .borrow()
+            .regions
+            .iter()
+            .filter(|region| region.lit)
+            .map(|region| region.key.clone())
+            .collect()
+    }
+
+    /// The headings of the selected domain's links drawn: the domains at
+    /// their other ends.
+    pub fn picked_links(&self) -> Vec<String> {
+        self.drawn
+            .borrow()
+            .arrows
+            .iter()
+            .filter(|arrow| arrow.picked)
+            .filter_map(|arrow| arrow.title.clone())
+            .collect()
+    }
+
     /// The regions drawn, by key, and how far each is open.
     pub fn drawn_regions(&self) -> Vec<(String, Rect, f32)> {
         self.drawn

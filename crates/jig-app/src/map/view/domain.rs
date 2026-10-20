@@ -234,13 +234,7 @@ impl MapView {
         let mut links: Vec<Arrow> = level
             .links
             .iter()
-            .map(|link| {
-                let mut arrow = link_arrow(&level, link);
-                arrow.faint = ![link.a, link.b]
-                    .iter()
-                    .any(|&end| Some(&level.regions[end].key) == picked.as_ref());
-                arrow
-            })
+            .map(|link| picked_link(&level, link, picked.as_deref()))
             .collect();
         links.sort_by_key(|arrow| arrow.faint);
         scene.arrows.extend(links);
@@ -264,6 +258,7 @@ impl MapView {
             proposed: self.domains.proposal.is_some()
                 && matches!(region.kind, RegionKind::Domain(_)),
             open,
+            lit: self.selected_region().as_deref() == Some(region.key.as_str()),
             alpha: 1.,
             ix,
         }
@@ -908,7 +903,47 @@ pub(super) fn link_arrow(level: &DomainLevel, link: &super::super::domains::leve
         labels,
         link: true,
         faint: false,
+        picked: false,
+        tint: None,
+        title: None,
+        title_tint: None,
     }
+}
+
+/// The link between two regions as drawn with region `picked` (by key)
+/// selected: one of its links is drawn in its colour, headed by the
+/// domain at the other end and read from its side; any other link's
+/// words are faint.
+pub(super) fn picked_link(
+    level: &DomainLevel,
+    link: &super::super::domains::level::Link,
+    picked: Option<&str>,
+) -> Arrow {
+    let mut arrow = link_arrow(level, link);
+    let (a, b) = (&level.regions[link.a], &level.regions[link.b]);
+    let (mine, other) = if Some(a.key.as_str()) == picked {
+        (a, b)
+    } else if Some(b.key.as_str()) == picked {
+        (b, a)
+    } else {
+        arrow.faint = true;
+        return arrow;
+    };
+    let colour = |region: &super::super::domains::level::Region| match region.kind {
+        RegionKind::Domain(ix) if !level.draft => Some(ix),
+        _ => None,
+    };
+    arrow.picked = true;
+    arrow.tint = colour(mine);
+    arrow.title = Some(other.name.clone());
+    arrow.title_tint = colour(other);
+    // Its words run from `a` to `b`; read from the selected side.
+    if std::ptr::eq(mine, b) {
+        for (forward, _) in &mut arrow.labels {
+            *forward = !*forward;
+        }
+    }
+    arrow
 }
 
 fn plural(count: usize, what: &str) -> String {

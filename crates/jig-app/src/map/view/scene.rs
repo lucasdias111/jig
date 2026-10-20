@@ -13,7 +13,7 @@ use super::super::domains::level::RegionKind;
 use super::super::layout::{HEADER_HEIGHT, Placed, Rect};
 use super::super::plan::Item;
 use super::super::site::{Calls, Kind, Site};
-use super::domain::link_arrow;
+use super::domain::picked_link;
 use super::zoom::Camera;
 use super::zoom::FADE_OUT;
 use super::{Level, MapView};
@@ -123,6 +123,8 @@ pub struct RegionBox {
     pub proposed: bool,
     /// How far its files show, from 0 to 1.
     pub open: f32,
+    /// The domain picked: selected, or holding the box selected.
+    pub lit: bool,
     pub alpha: f32,
     /// Its place in the level.
     pub ix: usize,
@@ -151,6 +153,14 @@ pub struct Arrow {
     pub link: bool,
     /// Its words drawn faintly: a link of a domain not selected.
     pub faint: bool,
+    /// A link of the selected domain: drawn stronger, in its colour
+    /// (`tint`), its words headed by the domain at the other end (`title`,
+    /// in that domain's colour, `title_tint`) and read from the selected
+    /// domain's side: forward is what goes out of it.
+    pub picked: bool,
+    pub tint: Option<usize>,
+    pub title: Option<String>,
+    pub title_tint: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -262,6 +272,10 @@ impl MapView {
                 labels: Vec::new(),
                 link: false,
                 faint: false,
+                picked: false,
+                tint: None,
+                title: None,
+                title_tint: None,
                 alpha: self
                     .arriving(&self.plan.nodes[wire.from].key, now)
                     .min(self.arriving(&self.plan.nodes[wire.to].key, now)),
@@ -398,22 +412,28 @@ impl MapView {
                 labels: Vec::new(),
                 link: false,
                 faint: false,
+                picked: false,
+                tint: None,
+                title: None,
+                title_tint: None,
             });
         }
         // Between regions, the domains' links, one per pair; what flows
         // along them only on the selected domain's.
         let picked = self.selected_region();
-        for link in &level.links {
-            let mut arrow = link_arrow(&level, link);
-            let ends = [&level.regions[link.a].key, &level.regions[link.b].key];
-            if !ends
-                .iter()
-                .any(|key| Some(key.as_str()) == picked.as_deref())
-            {
-                arrow.labels.clear();
-            }
-            scene.arrows.push(arrow);
-        }
+        let mut links: Vec<Arrow> = level
+            .links
+            .iter()
+            .map(|link| {
+                let mut arrow = picked_link(&level, link, picked.as_deref());
+                if !arrow.picked {
+                    arrow.labels.clear();
+                }
+                arrow
+            })
+            .collect();
+        links.sort_by_key(|arrow| arrow.picked);
+        scene.arrows.extend(links);
         scene
     }
 

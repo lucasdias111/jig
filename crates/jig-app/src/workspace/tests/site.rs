@@ -306,10 +306,20 @@ fn between_domains_only_their_links_worded_for_the_one_selected(cx: &mut TestApp
     // No call counts between domains, whatever is open.
     assert!(!labels.iter().any(|label| label.contains("call")));
     assert_eq!(cx.update(|cx| view.read(cx).drawn_links()), 2);
-    // Nothing selected: the links stay, without words.
+    // Bookings is lit, and its links are headed by the domain at their
+    // other end.
+    assert_eq!(
+        cx.update(|cx| view.read(cx).lit_regions()),
+        ["domain:Bookings"]
+    );
+    let mut ends = cx.update(|cx| view.read(cx).picked_links());
+    ends.sort();
+    assert_eq!(ends, ["Events", "Payments"]);
+    // Nothing selected: the links stay, without words, and nothing's lit.
     press(cx, window, "escape");
     draw(cx, window);
     assert!(cx.update(|cx| view.read(cx).drawn_labels()).is_empty());
+    assert!(cx.update(|cx| view.read(cx).lit_regions()).is_empty());
     assert_eq!(cx.update(|cx| view.read(cx).drawn_links()), 2);
 }
 

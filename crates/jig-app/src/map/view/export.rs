@@ -184,9 +184,11 @@ fn draw_svg(
         };
         let _ = write!(
             out,
-            r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="14" fill="{}" stroke="{}" stroke-opacity="0.6" stroke-width="1.5"{dash}/>"#,
+            r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="14" fill="{}" stroke="{}" stroke-opacity="{}" stroke-width="{}"{dash}/>"#,
             hex(fill),
             hex(stroke),
+            if region.lit { 1. } else { 0.6 },
+            if region.lit { 3. } else { 1.5 },
         );
         let name_colour = if quiet || region.draft {
             palette.foreground
@@ -310,9 +312,13 @@ fn draw_svg(
     let mut paint_arrows = |out: &mut String| {
         for arrow in &scene.arrows {
             let (from, to) = (at(arrow.from), at(arrow.to));
-            let colour = palette.foreground;
+            let colour = match (arrow.picked, arrow.tint) {
+                (true, Some(tint)) => domain::colour(tint, palette.dark),
+                _ => palette.foreground,
+            };
             let width = match &arrow.calls {
                 Some(calls) => (1. + (calls.count as f32).sqrt() * 0.9).clamp(1.2, 7.),
+                None if arrow.picked => 3.,
                 None if arrow.link => 2.,
                 None => (2. * camera.zoom).max(1.),
             };
@@ -354,9 +360,16 @@ fn draw_svg(
                 let lines: Vec<String> = arrow
                     .labels
                     .iter()
-                    .map(|(forward, label)| format!("{} {label}", glyph(*forward, dx, dy)))
+                    .map(|(forward, label)| {
+                        let glyph = match (arrow.title.is_some(), forward) {
+                            (true, true) => "→",
+                            (true, false) => "←",
+                            (false, _) => glyph(*forward, dx, dy),
+                        };
+                        format!("{glyph} {label}")
+                    })
                     .collect();
-                let size = flow_label_size(&arrow.labels);
+                let size = flow_label_size(&arrow.labels, arrow.title.as_deref());
                 let picture = Rect {
                     x: 0.,
                     y: 0.,
@@ -383,13 +396,18 @@ fn draw_svg(
                     );
                 }
                 if !arrow.faint {
+                    let (stroke, opacity) = if arrow.picked {
+                        (colour, 0.7)
+                    } else {
+                        (palette.foreground, 0.18)
+                    };
                     let _ = write!(
                         out,
-                        r#"<rect x="{x}" y="{y}" width="{}" height="{}" rx="6" fill="{}" stroke="{}" stroke-opacity="0.18"/>"#,
+                        r#"<rect x="{x}" y="{y}" width="{}" height="{}" rx="6" fill="{}" stroke="{}" stroke-opacity="{opacity}"/>"#,
                         size.0,
                         size.1,
                         hex(palette.background),
-                        hex(palette.foreground),
+                        hex(stroke),
                     );
                 }
                 let words = if arrow.faint {
@@ -398,6 +416,14 @@ fn draw_svg(
                     palette.foreground
                 };
                 let mut line_y = y + 14.;
+                if let Some(title) = &arrow.title {
+                    let shade = match arrow.title_tint {
+                        Some(tint) => domain::colour(tint, palette.dark),
+                        None => palette.foreground,
+                    };
+                    text(out, x + 6., line_y, 10.5, shade, true, title);
+                    line_y += 14.;
+                }
                 for line in &lines {
                     for part in wrap(line, size.0 - 12., 10.5) {
                         text(out, x + 6., line_y, 10.5, words, false, &part);

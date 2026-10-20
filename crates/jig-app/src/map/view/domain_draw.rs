@@ -200,7 +200,11 @@ impl MapView {
             view.scaled(region.rect.width),
             view.scaled(region.rect.height),
         );
-        let selected = lit.selected.contains(&region.key);
+        let selected = lit
+            .selected
+            .iter()
+            .any(|key| key.strip_prefix("site:").unwrap_or(key) == region.key);
+
         let target = self.drop_target() == Some(region.ix);
         let header = if region.open > 0. {
             view.scaled(region.header).min(height)
@@ -208,10 +212,15 @@ impl MapView {
             height
         };
         let dashed = region.draft || region.kind == RegionKind::Unsorted;
-        let border = if target || selected {
+        // Picked (selected, or holding what's selected): lit in its own
+        // colour, outline and fill.
+        let lit_up = selected || region.lit;
+        let border = if target {
             theme.primary
         } else if region.proposed {
             agent
+        } else if lit_up {
+            colour
         } else {
             colour.opacity(if quiet { 0.35 } else { 0.55 })
         };
@@ -254,15 +263,19 @@ impl MapView {
             .h(height)
             .rounded(px(14.))
             .border_1()
-            .when(selected || target || region.proposed, |this| {
-                this.border_2()
-            })
+            .when(lit_up || target || region.proposed, |this| this.border_2())
+            .when(selected, |this| this.shadow_lg())
             .when(dashed, |this| this.border_dashed())
             .border_color(border)
             .bg(blend(
                 theme::canvas(cx),
                 colour,
-                if quiet || region.draft { 0.04 } else { 0.1 },
+                match (quiet || region.draft, lit_up) {
+                    (true, false) => 0.04,
+                    (true, true) => 0.09,
+                    (false, false) => 0.1,
+                    (false, true) => 0.17,
+                },
             ))
             .when(region.proposed, |this| this.shadow_md())
             .opacity(region.alpha)
@@ -358,7 +371,24 @@ impl MapView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
+        let dark = theme.mode.is_dark();
         let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
+        let line_colour = match arrow.tint {
+            Some(tint) => domain::colour(tint, dark),
+            None => theme.foreground,
+        };
+        // The selected domain's: headed by the domain at the other end,
+        // its words read from the selected side.
+        let title = arrow.title.clone().map(|title| {
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(match arrow.title_tint {
+                    Some(tint) => domain::colour(tint, dark),
+                    None => theme.foreground,
+                })
+                .child(title)
+        });
+        let relative = arrow.title.is_some();
         v_flex()
             .id(("map-flow", ix))
             .debug_selector(move || format!("map-flow-{ix}"))
@@ -372,7 +402,11 @@ impl MapView {
             .when(!arrow.faint, |this| {
                 this.bg(theme::canvas(cx))
                     .border_1()
-                    .border_color(theme.foreground.opacity(0.18))
+                    .border_color(if arrow.picked {
+                        line_colour.opacity(0.7)
+                    } else {
+                        theme.foreground.opacity(0.18)
+                    })
             })
             .when(arrow.faint, |this| {
                 this.border_1().border_color(transparent_black())
@@ -381,8 +415,14 @@ impl MapView {
             .line_height(px(14.))
             .text_color(theme.foreground.opacity(0.75))
             .opacity(arrow.alpha * if arrow.faint { 0.3 } else { 1. })
-            .children(arrow.labels.iter().map(|(forward, label)| {
-                div().child(format!("{} {label}", glyph(*forward, dx, dy)))
+            .children(title)
+            .children(arrow.labels.iter().map(move |(forward, label)| {
+                let glyph = match (relative, forward) {
+                    (true, true) => "→",
+                    (true, false) => "←",
+                    (false, _) => glyph(*forward, dx, dy),
+                };
+                div().child(format!("{glyph} {label}"))
             }))
             .into_any_element()
     }

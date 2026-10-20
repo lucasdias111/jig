@@ -456,18 +456,25 @@ impl MapView {
                 width *= 1. + fired;
             }
             if arrow.link {
-                // Domains' links: steady, their flows labelled where shown.
-                width = if joined(&arrow.keys.0) || joined(&arrow.keys.1) {
+                // Domains' links: steady, their flows labelled where shown;
+                // the selected domain's stronger, in its colour.
+                width = if arrow.picked || joined(&arrow.keys.0) || joined(&arrow.keys.1) {
                     3.
                 } else {
                     2.
                 };
+                if arrow.picked {
+                    colour = match arrow.tint {
+                        Some(tint) => domain::colour(tint, theme.mode.is_dark()),
+                        None => theme.foreground.opacity(0.85),
+                    };
+                }
                 if live && !arrow.labels.is_empty() {
                     let ends = (
                         (f32::from(from.x), f32::from(from.y)),
                         (f32::from(to.x), f32::from(to.y)),
                     );
-                    let size = flow_label_size(&arrow.labels);
+                    let size = flow_label_size(&arrow.labels, arrow.title.as_deref());
                     let screen = Rect {
                         x: 0.,
                         y: 0.,
@@ -482,19 +489,25 @@ impl MapView {
                         height: size.1,
                     };
                     avoid.push(placed);
-                    // Pushed out of the way: a faint line back to its arrow.
-                    if let Some((a, b)) = leader(ends.0, ends.1, placed) {
+                    // Pushed out of the way: a line back to its arrow, in the
+                    // arrow's colour and ending in a dot on it when it's the
+                    // selected domain's, else faint.
+                    if let Some((on, edge)) = leader(ends.0, ends.1, placed) {
+                        let (shade, width, dot) = if arrow.picked {
+                            (colour.opacity(0.7 * arrow.alpha), 1.5, Some((1., colour)))
+                        } else {
+                            let a = if arrow.faint { 0.08 } else { 0.22 };
+                            (theme.foreground.opacity(a * arrow.alpha), 1., None)
+                        };
                         lines.push(Line {
-                            from: point(px(a.0), px(a.1)),
-                            to: point(px(b.0), px(b.1)),
-                            colour: theme
-                                .foreground
-                                .opacity(if arrow.faint { 0.08 } else { 0.22 } * arrow.alpha),
-                            width: 1.,
-                            dashed: true,
+                            from: point(px(edge.0), px(edge.1)),
+                            to: point(px(on.0), px(on.1)),
+                            colour: shade,
+                            width,
+                            dashed: !arrow.picked,
                             across: false,
                             zoom: 1.,
-                            pulse: None,
+                            pulse: dot,
                             heads: (false, false),
                         });
                     }
@@ -1292,22 +1305,21 @@ pub(super) const FLOW_LABEL_WIDTH: f32 = 180.;
 
 /// How big a flow label is on screen, roughly: its lines at 10.5 points,
 /// wrapping at `FLOW_LABEL_WIDTH`.
-pub(super) fn flow_label_size(labels: &[(bool, String)]) -> (f32, f32) {
+pub(super) fn flow_label_size(labels: &[(bool, String)], title: Option<&str>) -> (f32, f32) {
     let per_char = 5.9;
     let room = FLOW_LABEL_WIDTH - 14.;
-    let widest = labels
+    let lines = labels
         .iter()
-        .map(|(_, label)| (label.chars().count() + 2) as f32 * per_char)
+        .map(|(_, label)| label.chars().count() + 2)
+        .chain(title.map(|title| title.chars().count()));
+    let widest = lines
+        .clone()
+        .map(|chars| chars as f32 * per_char)
         .fold(0., f32::max);
-    let lines: f32 = labels
-        .iter()
-        .map(|(_, label)| {
-            (((label.chars().count() + 2) as f32 * per_char) / room)
-                .ceil()
-                .max(1.)
-        })
+    let count: f32 = lines
+        .map(|chars| ((chars as f32 * per_char) / room).ceil().max(1.))
         .sum();
-    ((widest + 14.).min(FLOW_LABEL_WIDTH), lines * 14. + 6.)
+    ((widest + 14.).min(FLOW_LABEL_WIDTH), count * 14. + 6.)
 }
 
 /// Where a label `size` big goes for the bowed arrow from `from` to `to`,
