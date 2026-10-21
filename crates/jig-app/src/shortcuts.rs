@@ -463,7 +463,8 @@ pub const ALL: &[Shortcut] = &[
         "zoom_in",
         "Bigger code font, or zoom the Map in",
         View,
-        ["secondary-="],
+        // ⌘= where + is shifted (US), ⌘+ where it has its own key (Danish).
+        ["secondary-=", "secondary-+"],
         ANYWHERE,
         ZoomIn
     ),

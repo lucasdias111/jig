@@ -275,6 +275,9 @@ fn command_plus_and_minus_zoom_the_map_in_steps(cx: &mut TestAppContext) {
     assert!(zoom(cx) < start, "a step further out");
     press(cx, window, "secondary-0");
     assert!((zoom(cx) - start).abs() < 0.01, "the Plan as it starts");
+    // ⌘+ as well, where + has its own key.
+    press(cx, window, "secondary-+");
+    assert!(zoom(cx) > start * 1.2, "⌘+ is closer too");
 }
 
 #[gpui_kit::test]
