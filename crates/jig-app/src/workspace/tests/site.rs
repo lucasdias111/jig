@@ -416,3 +416,28 @@ fn a_file_the_index_cannot_read_has_a_plan_of_what_links_to_it(cx: &mut TestAppC
     let title = cx.update(|cx| workspace.read(cx).document().title());
     assert_eq!(title, "Form.svelte");
 }
+
+#[gpui_kit::test]
+fn a_selected_box_lights_the_arrows_carrying_its_calls(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx, true);
+    let view = to_plan(cx, window, &workspace);
+    press(cx, window, "secondary-up");
+    settle(cx, window, &view);
+    // book.rs is selected: cancel.rs calls it, so that arrow is lit.
+    let arrows = cx.update(|cx| view.read(cx).site_arrows_lit());
+    let call = (
+        "file:api/src/bookings/cancel.rs".to_string(),
+        "file:api/src/bookings/book.rs".to_string(),
+    );
+    assert!(arrows.contains(&(call, Some(true))), "{arrows:?}");
+    assert_eq!(
+        arrows.iter().filter(|(_, lit)| *lit == Some(true)).count(),
+        1,
+        "only its own: {arrows:?}"
+    );
+    // Nothing selected: none lit, none faded.
+    press(cx, window, "escape");
+    draw(cx, window);
+    let arrows = cx.update(|cx| view.read(cx).site_arrows_lit());
+    assert!(arrows.iter().all(|(_, lit)| lit.is_none()), "{arrows:?}");
+}

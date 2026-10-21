@@ -161,6 +161,9 @@ pub struct Arrow {
     pub tint: Option<usize>,
     pub title: Option<String>,
     pub title_tint: Option<usize>,
+    /// At Site, an arrow of the box selected (or of the box standing for
+    /// it): drawn stronger, the others fainter.
+    pub lit: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -276,6 +279,7 @@ impl MapView {
                 tint: None,
                 title: None,
                 title_tint: None,
+                lit: None,
                 alpha: self
                     .arriving(&self.plan.nodes[wire.from].key, now)
                     .min(self.arriving(&self.plan.nodes[wire.to].key, now)),
@@ -387,6 +391,14 @@ impl MapView {
         // Arrows join the boxes showing, as a box is counted open half way.
         let shown = site.shown_as(|ix| site.nodes[ix].opening(zoom) >= 0.5);
         let arrows = self.site_arrows(site, &shown);
+        // The box selected, as the boxes showing stand for it: its arrows
+        // lit, the rest fainter.
+        let chosen: Option<usize> = self
+            .selected
+            .iter()
+            .find_map(|key| site.index_of(key.strip_prefix("site:")?))
+            .filter(|&ix| !matches!(site.nodes[ix].kind, Kind::Region(_) | Kind::Root));
+        let carrying = chosen.map(|ix| site.arrows_of(ix, &shown));
         for arrow in arrows
             .iter()
             .filter(|arrow| {
@@ -416,6 +428,9 @@ impl MapView {
                 tint: None,
                 title: None,
                 title_tint: None,
+                lit: carrying
+                    .as_ref()
+                    .map(|pairs| pairs.contains(&(arrow.from, arrow.to))),
             });
         }
         // Between regions, the domains' links, one per pair; what flows

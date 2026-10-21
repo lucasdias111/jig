@@ -504,7 +504,11 @@ impl MapView {
         for (ix, arrow) in scene.arrows.iter().enumerate() {
             let (from, to) = (view.point(arrow.from), view.point(arrow.to));
             let joined = |key: &str| {
-                lit.hovered.as_deref() == Some(key) || lit.selected.iter().any(|s| s == key)
+                lit.hovered.as_deref() == Some(key)
+                    || lit
+                        .selected
+                        .iter()
+                        .any(|s| s.strip_prefix("site:").unwrap_or(s) == key)
             };
             let on_path = path
                 .windows(2)
@@ -517,9 +521,19 @@ impl MapView {
                 Some(calls) => (1. + (calls.count as f32).sqrt() * 0.9).clamp(1.2, 7.),
                 None => (2. * view.camera.zoom).max(1.),
             };
-            if joined(&arrow.keys.0) || joined(&arrow.keys.1) {
-                colour = theme.foreground.opacity(0.85);
-                width *= 1.4;
+            // A box selected at Site: the arrows carrying its calls lit, the
+            // rest fainter.
+            match arrow.lit {
+                Some(true) => {
+                    colour = theme.foreground.opacity(0.85);
+                    width *= 1.4;
+                }
+                Some(false) => colour = theme.foreground.opacity(0.12),
+                None if joined(&arrow.keys.0) || joined(&arrow.keys.1) => {
+                    colour = theme.foreground.opacity(0.85);
+                    width *= 1.4;
+                }
+                None => {}
             }
             if on_path {
                 colour = theme.blue;

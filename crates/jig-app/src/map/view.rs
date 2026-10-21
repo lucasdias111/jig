@@ -947,6 +947,18 @@ impl MapView {
         self.drawn.borrow().arrows.iter().filter(|a| a.link).count()
     }
 
+    /// The arrows drawn at Site between boxes, by their ends' keys, and
+    /// whether each is lit for the box selected (`None`: nothing is).
+    pub fn site_arrows_lit(&self) -> Vec<((String, String), Option<bool>)> {
+        self.drawn
+            .borrow()
+            .arrows
+            .iter()
+            .filter(|arrow| !arrow.link)
+            .map(|arrow| (arrow.keys.clone(), arrow.lit))
+            .collect()
+    }
+
     /// The regions drawn lit, by key.
     pub fn lit_regions(&self) -> Vec<String> {
         self.drawn

@@ -908,6 +908,7 @@ pub(super) fn link_arrow(level: &DomainLevel, link: &super::super::domains::leve
         tint: None,
         title: None,
         title_tint: None,
+        lit: None,
     }
 }
 

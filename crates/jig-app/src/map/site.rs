@@ -429,6 +429,24 @@ impl Site {
         arrows
     }
 
+    /// The arrows, as `arrows` gives them for `shown`, that carry a call
+    /// into or out of node `chosen` or what's inside it.
+    pub fn arrows_of(&self, chosen: usize, shown: &[usize]) -> Vec<(usize, usize)> {
+        let inside = |ix: usize| self.ancestry(ix).any(|n| n == chosen);
+        let mut found = Vec::new();
+        for &(from, to) in self.calls.keys() {
+            if self.nodes[from].region != self.nodes[to].region || !(inside(from) || inside(to)) {
+                continue;
+            }
+            if let Some(pair) = self.side_by_side(shown[from], shown[to])
+                && !found.contains(&pair)
+            {
+                found.push(pair);
+            }
+        }
+        found
+    }
+
     /// The two boxes side by side, in the box holding both, that hold `a`
     /// and `b`; none when one holds the other.
     fn side_by_side(&self, a: usize, b: usize) -> Option<(usize, usize)> {
