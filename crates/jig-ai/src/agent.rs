@@ -3,6 +3,7 @@
 pub mod acp;
 pub mod harness;
 pub mod opencode;
+pub mod read_only;
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};

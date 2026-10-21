@@ -350,11 +350,13 @@ fn index_domains_with_the_maps_tools_asks_for_nothing(cx: &mut TestAppContext) {
     );
     press(cx, window, "secondary-enter");
     assert!(saved(&dir).contains("label = \"asks for events\""));
-    // Outside a Map action, a command still asks.
+    // Outside a Map action, a command that only reads goes ahead too, and
+    // others still ask.
     send_outside_a_map_action(cx, window, &workspace);
 }
 
-/// A conversation at the code: a command that only reads still asks.
+/// A conversation at the code: a command that only reads goes ahead, one
+/// that builds asks.
 fn send_outside_a_map_action(
     cx: &mut TestAppContext,
     window: AnyWindowHandle,
@@ -364,27 +366,33 @@ fn send_outside_a_map_action(
     press(cx, window, "secondary-k");
     type_slowly(cx, window, "Explain this");
     press(cx, window, "enter");
-    let ws = workspace.clone();
-    step(cx, window, move |window, cx| {
-        ws.update(cx, |this, cx| {
-            this.test_agent_request(
-                jig_ai::agent::AgentEvent::Permission(jig_ai::agent::PermissionRequest {
-                    id: "per_3".into(),
-                    title: "Run a command".into(),
-                    detail: "ls src 2>/dev/null".into(),
-                    kind: jig_ai::agent::Asking::Command,
-                    always: None,
-                    task: None,
-                }),
-                window,
-                cx,
-            )
-        })
-    });
-    assert_eq!(
-        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
-        Some("permission")
-    );
+    for (id, command, waits) in [
+        ("per_3", "ls src 2>/dev/null", None),
+        ("per_4", "cargo build", Some("permission")),
+    ] {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                this.test_agent_request(
+                    jig_ai::agent::AgentEvent::Permission(jig_ai::agent::PermissionRequest {
+                        id: id.into(),
+                        title: "Run a command".into(),
+                        detail: command.into(),
+                        kind: jig_ai::agent::Asking::Command,
+                        always: None,
+                        task: None,
+                    }),
+                    window,
+                    cx,
+                )
+            })
+        });
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+            waits,
+            "{command}"
+        );
+    }
 }
 
 #[gpui_kit::test]

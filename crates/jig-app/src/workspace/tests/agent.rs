@@ -216,10 +216,10 @@ fn always_allowing_stops_the_asking_for_the_conversation(cx: &mut TestAppContext
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
         ws.update(cx, |this, cx| {
-            let mut asking = permission("ls");
+            let mut asking = permission("cargo fmt");
             if let jig_ai::agent::AgentEvent::Permission(request) = &mut asking {
                 request.title = "Use the web".into();
-                request.always = Some("Always allow `ls`".into());
+                request.always = Some("Always allow `cargo fmt`".into());
             }
             this.test_agent_request(asking, window, cx)
         })
@@ -232,7 +232,7 @@ fn always_allowing_stops_the_asking_for_the_conversation(cx: &mut TestAppContext
     let entries = cx.update(|cx| workspace.read(cx).agent_entries());
     assert_eq!(
         entries.last(),
-        Some(&ChatEntry::Note("Always allow `ls`.".into()))
+        Some(&ChatEntry::Note("Always allow `cargo fmt`.".into()))
     );
 }
 
@@ -1121,7 +1121,7 @@ fn an_edit_is_settled_with_its_buttons(cx: &mut TestAppContext) {
 fn a_long_command_scrolls_and_leaves_its_buttons_in_reach(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     let command = (1..=200)
-        .map(|n| format!("echo line {n}"))
+        .map(|n| format!("touch line{n}"))
         .collect::<Vec<_>>()
         .join(" && \n");
     let ws = workspace.clone();

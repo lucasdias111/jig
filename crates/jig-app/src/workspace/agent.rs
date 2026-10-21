@@ -18,8 +18,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::agent::acp::SignInNeeded;
 use jig_ai::agent::harness::Session;
+use jig_ai::agent::read_only::command_only_reads;
 use jig_ai::agent::{
-    AgentEvent, AgentRequest, EditRequest, PermissionRequest, QuestionRequest, Turn,
+    AgentEvent, AgentRequest, Asking, EditRequest, PermissionRequest, QuestionRequest, Turn,
 };
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus,
@@ -935,9 +936,12 @@ impl Workspace {
     /// reads: for live tests, which allow those and nothing else.
     #[cfg(test)]
     pub(super) fn waiting_on_a_read(&self) -> bool {
+        let Some(agent) = self.chat.as_ref().and_then(|run| run.agent.as_ref()) else {
+            return false;
+        };
         matches!(
-            self.chat.as_ref().and_then(|run| run.agent.as_ref()).and_then(|a| a.pending.as_ref()),
-            Some(Pending::Permission(request)) if crate::map::domains::actions::only_reads(request)
+            agent.pending.as_ref(),
+            Some(Pending::Permission(request)) if only_reads(request, &agent.directory)
         )
     }
 
@@ -2113,11 +2117,14 @@ impl Workspace {
             }
             // Asked in the conversation, answered with the review keys in
             // the code.
-            // Allowed always earlier in this conversation, or, for a Map
-            // action, anything that only reads.
+            // Allowed always earlier in this conversation, a shell command
+            // that only reads the project, or, for a Map action, anything
+            // that only reads.
             Some(Request::Permission(request))
                 if agent.always_allowed.contains(&request.title)
-                    || (agent.map_action.is_some() && only_reads(&request)) =>
+                    || (request.kind == Asking::Command
+                        && command_only_reads(&request.detail, &agent.directory))
+                    || (agent.map_action.is_some() && only_reads(&request, &agent.directory)) =>
             {
                 if let Some(session) = agent.session.clone() {
                     cx.background_executor()

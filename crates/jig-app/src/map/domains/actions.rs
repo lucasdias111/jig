@@ -6,6 +6,9 @@
 //! what was confirmed.
 
 use anyhow::{Result, bail};
+use std::path::Path;
+
+use jig_ai::agent::read_only::command_only_reads;
 use jig_ai::agent::{Asking, PermissionRequest};
 
 use super::{Domain, Domains, Flow, Home};
@@ -343,156 +346,13 @@ The saved domains:
     )
 }
 
-/// Whether a shell command only reads: every command in it is one that
-/// looks and changes nothing, with no writing to files. Map actions let
-/// these run without asking.
-pub fn read_only_command(command: &str) -> bool {
-    const READERS: &[&str] = &[
-        "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "ag", "find", "fd", "wc",
-        "sort", "uniq", "tree", "file", "stat", "pwd", "echo", "cut", "tr", "nl", "less", "more",
-        "du", "basename", "dirname", "realpath", "readlink", "which", "awk", "sed", "jq", "column",
-        "diff", "cd", "true", "printf", "xargs",
-    ];
-    const GIT_READERS: &[&str] = &[
-        "ls-files",
-        "log",
-        "show",
-        "status",
-        "diff",
-        "grep",
-        "blame",
-        "branch",
-        "rev-parse",
-        "shortlog",
-        "ls-tree",
-        "cat-file",
-    ];
-    let Some(parts) = simple_commands(command) else {
-        return false;
-    };
-    parts.iter().map(|part| part.as_str()).all(|part| {
-        let words: Vec<&str> = part.split_whitespace().collect();
-        let Some(&program) = words.first() else {
-            return true;
-        };
-        let program = program.rsplit('/').next().unwrap_or(program);
-        match program {
-            "git" => words
-                .iter()
-                .skip(1)
-                .find(|word| !word.starts_with('-'))
-                .is_some_and(|sub| GIT_READERS.contains(sub)),
-            "find" | "fd" => !words.iter().any(|word| {
-                matches!(
-                    *word,
-                    "-exec" | "-execdir" | "-delete" | "-ok" | "-okdir" | "-x" | "-X"
-                )
-            }),
-            "sed" => !words.iter().any(|word| word.starts_with("-i")),
-            "awk" => !part.contains("system"),
-            "xargs" => words
-                .iter()
-                .skip(1)
-                .find(|word| !word.starts_with('-'))
-                .is_some_and(|next| READERS.contains(next) && *next != "xargs"),
-            _ => READERS.contains(&program),
-        }
-    })
-}
-
-/// A command's simple commands, split at `|`, `;`, `&` and new lines
-/// outside quotes, with redirections that throw output away
-/// (`2>/dev/null`, `>/dev/null`, `&>/dev/null`, `2>&1`) left out. `None`
-/// when it writes anywhere else or runs a command inside it.
-fn simple_commands(command: &str) -> Option<Vec<String>> {
-    let chars: Vec<char> = command.chars().collect();
-    let mut parts = vec![String::new()];
-    let mut quote: Option<char> = None;
-    let mut at = 0;
-    while at < chars.len() {
-        let c = chars[at];
-        let next = chars.get(at + 1).copied();
-        let part = parts.last_mut().expect("one part at least");
-        match quote {
-            Some(open) => {
-                // Double quotes still substitute commands.
-                if open == '"' && (c == '`' || (c == '$' && next == Some('('))) {
-                    return None;
-                }
-                if c == open {
-                    quote = None;
-                } else if c == '\\'
-                    && open == '"'
-                    && let Some(next) = next
-                {
-                    part.push(c);
-                    part.push(next);
-                    at += 2;
-                    continue;
-                }
-                part.push(c);
-            }
-            None => match c {
-                '\'' | '"' => {
-                    quote = Some(c);
-                    part.push(c);
-                }
-                '`' => return None,
-                '$' | '<' if next == Some('(') => return None,
-                '\\' => {
-                    part.push(c);
-                    if let Some(next) = next {
-                        part.push(next);
-                        at += 1;
-                    }
-                }
-                '&' if next == Some('>') => {}
-                '|' | ';' | '&' | '\n' => parts.push(String::new()),
-                '>' => {
-                    // The descriptor written against it goes too.
-                    while part.ends_with(|c: char| c.is_ascii_digit()) {
-                        part.pop();
-                    }
-                    let rest: String = chars[at + 1..].iter().collect();
-                    if rest.starts_with("&1") || rest.starts_with("&2") {
-                        at += 3;
-                        continue;
-                    }
-                    let target = rest.trim_start();
-                    let spaces = rest.chars().count() - target.chars().count();
-                    let quiet = target.strip_prefix("/dev/null").is_some_and(|after| {
-                        after
-                            .chars()
-                            .next()
-                            .is_none_or(|c| c.is_whitespace() || matches!(c, ';' | '|' | '&' | ')'))
-                    });
-                    if !quiet {
-                        return None;
-                    }
-                    part.push(' ');
-                    at += 1 + spaces + "/dev/null".len();
-                    continue;
-                }
-                _ => part.push(c),
-            },
-        }
-        at += 1;
-    }
-    Some(
-        parts
-            .into_iter()
-            .map(|part| part.trim().to_string())
-            .filter(|part| !part.is_empty())
-            .collect(),
-    )
-}
-
 /// Whether `request` may go ahead without asking during a Map action:
 /// it only reads, whatever the agent titles it. A shell command that only
-/// reads, reading and searching, or a subagent that only looks around.
-pub fn only_reads(request: &PermissionRequest) -> bool {
+/// reads in `project`, reading and searching, or a subagent that only
+/// looks around.
+pub fn only_reads(request: &PermissionRequest, project: &Path) -> bool {
     match request.kind {
-        Asking::Command => read_only_command(&request.detail),
+        Asking::Command => command_only_reads(&request.detail, project),
         Asking::Read => true,
         Asking::Subagent { explores } => explores,
         Asking::Web | Asking::Other => false,
@@ -617,42 +477,6 @@ label = "cancels into"
     }
 
     #[test]
-    fn only_commands_that_read_run_without_asking() {
-        for command in [
-            "ls -la src",
-            "rg -n \"fn main\" crates | head -20",
-            "cd src && git ls-files | wc -l",
-            "sed -n 1,80p src/main.rs",
-            "find . -name '*.rs' | xargs grep -l Booking",
-            "ls src/bookings 2>/dev/null",
-            "find . -name '*.svelte' 2> /dev/null | head -50",
-            "cat package.json >/dev/null 2>&1",
-            "rg -n 'book|pay' src &>/dev/null",
-            "grep -E \"Booking|Payment\" -r src | sort",
-            "rg -n '->' src",
-        ] {
-            assert!(read_only_command(command), "{command}");
-        }
-        for command in [
-            "rm -rf target",
-            "echo hi > notes.txt",
-            "sed -i s/a/b/ src/main.rs",
-            "find . -name '*.tmp' -delete",
-            "git checkout main",
-            "cat $(which python)",
-            "npm install",
-            "ls > files.txt 2>/dev/null",
-            "cat a >> /dev/nullish",
-            "grep x src 2>errors.log",
-            "echo \"$(rm -rf src)\"",
-            "diff <(rm -rf src) b",
-            "ls; rm -rf src 2>/dev/null",
-        ] {
-            assert!(!read_only_command(command), "{command}");
-        }
-    }
-
-    #[test]
     fn requests_are_known_by_what_they_do() {
         let request = |kind: Asking, detail: &str| PermissionRequest {
             id: "1".into(),
@@ -662,18 +486,19 @@ label = "cancels into"
             always: None,
             task: None,
         };
-        assert!(only_reads(&request(Asking::Command, "ls 2>/dev/null")));
-        assert!(!only_reads(&request(Asking::Command, "rm -rf src")));
-        assert!(only_reads(&request(Asking::Read, "src/main.rs")));
-        assert!(only_reads(&request(
+        let reads = |request| only_reads(&request, Path::new("/p"));
+        assert!(reads(request(Asking::Command, "ls 2>/dev/null")));
+        assert!(!reads(request(Asking::Command, "rm -rf src")));
+        assert!(reads(request(Asking::Read, "src/main.rs")));
+        assert!(reads(request(
             Asking::Subagent { explores: true },
             "Find the routes"
         )));
-        assert!(!only_reads(&request(
+        assert!(!reads(request(
             Asking::Subagent { explores: false },
             "Do it"
         )));
-        assert!(!only_reads(&request(Asking::Web, "https://example.com")));
-        assert!(!only_reads(&request(Asking::Other, "ls")));
+        assert!(!reads(request(Asking::Web, "https://example.com")));
+        assert!(!reads(request(Asking::Other, "ls")));
     }
 }
