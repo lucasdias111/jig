@@ -423,7 +423,7 @@ impl Workspace {
         }
 
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
+        let resume = move || {
             let send = |message| {
                 let _ = sender.unbounded_send(message);
             };
@@ -441,7 +441,14 @@ impl Workspace {
                 anyhow::Ok(Message::Resumed(session, turns))
             })();
             send(result.unwrap_or_else(failure));
-        });
+        };
+        // On a thread of its own, as a turn is (see `start_turn`).
+        #[cfg(not(test))]
+        std::thread::spawn(resume);
+        #[cfg(test)]
+        cx.background_executor()
+            .spawn(async move { resume() })
+            .detach();
         let task = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = messages.next().await {
                 let alive = this
@@ -1007,7 +1014,7 @@ impl Workspace {
         };
 
         let (sender, mut messages) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
+        let turn = move || {
             let send = |message| {
                 let _ = sender.unbounded_send(message);
             };
@@ -1042,7 +1049,16 @@ impl Workspace {
             if let Err(error) = result {
                 send(failure(error));
             }
-        });
+        };
+        // A turn blocks on the agent, so it has a thread of its own. Under
+        // test it runs on the test scheduler instead, which fails a test
+        // when another thread wakes it, as this one's messages would.
+        #[cfg(not(test))]
+        std::thread::spawn(turn);
+        #[cfg(test)]
+        cx.background_executor()
+            .spawn(async move { turn() })
+            .detach();
         let task = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = messages.next().await {
                 let alive = this
