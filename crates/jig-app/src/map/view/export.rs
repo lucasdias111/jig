@@ -161,11 +161,41 @@ impl MapView {
             height: rect.height * camera.zoom,
         };
         let picture = self.sketch_picture(&screen);
-        if picture.is_empty() {
+        let marks = self.sketch_marks();
+        if picture.is_empty() && marks.is_empty() {
             return svg;
         }
         let mut out = svg.trim_end_matches("</svg>").to_string();
         draw_sketches(&mut out, &picture, palette);
+        // The sketches of other levels, marked on the boxes carrying them.
+        let ink = hex(palette.foreground);
+        for (landing, names) in marks {
+            let rect = screen(landing.rect);
+            let titles: Vec<String> = names
+                .iter()
+                .filter_map(|name| self.sketch(name).map(|s| s.title.clone()))
+                .collect();
+            let label = match titles.as_slice() {
+                [one] => format!("✎ {one}"),
+                many => format!("✎ {} sketches", many.len()),
+            };
+            let width = label.chars().count() as f32 * 6.6 + 16.;
+            let (x, y) = (rect.right() - 8., rect.y - 10.);
+            let _ = write!(
+                out,
+                r#"<rect x="{x}" y="{y}" width="{width}" height="20" rx="10" fill="{}" stroke="{ink}" stroke-opacity="0.8" stroke-dasharray="4 3"/>"#,
+                hex(palette.card)
+            );
+            text(
+                &mut out,
+                x + 8.,
+                y + 14.,
+                11.,
+                palette.foreground,
+                false,
+                &label,
+            );
+        }
         out.push_str("</svg>");
         out
     }

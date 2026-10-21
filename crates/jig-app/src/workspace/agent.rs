@@ -926,6 +926,16 @@ impl Workspace {
         }
     }
 
+    /// Whether the conversation waits on a go-ahead for something that only
+    /// reads: for live tests, which allow those and nothing else.
+    #[cfg(test)]
+    pub(super) fn waiting_on_a_read(&self) -> bool {
+        matches!(
+            self.chat.as_ref().and_then(|run| run.agent.as_ref()).and_then(|a| a.pending.as_ref()),
+            Some(Pending::Permission(request)) if crate::map::domains::actions::only_reads(request)
+        )
+    }
+
     /// What the conversation waits on the user for, in a word.
     #[cfg(test)]
     pub(super) fn agent_waiting_on(&self) -> Option<&'static str> {

@@ -629,14 +629,34 @@ fn sketch_pictures_live(cx: &mut TestAppContext) {
     }
 }
 
-/// Wait for the agent's turn to end, up to `seconds`.
-fn wait_for_turn(cx: &mut TestAppContext, workspace: &Entity<Workspace>, seconds: u64) {
+/// Wait for the agent's turn to end, up to `seconds`, allowing what only
+/// reads and turning down anything else it asks to do.
+fn wait_for_turn(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    workspace: &Entity<Workspace>,
+    seconds: u64,
+) {
     let started = std::time::Instant::now();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(500));
         cx.run_until_parked();
+        let waiting = cx.update(|cx| {
+            let this = workspace.read(cx);
+            this.agent_waiting_on()
+                .map(|what| (what, this.waiting_on_a_read()))
+        });
+        if let Some((what, reads)) = waiting {
+            println!("the agent asks: {what}, only reading: {reads}");
+            let ws = workspace.clone();
+            step(cx, window, move |window, cx| {
+                ws.update(cx, |this, cx| {
+                    this.settle_agent_request(reads, window, cx);
+                })
+            });
+        }
         let done = cx.update(|cx| {
             workspace
                 .read(cx)
@@ -711,7 +731,7 @@ fn sketch_agent_live(cx: &mut TestAppContext) {
         window.input(&ask, cx);
     });
     press(cx, window, "enter");
-    wait_for_turn(cx, &workspace, 300);
+    wait_for_turn(cx, window, &workspace, 1500);
     let entries = cx.update(|cx| workspace.read(cx).agent_entries());
     for entry in &entries {
         println!("{entry:?}");
@@ -724,14 +744,14 @@ fn sketch_agent_live(cx: &mut TestAppContext) {
     let make = name.clone();
     view.update(cx, |view, cx| view.make_task(&make, cx));
     cx.run_until_parked();
-    wait_for_turn(cx, &workspace, 300);
+    wait_for_turn(cx, window, &workspace, 1500);
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
         ws.update(cx, |this, cx| {
             this.send_to_agent("Yes, save it as a task.".into(), window, cx)
         })
     });
-    wait_for_turn(cx, &workspace, 300);
+    wait_for_turn(cx, window, &workspace, 1500);
     let entries = cx.update(|cx| workspace.read(cx).agent_entries());
     for entry in entries.iter().rev().take(8) {
         println!("{entry:?}");
