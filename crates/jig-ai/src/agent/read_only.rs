@@ -490,11 +490,14 @@ mod tests {
             "awk 'BEGIN{system(\"rm x\")}'",
             "cat ~/.ssh/id_rsa",
             "cat $HOME/.ssh/id_rsa",
-            "cat /etc/hosts",
             "ls ..",
             "cd .. && ls",
-            "grep -r token /etc/*",
         ] {
+            assert!(!command_only_reads(command, project.path()), "{command}");
+        }
+        // Folders only Unix has: elsewhere they don't exist, so read nothing.
+        #[cfg(unix)]
+        for command in ["cat /etc/hosts", "grep -r token /etc/*"] {
             assert!(!command_only_reads(command, project.path()), "{command}");
         }
     }
