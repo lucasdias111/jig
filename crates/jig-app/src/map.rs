@@ -5,7 +5,8 @@
 //! `outline` reads a file, `index` the whole project; `plan` builds the
 //! neighbourhood of a function or a module (`files` the links of a file
 //! the index can't read), `site` the whole project nested; `layout`
-//! places Plan's boxes; `lens` is what the agent draws on it; `view` draws
+//! places Plan's boxes; `lens` is what the agent draws on it, `sketch`
+//! what the user does; `view` draws
 //! the canvas, zooms between the levels and takes the gestures.
 
 pub mod debug;
@@ -17,4 +18,5 @@ pub mod lens;
 pub mod outline;
 pub mod plan;
 pub mod site;
+pub mod sketch;
 pub mod view;

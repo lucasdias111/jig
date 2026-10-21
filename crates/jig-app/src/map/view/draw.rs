@@ -218,6 +218,20 @@ impl MapView {
             .on_click(cx.listener(|this, _, _, cx| this.explain_level(cx)))
         });
         let domain_buttons = (self.level == Level::Domain).then(|| self.render_domain_buttons(cx));
+        let sketches = (!self.sketches.sketches.is_empty()).then(|| {
+            button(
+                "map-sketches",
+                "Sketches",
+                "Every sketch, archived ones too",
+            )
+            .when(self.sketches.list_open, |this| {
+                this.bg(theme.foreground.opacity(0.1))
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.sketches.list_open = !this.sketches.list_open;
+                cx.notify();
+            }))
+        });
         let export = self.render_export_button(cx);
         h_flex()
             .flex_none()
@@ -245,6 +259,7 @@ impl MapView {
                     .flex_none()
                     .gap_2()
                     .children(explain)
+                    .children(sketches)
                     .children(domain_buttons)
                     .children(pinned)
                     .children(tests)
@@ -407,10 +422,16 @@ impl MapView {
             .children(leaving)
             .child(current)
             .child(over)
+            .children(self.render_sketches(view, cx))
             .children(self.render_lens(view, cx))
             .children(self.render_marquee(cx))
             .children(self.render_domain_overlay(cx))
             .children(self.render_hover(cx))
+            .children(self.render_tool_strip(cx))
+            .children(self.render_sketch_list(cx))
+            .when(self.tool() != super::sketch::Tool::Pointer, |this| {
+                this.cursor_crosshair()
+            })
             .when(empty, |this| {
                 this.child(
                     div()
@@ -1242,7 +1263,17 @@ impl MapView {
             .as_ref()
             .filter(|(_, at)| at.elapsed().as_secs() < 4)
             .map(|(text, _)| text.clone());
-        let text = notice.unwrap_or_else(|| {
+        let drawing = match self.tool() {
+            super::sketch::Tool::Pointer => None,
+            super::sketch::Tool::Arrow => {
+                Some("Drag from a box to another, or off a box to a new one · Esc for the pointer")
+            }
+            super::sketch::Tool::Note => Some(
+                "Click a box to note on it, or anywhere for a loose note · Esc for the pointer",
+            ),
+            _ => Some("Click or drag to draw · Esc for the pointer"),
+        };
+        let text = notice.or(drawing.map(String::from)).unwrap_or_else(|| {
             match self.level {
                 Level::Domain if self.drafts() => {
                     "Jig's own grouping, from folders and calls · zoom into a group to open it onto its code · ⌘↓ or Enter enters"

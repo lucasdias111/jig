@@ -140,6 +140,16 @@ impl Workspace {
         };
     }
 
+    /// The planner's task `id` shown, from a sketch's bar.
+    pub(super) fn show_task(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.planner_shown() {
+            self.toggle_sidebar_view(super::sidebar::SidebarView::Tasks, window, cx);
+        }
+        if let Some(view) = self.planner.view.clone() {
+            view.update(cx, |planner, cx| planner.reveal(id, cx));
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn planner_view(&self) -> Option<&Entity<TaskPlanner>> {
         self.planner.view.as_ref()
@@ -167,6 +177,13 @@ impl Workspace {
             return;
         };
         let arrived = view.update(cx, |planner, cx| planner.reload(cx));
+        // A task made from a sketch links back to it.
+        if let Some(map) = self.map.as_ref() {
+            map.view.update(cx, |map, cx| {
+                map.link_tasks();
+                cx.notify();
+            });
+        }
         if arrived && !self.planner_shown() {
             self.planner.unseen = true;
             cx.notify();
@@ -374,6 +391,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A sketch on the Map, not its file.
+        if let Some(sketch) = crate::map::sketch::of_link(&link.path) {
+            return self.show_sketch(&sketch, window, cx);
+        }
         if !path.is_file() {
             self.show_error(
                 &format!("The task links to {}, which isn't there.", link.path),

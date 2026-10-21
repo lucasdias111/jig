@@ -20,6 +20,8 @@ mod input;
 pub mod lens;
 mod lens_draw;
 mod scene;
+pub mod sketch;
+mod sketch_draw;
 mod zoom;
 
 use std::cell::{Cell, RefCell};
@@ -103,6 +105,13 @@ pub enum MapEvent {
     Settled(usize, bool),
     /// What to do with the conversation's proposal (by its id).
     Proposal(usize, lens_draw::ProposalChoice),
+    /// Start a conversation named `.0`, the agent asked `.1` about what's
+    /// selected: a sketch's Make Task.
+    Converse(String, String),
+    /// Implement the planner task `.0`, made from sketch `.1`.
+    Implement(String, String),
+    /// Show the planner task with this id.
+    OpenTask(String),
 }
 
 pub struct MapView {
@@ -160,6 +169,8 @@ pub struct MapView {
     arriving_at: Option<(Rect, Vec<usize>)>,
     /// What the agent drew, and the pins.
     lens: lens::LensState,
+    /// The user's sketches, and the tool picked.
+    sketches: sketch::SketchState,
 }
 
 impl EventEmitter<MapEvent> for MapView {}
@@ -207,6 +218,7 @@ impl MapView {
             domains: domain::DomainState::default(),
             arriving_at: None,
             lens: lens::LensState::default(),
+            sketches: sketch::SketchState::default(),
         }
     }
 
@@ -238,6 +250,7 @@ impl MapView {
         self.reload_pins();
         self.reload_domains();
         self.rebuild(true);
+        self.reload_sketches();
         self.on_stack = self.stack_functions();
         self.ask_server(cx);
         cx.emit(MapEvent::LiveLines);
@@ -358,8 +371,9 @@ impl MapView {
         self.placed.refit(&self.plan);
         self.glide = (glide && !was.is_empty()).then(|| (was, Instant::now()));
         let keys: Vec<&String> = self.plan.nodes.iter().map(|n| &n.key).collect();
-        self.selected
-            .retain(|key| keys.contains(&key) || key.starts_with("site:"));
+        self.selected.retain(|key| {
+            keys.contains(&key) || key.starts_with("site:") || key.starts_with("sketch:")
+        });
     }
 
     /// Where each of the Plan's boxes is now, by key.

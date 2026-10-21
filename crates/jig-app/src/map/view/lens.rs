@@ -224,6 +224,17 @@ impl MapView {
 
     /// The place named `name`, as the project has it.
     pub(super) fn place(&self, name: &str) -> Option<Place> {
+        // The user's sketches change as they draw: never kept.
+        if let Some((sketch, shape)) = super::super::sketch::parse_place(name) {
+            let found = self.sketch(&sketch)?;
+            let shape = found
+                .find_box(&shape)
+                .or_else(|| found.boxes.iter().find(|b| b.label == shape))?;
+            return Some(Place::Sketch {
+                sketch: found.name.clone(),
+                shape: shape.id.clone(),
+            });
+        }
         if let Some(found) = self.lens.resolved.borrow().get(name) {
             return found.clone();
         }
@@ -240,6 +251,9 @@ impl MapView {
     /// The box place `name` lands on at the level showing, if it has one.
     pub(super) fn landing(&self, name: &str) -> Option<Landing> {
         let place = self.place(name)?;
+        if let Place::Sketch { sketch, shape } = &place {
+            return self.sketch_landing(sketch, shape);
+        }
         match &self.level {
             Level::Plan(_) => self.plan_landing(&place),
             Level::Site => {
@@ -287,7 +301,7 @@ impl MapView {
 
     /// At Plan: the function's box, else the frame of the type or file,
     /// else the file's box.
-    fn plan_landing(&self, place: &Place) -> Option<Landing> {
+    pub(super) fn plan_landing(&self, place: &Place) -> Option<Landing> {
         let project = self.project.as_ref()?;
         if let Some(id) = place.function_in(project) {
             let key = function_key(project, id);
@@ -400,6 +414,10 @@ impl MapView {
         let Some(project) = self.project.clone() else {
             return false;
         };
+        if let Place::Sketch { sketch, .. } = &place {
+            self.go_to_sketch(sketch, cx);
+            return true;
+        }
         if let Level::Plan(_) = self.level {
             if let Some(landing) = self.plan_landing(&place)
                 && (place.function_in(&project).is_none() || landing.key.starts_with("fn:"))

@@ -1,8 +1,9 @@
 //! Asking the agent from the Map (⌘K there): what it's told besides the
 //! question. The boxes selected (names, places, purposes; at Plan, their
 //! signatures and where they are; at Domain, their entries in
-//! `domains.toml`) and a compact outline of the level showing: boxes,
-//! arrows and counts. No code is sent: the agent reads what it needs.
+//! `domains.toml`), the user's sketches with a shape selected, as data
+//! with what they're attached to (`view::sketch`), and a compact outline
+//! of the level showing: boxes, arrows and counts. No code is sent: the agent reads what it needs.
 //! Explain this level asks it to describe what shows.
 
 use gpui_kit::*;
@@ -42,6 +43,10 @@ impl MapView {
         if !selected.is_empty() {
             context.push_str("\n\nSelected:\n");
             context.push_str(&selected.join("\n"));
+        }
+        for sketch in self.sketch_lines() {
+            context.push_str("\n\n");
+            context.push_str(&sketch);
         }
         let outline = self.outline_lines();
         if !outline.is_empty() {
@@ -258,6 +263,9 @@ impl MapView {
             .selected
             .iter()
             .filter_map(|key| match &self.level {
+                _ if key.starts_with(super::super::sketch::PREFIX) => {
+                    self.shape_rect(&super::super::sketch::ShapeRef::of_key(key)?)
+                }
                 Level::Plan(_) => self.plan.index_of(key).map(|ix| self.placed.nodes[ix]),
                 Level::Site => {
                     let site = self.site.as_ref()?;

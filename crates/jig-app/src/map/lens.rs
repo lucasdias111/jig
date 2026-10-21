@@ -106,9 +106,10 @@ pub struct Drawing {
 impl Drawing {
     /// A line for the transcript: "Trace: Booking a class · 10 steps".
     pub fn summary(&self) -> String {
-        let count = |n: usize, what: &str| match n {
-            1 => format!("1 {what}"),
-            n => format!("{n} {what}s"),
+        let count = |n: usize, what: &str| match (n, what) {
+            (1, _) => format!("1 {what}"),
+            (n, "box") => format!("{n} boxes"),
+            (n, _) => format!("{n} {what}s"),
         };
         let what = match self.kind {
             Kind::Trace | Kind::Tour => count(self.steps.len(), "step"),
@@ -274,13 +275,15 @@ pub enum Place {
         owner: Option<String>,
         function: Option<String>,
     },
+    /// A box of the user's sketch (`sketch:<name>/<box>`), by their ids.
+    Sketch { sketch: String, shape: String },
 }
 
 impl Place {
     /// As Site names its boxes: `dir/`, `path` or `path#Type`.
     pub fn site_place(&self) -> Option<String> {
         match self {
-            Place::Domain(_) => None,
+            Place::Domain(_) | Place::Sketch { .. } => None,
             Place::Folder(dir) => Some(dir.clone()),
             Place::File {
                 path,
@@ -327,6 +330,9 @@ pub fn resolve(
     place: &str,
 ) -> Result<Place, Vec<String>> {
     let named = normal(project, place);
+    if named.starts_with(super::sketch::PREFIX) {
+        return resolve_sketch(&project.root, &named);
+    }
     if let Some(name) = named.strip_prefix("domain:") {
         let name = name.trim();
         return match domains
@@ -419,6 +425,41 @@ pub fn resolve(
         .take(8)
         .map(|f| format!("{path}#{}", f.title()))
         .collect())
+}
+
+/// A box of a sketch saved in the project at `root`, by its id or label;
+/// else the sketches' boxes, to suggest.
+fn resolve_sketch(root: &Path, name: &str) -> Result<Place, Vec<String>> {
+    let sketches = super::sketch::read_all(root);
+    let all = || {
+        sketches
+            .iter()
+            .flat_map(|s| {
+                s.boxes
+                    .iter()
+                    .map(|b| super::sketch::place_name(&s.name, &b.id))
+            })
+            .take(12)
+            .collect()
+    };
+    let Some((wanted, shape)) = super::sketch::parse_place(name) else {
+        return Err(all());
+    };
+    let same = |a: &str, b: &str| super::sketch::slug(a, "") == super::sketch::slug(b, "");
+    let found = sketches
+        .iter()
+        .find(|s| s.name == wanted || same(&s.title, &wanted))
+        .and_then(|s| {
+            let found = s
+                .boxes
+                .iter()
+                .find(|b| b.id == shape || same(&b.label, &shape))?;
+            Some(Place::Sketch {
+                sketch: s.name.clone(),
+                shape: found.id.clone(),
+            })
+        });
+    found.ok_or_else(all)
 }
 
 /// How alike two names are: the start they share, more when one holds the
@@ -526,7 +567,7 @@ pub fn check(
         Ok(())
     } else {
         Err(format!(
-            "Nothing was drawn: these don't name a place in the project: {}. Name each as path#Type.method, path#function, path, folder/ or domain:Name, paths relative to the project, and draw again.",
+            "Nothing was drawn: these don't name a place in the project: {}. Name each as path#Type.method, path#function, path, folder/, domain:Name or sketch:<sketch>/<box>, paths relative to the project, and draw again.",
             missing.join("; ")
         ))
     }

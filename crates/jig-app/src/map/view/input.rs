@@ -4,8 +4,11 @@
 //! domain onto another merges them; at Site, with the domains' tints
 //! showing, a file dragged into another domain's region moves to it. Double-clicking a
 //! domain's name renames it. Resting on a Plan's function peeks at its
-//! code; on a Site arrow, lists its calls. Keys: ⌘↑ out, ⌘↓ or Enter in,
-//! ⌘A all, ⌘Z and ⇧⌘Z undo and redo edits to domains, F2 renames the
+//! code; on a Site arrow, lists its calls. With a sketching tool picked
+//! (B, A, N, F), a press draws instead (`view::sketch`), and a sketch's
+//! shapes are selected, moved and edited like boxes. Keys: ⌘↑ out, ⌘↓ or
+//! Enter in, ⌘A all, ⌘Z and ⇧⌘Z undo and redo edits to sketches and
+//! domains, ⌫ deletes the sketch shapes selected, F2 renames the
 //! domain selected, ⌘↩ keeps a proposal, ←/→ step through the agent's
 //! trace, Tab or Enter keeps the agent's descriptions, Esc ends a tour,
 //! rejects descriptions, clears the selection (or discards a proposal) and
@@ -63,6 +66,8 @@ pub(super) enum Drag {
         region: usize,
         at: Point<Pixels>,
     },
+    /// Drawing with a tool, or on a sketch's shape.
+    Sketch(super::sketch::SketchDrag),
 }
 
 /// What the pointer is over.
@@ -174,6 +179,10 @@ impl MapView {
         if self.domains.editing.is_some() {
             self.finish_edit(true, cx);
         }
+        if self.sketch_mouse_down(event, window, cx) {
+            cx.notify();
+            return;
+        }
         match self.key_at(position) {
             Some(key) if event.click_count >= 2 && self.on_region_name(&key, position) => {
                 if let Some(domain) = self
@@ -242,6 +251,7 @@ impl MapView {
         };
         self.drag = Some(match drag {
             _ if carried.is_some() => carried.expect("checked"),
+            Drag::Sketch(drag) => Drag::Sketch(self.sketch_mouse_move(drag, position)),
             // Site's boxes stay where the project puts them: a drag pans.
             Drag::Press { start, .. } if far(position, start) && !plan => {
                 self.offset += position - start;
@@ -358,11 +368,17 @@ impl MapView {
         self.placed.refit(&self.plan);
     }
 
-    pub(super) fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn mouse_up(
+        &mut self,
+        _: &MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(drag) = self.drag.take() else {
             return;
         };
         match drag {
+            Drag::Sketch(drag) => self.sketch_mouse_up(drag, window, cx),
             Drag::Press { key, shift, .. } => self.select(key, shift),
             Drag::Nodes { .. } => self.save_view(),
             Drag::Marquee { .. } => {}
@@ -577,6 +593,10 @@ impl MapView {
         match keystroke.key.as_str() {
             "escape" => {
                 if self.drag.take().is_some() {
+                } else if self.sketches.tool != super::sketch::Tool::Pointer {
+                    self.set_tool(super::sketch::Tool::Pointer, cx);
+                } else if self.sketches.list_open {
+                    self.sketches.list_open = false;
                 } else if self.domains.editing.is_some() {
                     self.finish_edit(false, cx);
                 } else if self.end_tour(cx) {
@@ -592,12 +612,27 @@ impl MapView {
             }
             "enter" if secondary && self.domains.proposal.is_some() => self.keep_proposal(cx),
             "z" if secondary && keystroke.modifiers.shift => {
-                if !self.redo_domains(cx) {
+                if !self.redo_sketches(cx) && !self.redo_domains(cx) {
                     return;
                 }
             }
             "z" if secondary => {
-                if !self.undo_domains(cx) {
+                if !self.undo_sketches(cx) && !self.undo_domains(cx) {
+                    return;
+                }
+            }
+            "backspace" | "delete" if !secondary => {
+                if !self.delete_selected_shapes(cx) {
+                    return;
+                }
+            }
+            "b" | "a" | "n" | "f"
+                if !secondary
+                    && !keystroke.modifiers.shift
+                    && !keystroke.modifiers.alt
+                    && !keystroke.modifiers.control =>
+            {
+                if !self.tool_key(&keystroke.key, cx) {
                     return;
                 }
             }
@@ -661,13 +696,18 @@ fn same_hover(a: &Option<Hover>, b: &Option<Hover>) -> bool {
     }
 }
 
-fn far(a: Point<Pixels>, b: Point<Pixels>) -> bool {
+pub(super) fn far(a: Point<Pixels>, b: Point<Pixels>) -> bool {
+    far_by(a, b, DRAG_START)
+}
+
+/// Whether `a` and `b` are more than `by` screen points apart.
+pub(super) fn far_by(a: Point<Pixels>, b: Point<Pixels>, by: f32) -> bool {
     let d = a - b;
-    f32::from(d.x).hypot(f32::from(d.y)) > DRAG_START
+    f32::from(d.x).hypot(f32::from(d.y)) > by
 }
 
 /// How far `at` is from the bowed arrow from `from` to `to`, as drawn.
-fn distance_to_bow(from: (f32, f32), to: (f32, f32), at: (f32, f32)) -> f32 {
+pub(super) fn distance_to_bow(from: (f32, f32), to: (f32, f32), at: (f32, f32)) -> f32 {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let bend = 0.12;
     let control = (from.0 + dx / 2. + dy * bend, from.1 + dy / 2. - dx * bend);

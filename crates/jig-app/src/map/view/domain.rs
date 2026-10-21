@@ -812,6 +812,7 @@ impl MapView {
             .editing
             .as_ref()
             .is_some_and(|editing| editing.input.focus_handle(cx).is_focused(window))
+            || self.editing_sketch(window, cx)
     }
 
     /// Copy as Markdown: each domain's name, purpose and offers, then the

@@ -305,6 +305,17 @@ impl Workspace {
             ),
             MapEvent::Settled(at, kept) => self.drawing_settled(*at, *kept, cx),
             MapEvent::Proposal(at, choice) => self.proposal_chosen(*at, *choice, window, cx),
+            MapEvent::Converse(name, instruction) => {
+                self.start_sketch_conversation(name.clone(), instruction.clone(), window, cx)
+            }
+            MapEvent::Implement(task, sketch) => {
+                let (task, sketch) = (task.clone(), sketch.clone());
+                self.implement_sketch_task(&task, &sketch, window, cx);
+            }
+            MapEvent::OpenTask(id) => {
+                let id = id.clone();
+                self.show_task(&id, window, cx);
+            }
         }
     }
 

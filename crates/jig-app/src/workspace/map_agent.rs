@@ -52,6 +52,31 @@ impl Workspace {
             );
         }
         let question = view.read(cx).question();
+        let prompt = map_prompt(&instruction, &question.context);
+        self.start_map_run(name, instruction, prompt, question.beside, window, cx);
+    }
+
+    /// A conversation from the Map named `name`, asking `prompt` (shown in
+    /// the transcript as `instruction`), opened beside `beside`.
+    pub(super) fn start_map_run(
+        &mut self,
+        name: Option<String>,
+        instruction: String,
+        prompt: String,
+        beside: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.map_showing().cloned() else {
+            return;
+        };
+        if self.agent_edit_here() {
+            return self.show_note(
+                "Accept or reject the agent's edit first.".into(),
+                window,
+                cx,
+            );
+        }
         let directory = view.read(cx).root().to_path_buf();
         self.close_chat(window, cx);
         self.next_run_id += 1;
@@ -60,7 +85,7 @@ impl Workspace {
             .clone()
             .unwrap_or_else(|| instruction.trim().to_string());
         let agent = self.new_agent_run(name, asked, directory, window, cx);
-        let anchor = self.map_chat_anchor(question.beside, window);
+        let anchor = self.map_chat_anchor(beside, window);
         self.chat = Some(CommandRun {
             id,
             bubble: Bubble::Message(String::new()),
@@ -70,8 +95,72 @@ impl Workspace {
             agent: Some(agent),
             _task: None,
         });
-        let prompt = map_prompt(&instruction, &question.context);
         self.start_turn(id, TurnInput::Prompt(prompt), window, cx);
+    }
+
+    /// Make Task on a sketch: the agent asked, with the sketch as context,
+    /// to write a task for the user to agree to before it's saved.
+    pub(super) fn start_sketch_conversation(
+        &mut self,
+        name: String,
+        instruction: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.map_showing().cloned() else {
+            return;
+        };
+        let question = view.read(cx).question();
+        let prompt = format!(
+            "{}\n\n{}\n\nRead the code before you answer, so every place you link is real.",
+            instruction.trim(),
+            question.context
+        );
+        self.start_map_run(Some(name), instruction, prompt, question.beside, window, cx);
+    }
+
+    /// Implement on a sketch: its task run by the agent, every edit
+    /// reviewed, the Map watching it turn solid.
+    pub(super) fn implement_sketch_task(
+        &mut self,
+        task: &str,
+        sketch: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.map_showing().cloned() else {
+            return;
+        };
+        let root = view.read(cx).root().to_path_buf();
+        let task = match jig_ai::tasks::load(&root, task) {
+            Ok(task) => task,
+            Err(_) => {
+                return self.show_note(
+                    "The sketch's task isn't in the planner any more.".into(),
+                    window,
+                    cx,
+                );
+            }
+        };
+        let ask = super::planner::implement_ask(&task);
+        let prompt = format!(
+            "{}\n\n{}\n\nThe task was made from my sketch on Jig's Map ({}): build what it shows, naming new code as its boxes are labelled, and check each todo off with update_task as it's done.",
+            ask.instruction,
+            task.context(),
+            crate::map::sketch::link(sketch)
+        );
+        self.start_map_run(ask.name, ask.instruction, prompt, None, window, cx);
+    }
+
+    /// Show sketch `name` on the Map, from a task's link to it.
+    pub(super) fn show_sketch(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_location(cx);
+        self.leave_tab(cx);
+        let Some(view) = self.open_map_pane(window, cx) else {
+            return;
+        };
+        let name = name.to_string();
+        self.read_and(&view, cx, move |view, cx| view.go_to_sketch(&name, cx));
     }
 
     /// Where a conversation on the Map opens: just right of the selection
@@ -292,6 +381,10 @@ impl Workspace {
         let ask = match choice {
             ProposalChoice::Dismiss => {
                 return self.set_drawing_settled(at, "Dismissed", cx);
+            }
+            // The Map made it the user's sketch.
+            ProposalChoice::Adopt => {
+                return self.set_drawing_settled(at, "Adopted", cx);
             }
             ProposalChoice::MakeTask => format!(
                 "Save {title} as a task in Jig's task planner with create_task, laid out as the tool describes, its todos linking the code they touch."

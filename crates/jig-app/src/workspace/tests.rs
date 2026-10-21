@@ -20,6 +20,7 @@ mod quick_fix;
 mod servers;
 mod session;
 mod site;
+mod sketches;
 mod tabs;
 mod tasks;
 mod update;

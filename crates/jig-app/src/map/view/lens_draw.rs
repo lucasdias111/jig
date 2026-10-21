@@ -2,7 +2,8 @@
 //! colour: each box a place lands on outlined; a trace's stops numbered
 //! with their step ranges and joined by one dashed path; a note or a
 //! one-step stop's words under its box; a group framed with its label;
-//! ghosts beside the place they go by; proposed purposes and labels to
+//! ghosts beside the place they go by, each adoptable into the user's
+//! sketch; proposed purposes and labels to
 //! keep or not. Boxes out of view get an arrow at the canvas edge that
 //! flies there. A list in the corner names every drawing and its steps,
 //! greying those this level can't show; a tour shows where it is below.
@@ -29,13 +30,15 @@ const EDGE: f32 = 22.;
 const LIST_TOP: f32 = 12.;
 const LIST_WIDTH: f32 = 360.;
 /// A ghost box's size on screen.
-const GHOST: (f32, f32) = (190., 54.);
+pub(super) const GHOST: (f32, f32) = (190., 54.);
 
 /// What the user chose for a proposal's ghosts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProposalChoice {
     MakeTask,
     Implement,
+    /// Made the user's sketch, all of it.
+    Adopt,
     Dismiss,
 }
 
@@ -87,6 +90,8 @@ pub(super) struct GhostBox {
     pub(super) rect: Rect,
     pub(super) name: String,
     pub(super) purpose: String,
+    /// The conversation's proposal it's in, by id, to adopt it from.
+    pub(super) proposal: Option<usize>,
 }
 
 /// Everything the agent drew at the level showing, on screen: what the
@@ -266,21 +271,31 @@ impl MapView {
         screen: &dyn Fn(Rect) -> Rect,
     ) {
         let mut placed: HashMap<String, Rect> = HashMap::new();
-        let mut stacked: HashMap<String, usize> = HashMap::new();
-        for ghost in &drawing.ghosts {
-            let Some(near) = self.landing(&ghost.near) else {
+        let proposal = match source {
+            Source::Conversation(id) => Some(id),
+            Source::Pin(_) => None,
+        };
+        let rects = self.ghost_rects(drawing);
+        for (ghost, rect) in drawing.ghosts.iter().zip(rects) {
+            let (Some(near), Some(rect)) = (self.landing(&ghost.near), rect) else {
                 continue;
             };
             picture.mark(&near, screen, matches!(source, Source::Pin(_)));
             let near = screen(near.rect);
-            let n = stacked.entry(ghost.near.clone()).or_default();
+            // Adopted: the user's box now, drawn as theirs.
+            if proposal.is_some_and(|id| {
+                self.sketches
+                    .adopted
+                    .contains_key(&(id, ghost.name.clone()))
+            }) {
+                continue;
+            }
+            let rect = screen(rect);
             let rect = Rect {
-                x: near.right() + 36.,
-                y: near.y + *n as f32 * (GHOST.1 + 12.),
                 width: GHOST.0,
                 height: GHOST.1,
+                ..rect
             };
-            *n += 1;
             placed.insert(ghost.name.clone(), rect);
             let (from, to) = super::scene::edge_points(near, rect);
             picture.paths.push(Path {
@@ -294,6 +309,7 @@ impl MapView {
                 rect,
                 name: ghost.name.clone(),
                 purpose: ghost.purpose.clone(),
+                proposal,
             });
         }
         let end = |name: &str| -> Option<Rect> {
@@ -537,6 +553,41 @@ impl MapView {
                     })
                     .into_any_element(),
             );
+            if let Some(id) = ghost.proposal {
+                let name = ghost.name.clone();
+                out.push(
+                    div()
+                        .id(SharedString::from(format!("map-adopt-{id}-{name}")))
+                        .debug_selector({
+                            let name = name.clone();
+                            move || format!("map-adopt-{name}")
+                        })
+                        .absolute()
+                        .left(px(ghost.rect.right() - 52.))
+                        .top(px(ghost.rect.y + 4.))
+                        .h(px(18.))
+                        .px_1p5()
+                        .rounded(px(4.))
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(agent.opacity(0.6))
+                        .text_xs()
+                        .text_color(agent)
+                        .hover(|style| style.bg(agent.opacity(0.12)))
+                        .child("Adopt")
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "Make this box part of your sketch",
+                            )
+                            .build(window, cx)
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.adopt(id, Some(&name), cx);
+                        }))
+                        .into_any_element(),
+                );
+            }
         }
         for tag in &picture.tags {
             out.push(
@@ -576,6 +627,7 @@ impl MapView {
         let choices = [
             (ProposalChoice::MakeTask, "Make Task"),
             (ProposalChoice::Implement, "Implement"),
+            (ProposalChoice::Adopt, "Adopt"),
             (ProposalChoice::Dismiss, "Dismiss"),
         ];
         h_flex()
@@ -585,7 +637,7 @@ impl MapView {
             .gap_1()
             .children(choices.into_iter().enumerate().map(|(n, (choice, label))| {
                 h_flex()
-                    .id(("map-proposal", id * 4 + n))
+                    .id(("map-proposal", id * 8 + n))
                     .debug_selector(move || format!("map-proposal-{label}"))
                     .h(px(22.))
                     .px_2()
@@ -600,8 +652,12 @@ impl MapView {
                     })
                     .child(label)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(MapEvent::Proposal(id, choice));
+                    .on_click(cx.listener(move |view, _, _, cx| match choice {
+                        // The view adopts it, and says so when it's all done.
+                        ProposalChoice::Adopt => {
+                            view.adopt(id, None, cx);
+                        }
+                        choice => cx.emit(MapEvent::Proposal(id, choice)),
                     }))
             }))
             .into_any_element()
@@ -895,6 +951,7 @@ impl MapView {
             Some(Place::File { path, .. }) => file_name(&path),
             Some(Place::Folder(dir)) => format!("{}/", file_name(dir.trim_end_matches('/'))),
             Some(Place::Domain(name)) => name,
+            Some(Place::Sketch { sketch, shape }) => self.sketch_box_label(&sketch, &shape),
             None => name.to_string(),
         }
     }
