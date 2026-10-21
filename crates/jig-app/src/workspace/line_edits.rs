@@ -121,16 +121,26 @@ impl Workspace {
         self.editor().select(range, cx);
     }
 
+    /// ⌘+: the Map a step closer while it shows, else a bigger code font.
     pub(super) fn zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
-        change_font_size(1., cx);
+        match self.map_showing().cloned() {
+            Some(map) => map.update(cx, |map, cx| map.zoom_step(true, cx)),
+            None => change_font_size(1., cx),
+        }
     }
 
     pub(super) fn zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
-        change_font_size(-1., cx);
+        match self.map_showing().cloned() {
+            Some(map) => map.update(cx, |map, cx| map.zoom_step(false, cx)),
+            None => change_font_size(-1., cx),
+        }
     }
 
     pub(super) fn reset_zoom(&mut self, _: &ResetZoom, _: &mut Window, cx: &mut Context<Self>) {
-        settings::update(cx, |s| s.appearance.font_size = DEFAULT_FONT_SIZE);
+        match self.map_showing().cloned() {
+            Some(map) => map.update(cx, |map, cx| map.zoom_reset(cx)),
+            None => settings::update(cx, |s| s.appearance.font_size = DEFAULT_FONT_SIZE),
+        }
     }
 }
 

@@ -262,10 +262,19 @@ fn domain_and_site_are_one_zoom(cx: &mut TestAppContext) {
         }
     }
     assert_eq!(level(cx, &view), Level::Site, "zoomed on into Site");
-    settle(cx, window, &view);
     let after = cx
         .update(|cx| view.read(cx).site_box_on_screen("domain:Bookings"))
         .unwrap();
+    // The same gesture carries on zooming: Domain and Site are one zoom,
+    // with no letting go in between.
+    let crossed_at = cx.update(|cx| view.read(cx).zoom());
+    let at = cx.update(|cx| view.read(cx).region_point("Bookings", true));
+    zoom_scroll(cx, window, at, -60.);
+    assert!(
+        cx.update(|cx| view.read(cx).zoom()) > crossed_at,
+        "still zooming in"
+    );
+    settle(cx, window, &view);
     let before = crossed.unwrap();
     assert!(
         (after.x - before.x).abs() < before.width * 0.2

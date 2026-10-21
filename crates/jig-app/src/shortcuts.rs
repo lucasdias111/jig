@@ -461,7 +461,7 @@ pub const ALL: &[Shortcut] = &[
     ),
     shortcut!(
         "zoom_in",
-        "Bigger code font",
+        "Bigger code font, or zoom the Map in",
         View,
         ["secondary-="],
         ANYWHERE,
@@ -469,7 +469,7 @@ pub const ALL: &[Shortcut] = &[
     ),
     shortcut!(
         "zoom_out",
-        "Smaller code font",
+        "Smaller code font, or zoom the Map out",
         View,
         ["secondary--"],
         ANYWHERE,
@@ -477,7 +477,7 @@ pub const ALL: &[Shortcut] = &[
     ),
     shortcut!(
         "reset_zoom",
-        "Default code font size",
+        "Default code font size, or the Map as it starts",
         View,
         ["secondary-0"],
         ANYWHERE,

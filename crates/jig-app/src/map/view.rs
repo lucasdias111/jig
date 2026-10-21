@@ -507,6 +507,13 @@ impl MapView {
         ));
         self.firing.clear();
         self.after_moving(cx);
+        // Domain and Site are one zoom: the gesture carries on through.
+        if continuous {
+            self.zoom_lock = None;
+            if let Some(transition) = self.transition.as_mut() {
+                transition.carry_on();
+            }
+        }
     }
 
     /// What every move between views does after: the server asked, the

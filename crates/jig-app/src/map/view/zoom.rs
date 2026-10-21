@@ -24,8 +24,9 @@ use super::{Level, MapEvent, MapView, has_plan};
 /// Plan's zoom, within its level.
 const PLAN_MIN: f32 = 0.3;
 const PLAN_MAX: f32 = 2.;
-/// Zoomed out past this, Plan steps out to Site.
-const PLAN_OUT: f32 = 0.32;
+/// Zoomed out past this, Plan steps out to Site: about half its own
+/// size, or a little under where a big Plan starts out.
+const PLAN_OUT: f32 = 0.5;
 /// Zoomed in past this over a function, into it.
 const PLAN_IN: f32 = 1.9;
 /// Site's closest zoom.
@@ -39,6 +40,14 @@ const FLIGHT: f32 = 0.45;
 const PAN: f32 = 0.3;
 /// How long boxes that left a Plan take to fade.
 pub(super) const FADE_OUT: f32 = 0.25;
+/// Zoomed into a region past this much of where it starts opening, Domain
+/// is Site; zoomed out of Site past this much of where the region there
+/// starts opening, it's Domain again. A little apart, so a pinch that
+/// wavers doesn't flip between them.
+pub(super) const DOMAIN_TO_SITE: f32 = 1.08;
+const SITE_TO_DOMAIN: f32 = 1.03;
+/// How far ⌘+ and ⌘- zoom at a time.
+const KEY_STEP: f32 = 1.25;
 /// A gesture that changed level is over once it's quiet this long.
 const GESTURE_GAP: Duration = Duration::from_millis(220);
 
@@ -98,6 +107,9 @@ pub struct Transition {
     to: Camera,
     /// Whether the new view fades in.
     fade_in: bool,
+    /// Whether the gesture that started it zooms no further until it's let
+    /// go: not between Domain and Site, which are one zoom.
+    locks: bool,
 }
 
 impl Transition {
@@ -113,6 +125,7 @@ impl Transition {
             },
             to,
             fade_in: true,
+            locks: true,
         }
     }
 
@@ -125,6 +138,7 @@ impl Transition {
             from,
             to,
             fade_in: false,
+            locks: true,
         }
     }
 
@@ -164,6 +178,7 @@ impl Transition {
             from,
             to,
             fade_in: true,
+            locks: true,
         }
     }
 
@@ -180,6 +195,11 @@ impl Transition {
     /// Whether another level is still fading in.
     pub fn fades(&self) -> bool {
         self.old.is_some() || self.fade_in
+    }
+
+    /// A move between Domain and Site, one zoom: the gesture carries on.
+    pub fn carry_on(&mut self) {
+        self.locks = false;
     }
 }
 
@@ -411,7 +431,10 @@ impl MapView {
 
     /// Zooming stays put while a gesture that changed level goes on.
     fn locked(&mut self, now: Instant) -> bool {
-        let fading = self.transition.as_ref().is_some_and(Transition::fades);
+        let fading = self
+            .transition
+            .as_ref()
+            .is_some_and(|transition| transition.fades() && transition.locks);
         let locked = fading
             || self
                 .zoom_lock
@@ -435,7 +458,7 @@ impl MapView {
         let wanted = self.zoom * factor;
         match self.level.clone() {
             Level::Plan(_) => {
-                if factor < 1. && wanted < PLAN_OUT {
+                if factor < 1. && wanted < self.plan_out() {
                     return self.step_out(cx);
                 }
                 if factor > 1.
@@ -456,7 +479,7 @@ impl MapView {
                 self.zoom_by(factor, around, min, super::domain::DOMAIN_MAX);
             }
             Level::Site => {
-                if factor < 1. && !self.any_region_open(wanted) {
+                if factor < 1. && self.leaves_site(wanted, around) {
                     self.zoom_by(factor, around, 0., SITE_MAX);
                     self.continuous = true;
                     return self.show(Level::Domain, cx);
@@ -477,6 +500,51 @@ impl MapView {
             }
         }
         self.moved(cx);
+        cx.notify();
+    }
+
+    /// Where zooming out of this Plan goes to Site.
+    fn plan_out(&self) -> f32 {
+        (self.default_camera().zoom * 0.85).clamp(PLAN_MIN + 0.02, PLAN_OUT)
+    }
+
+    /// Zoomed out at Site to `zoom` around `around`: Domain once the region
+    /// there is closing, or, between regions, once none in view is open.
+    fn leaves_site(&self, zoom: f32, around: Point<Pixels>) -> bool {
+        let at = self.to_drawing(around);
+        let region = self.site.as_ref().and_then(|site| {
+            site.regions()
+                .map(|ix| &site.nodes[ix])
+                .find(|node| node.opens() && node.rect.contains(at))
+        });
+        match region {
+            Some(node) => zoom < node.open_at * SITE_TO_DOMAIN,
+            None => !self.any_region_open(zoom),
+        }
+    }
+
+    /// ⌘+ and ⌘-: a step in or out around the middle, gliding there, and
+    /// on past a level's end as a pinch would go.
+    pub fn zoom_step(&mut self, closer: bool, cx: &mut Context<Self>) {
+        let from = self.camera();
+        let level = self.level.clone();
+        let factor = if closer { KEY_STEP } else { 1. / KEY_STEP };
+        self.zoom_at(factor, self.middle(), cx);
+        if self.level == level && self.transition.is_none() {
+            let to = self.camera();
+            if to != from {
+                self.transition = Some(Transition::pan(from, to));
+                cx.notify();
+            }
+        }
+    }
+
+    /// ⌘0: the level as it first shows.
+    pub fn zoom_reset(&mut self, cx: &mut Context<Self>) {
+        let to = self.default_camera();
+        self.transition = Some(Transition::pan(self.camera(), to));
+        self.set_camera(to);
+        self.save_view();
         cx.notify();
     }
 

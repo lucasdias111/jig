@@ -324,7 +324,9 @@ impl MapView {
         let Some(node) = site.index_of(&level.regions[ix].key) else {
             return false;
         };
-        if site.nodes[node].opens() && wanted >= site.nodes[node].open_at * 1.08 {
+        if site.nodes[node].opens()
+            && wanted >= site.nodes[node].open_at * super::zoom::DOMAIN_TO_SITE
+        {
             self.zoom_by(wanted / self.zoom, around, 0., f32::MAX);
             self.continuous = true;
             self.show(Level::Site, cx);

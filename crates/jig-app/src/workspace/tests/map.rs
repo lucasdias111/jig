@@ -258,6 +258,26 @@ fn zooming_past_a_level_crosses_into_the_next(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn command_plus_and_minus_zoom_the_map_in_steps(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx);
+    press(cx, window, "secondary-b");
+    read_level(cx, &workspace);
+    let view = map(cx, &workspace).unwrap();
+    settle(cx, window, &view);
+    let zoom = |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).zoom());
+    let start = zoom(cx);
+    press(cx, window, "secondary-=");
+    assert!(zoom(cx) > start * 1.2, "a step closer");
+    assert!(plan_of("save")(&level(cx, &workspace).unwrap()));
+    press(cx, window, "secondary--");
+    assert!((zoom(cx) - start).abs() < 0.01, "and back");
+    press(cx, window, "secondary--");
+    assert!(zoom(cx) < start, "a step further out");
+    press(cx, window, "secondary-0");
+    assert!((zoom(cx) - start).abs() < 0.01, "the Plan as it starts");
+}
+
+#[gpui_kit::test]
 fn a_pinch_out_in_the_code_shows_the_map(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = open_project(cx);
     draw(cx, window);
