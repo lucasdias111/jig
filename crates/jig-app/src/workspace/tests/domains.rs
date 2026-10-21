@@ -206,6 +206,7 @@ fn index_domains_is_a_conversation_whose_answer_is_kept_on_the_map(cx: &mut Test
                     id: "per_1".into(),
                     title: "Run a command".into(),
                     detail: "rg -n book src | head".into(),
+                    kind: jig_ai::agent::Asking::Command,
                     always: None,
                 }),
                 window,
@@ -222,6 +223,7 @@ fn index_domains_is_a_conversation_whose_answer_is_kept_on_the_map(cx: &mut Test
                     id: "per_2".into(),
                     title: "Run a command".into(),
                     detail: "rm -rf target".into(),
+                    kind: jig_ai::agent::Asking::Command,
                     always: None,
                 }),
                 window,
@@ -263,6 +265,122 @@ fn index_domains_is_a_conversation_whose_answer_is_kept_on_the_map(cx: &mut Test
     press(cx, window, "secondary-z");
     assert!(cx.update(|cx| view.read(cx).has_proposal()));
     assert!(saved(&dir).is_empty());
+}
+
+#[gpui_kit::test]
+fn index_domains_with_the_maps_tools_asks_for_nothing(cx: &mut TestAppContext) {
+    use jig_ai::agent::{AgentEvent, Asking, PermissionRequest};
+    let (dir, window, workspace) = open_project(cx, false);
+    to_domain(cx, window, &workspace);
+    click_on(cx, window, "map-banner-index");
+    let prompt = cx.update(|cx| workspace.read(cx).agent_prompt()).unwrap();
+    assert!(prompt.contains("map_project") && prompt.contains("map_propose_domains"));
+    assert!(prompt.contains("Don't run shell commands and don't start subagents"));
+    let send = |cx: &mut TestAppContext, event: AgentEvent| {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| this.test_agent_request(event, window, cx))
+        });
+        assert_eq!(
+            cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+            None,
+            "nothing waits for the user"
+        );
+    };
+    let request = |id: &str, title: &str, detail: &str, kind: Asking| {
+        AgentEvent::Permission(PermissionRequest {
+            id: id.into(),
+            title: title.into(),
+            detail: detail.into(),
+            kind,
+            always: None,
+        })
+    };
+    send(
+        cx,
+        AgentEvent::Drew {
+            tool: jig_ai::map::PROJECT.into(),
+            input: serde_json::json!({"group": 1}),
+        },
+    );
+    // Should it still reach for a shell or a subagent, what only reads
+    // goes ahead, however the agent words it.
+    send(
+        cx,
+        request(
+            "per_1",
+            "Bash",
+            "ls src 2>/dev/null | head",
+            Asking::Command,
+        ),
+    );
+    send(
+        cx,
+        request(
+            "per_2",
+            "Start a subagent",
+            "Find the entry points",
+            Asking::Subagent { explores: true },
+        ),
+    );
+    send(
+        cx,
+        AgentEvent::Drew {
+            tool: jig_ai::map::PROPOSE_DOMAINS.into(),
+            input: serde_json::json!({
+                "action": "index",
+                "domains": [
+                    {"name": "Bookings", "purpose": "Book a place at an event.", "offers": ["Booking form"], "why": "They take bookings.", "members": ["src/bookings/"]},
+                    {"name": "Events", "purpose": "List what's on.", "offers": ["Event list"], "why": "They show events.", "members": ["src/events/", "web/"]}
+                ],
+                "flows": [{"from": "Bookings", "to": "Events", "label": "asks for events"}],
+                "shared": ["src/util.rs", "src/main.rs"]
+            }),
+        },
+    );
+    // Its closing words hold no TOML: the call is the answer.
+    answer(cx, window, &workspace, "Proposed two domains on the Map.");
+    let view = map(cx, &workspace).unwrap();
+    assert_eq!(
+        cx.update(|cx| view.read(cx).domain_regions()),
+        ["Bookings", "Events", "Shared"]
+    );
+    press(cx, window, "secondary-enter");
+    assert!(saved(&dir).contains("label = \"asks for events\""));
+    // Outside a Map action, a command still asks.
+    send_outside_a_map_action(cx, window, &workspace);
+}
+
+/// A conversation at the code: a command that only reads still asks.
+fn send_outside_a_map_action(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    workspace: &Entity<Workspace>,
+) {
+    press(cx, window, "secondary-b");
+    press(cx, window, "secondary-k");
+    type_slowly(cx, window, "Explain this");
+    press(cx, window, "enter");
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            this.test_agent_request(
+                jig_ai::agent::AgentEvent::Permission(jig_ai::agent::PermissionRequest {
+                    id: "per_3".into(),
+                    title: "Run a command".into(),
+                    detail: "ls src 2>/dev/null".into(),
+                    kind: jig_ai::agent::Asking::Command,
+                    always: None,
+                }),
+                window,
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).agent_waiting_on()),
+        Some("permission")
+    );
 }
 
 #[gpui_kit::test]
@@ -498,4 +616,68 @@ fn flows_stay_put_as_the_view_pans(cx: &mut TestAppContext) {
         }
     }
     assert!(gone_past, "it went off the edge with its link");
+}
+
+/// Index Domains run by the user's own agent on a real project, counting
+/// what it asks the user (each turned down, so it carries on): it should
+/// ask nothing and end in a proposal, which isn't kept.
+/// `JIG_MAP_ROOT=<project> cargo test -p jig-app index_domains_live --
+/// --ignored --nocapture`, after `cargo build`.
+#[gpui_kit::test]
+#[ignore]
+fn index_domains_live(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = std::path::PathBuf::from(std::env::var("JIG_MAP_ROOT").unwrap());
+    let jig = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/Jig");
+    jig_ai::tasks::mcp::set_command(jig.canonicalize().unwrap());
+    let (window, workspace) = open(cx, &root);
+    cx.update(|cx| {
+        crate::settings::init(cx);
+        crate::providers::init(cx);
+    });
+    press(cx, window, "secondary-b");
+    wait_until(cx, |cx| {
+        map(cx, &workspace).is_some_and(|view| cx.update(|cx| view.read(cx).project().is_some()))
+    });
+    let view = map(cx, &workspace).unwrap();
+    view.update(cx, |view, cx| {
+        view.start_action(crate::map::domains::actions::Action::Index, cx)
+    });
+    let started = std::time::Instant::now();
+    let mut asked = 0;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        cx.run_until_parked();
+        if let Some(what) = cx.update(|cx| workspace.read(cx).agent_waiting_on()) {
+            asked += 1;
+            println!("asked for a {what}");
+            let ws = workspace.clone();
+            step(cx, window, move |window, cx| {
+                ws.update(cx, |this, cx| this.settle_agent_request(false, window, cx));
+            });
+        }
+        let done = cx.update(|cx| {
+            workspace
+                .read(cx)
+                .chat
+                .as_ref()
+                .is_none_or(|run| !run.bubble.is_running())
+        });
+        if done || started.elapsed().as_secs() > 900 {
+            break;
+        }
+    }
+    for entry in cx.update(|cx| workspace.read(cx).agent_entries()) {
+        println!("{entry:?}");
+    }
+    let view = map(cx, &workspace).unwrap_or(view);
+    let regions = cx.update(|cx| view.read(cx).domain_regions());
+    println!(
+        "took {:?}, asked {asked} times, proposal: {regions:?}",
+        started.elapsed()
+    );
+    assert_eq!(asked, 0, "the user was asked");
+    assert!(cx.update(|cx| view.read(cx).has_proposal()), "a proposal");
 }

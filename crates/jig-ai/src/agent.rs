@@ -289,10 +289,29 @@ pub struct PermissionRequest {
     pub title: String,
     /// The command, address or task.
     pub detail: String,
+    /// What it does, whatever the agent titles it.
+    pub kind: Asking,
     /// What allowing it always would cover, as the agent remembers it,
     /// e.g. "Always allow `cargo test *`". `None` when the agent can't
     /// remember; Jig then stops asking for the rest of the conversation.
     pub always: Option<String>,
+}
+
+/// What a request does, so it's told apart by that rather than by how an
+/// agent words it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Asking {
+    /// A shell command, the request's detail.
+    Command,
+    /// Reading or searching the project.
+    Read,
+    /// Fetching a page or searching the web.
+    Web,
+    /// Starting a subagent; `explores` when it's one that only looks around
+    /// (OpenCode's `explore`, Claude Code's `Explore`).
+    Subagent { explores: bool },
+    #[default]
+    Other,
 }
 
 /// Questions the agent asks with its question tool, answered all at once.

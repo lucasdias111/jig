@@ -17,6 +17,7 @@
 pub mod actions;
 pub mod grouping;
 pub mod level;
+pub mod tools;
 
 use std::path::{Path, PathBuf};
 

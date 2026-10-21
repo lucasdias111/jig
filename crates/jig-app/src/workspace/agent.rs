@@ -27,11 +27,12 @@ use jig_commands::{
     PastConversation,
 };
 use jig_editor::EditorHandle;
+use serde_json::Value;
 
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
-use crate::map::domains::actions::{Action, read_only_command};
+use crate::map::domains::actions::{Action, only_reads};
 
 /// Why a conversation can't start.
 const NO_PROJECT: &str =
@@ -167,6 +168,9 @@ pub(super) struct AgentRun {
     /// The Map action this conversation is, whose answers the Map reads
     /// back as proposals; it may run commands that only read.
     pub(super) map_action: Option<Action>,
+    /// This turn's answer to its Map action, as the agent gave it to
+    /// `map_propose_domains`: read in place of its words when it's done.
+    pub(super) proposed: Option<Value>,
     /// What it drew on the Map, by their place here.
     pub(super) drawings: Vec<super::map_agent::Drawn>,
     _input_events: Subscription,
@@ -341,20 +345,22 @@ impl Workspace {
         }
     }
 
-    /// The agent answered a Map action: the Map reads its answer as a
+    /// The agent answered a Map action, with `map_propose_domains` (its
+    /// `call`) or in its words `text`: the Map reads the answer as a
     /// proposal and shows it at Domain, or the conversation says why it
     /// couldn't.
     fn answer_map_action(
         &mut self,
         action: Action,
         text: &str,
+        call: Option<&Value>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(view) = self.map.as_ref().map(|pane| pane.view.clone()) else {
             return;
         };
-        let read = view.update(cx, |view, cx| view.answer(action, text, cx));
+        let read = view.update(cx, |view, cx| view.answer(action, text, call, cx));
         let proposed = read.is_ok();
         let entry = match read {
             Ok(()) => ChatEntry::Note(
@@ -845,6 +851,7 @@ impl Workspace {
             resize: None,
             moved: false,
             map_action: None,
+            proposed: None,
             drawings: Vec::new(),
             _input_events: input_events,
         }
@@ -957,6 +964,7 @@ impl Workspace {
         let directory = agent.directory.clone();
         let title = agent.title.clone();
         let map_action = agent.map_action.clone();
+        agent.proposed = None;
         agent.last_input = Some(input.clone());
         let permissions = crate::settings::get(cx).agent.permissions;
         agent.step = LiveStep::default();
@@ -1836,6 +1844,23 @@ impl Workspace {
             Message::Event(AgentEvent::Question(request)) => {
                 agent.queue.push_back(Request::Question(request))
             }
+            Message::Event(AgentEvent::Drew { tool, .. }) if tool == jig_ai::map::PROJECT => {
+                agent
+                    .entries
+                    .push(ChatEntry::Did("Read Jig's outline of the project".into()));
+                cx.notify();
+            }
+            Message::Event(AgentEvent::Drew { tool, input })
+                if tool == jig_ai::map::PROPOSE_DOMAINS =>
+            {
+                agent
+                    .entries
+                    .push(ChatEntry::Did("Proposed domains".into()));
+                if agent.map_action.is_some() {
+                    agent.proposed = Some(input);
+                }
+                cx.notify();
+            }
             Message::Event(AgentEvent::Drew { tool, input }) => {
                 self.agent_drew(id, &tool, &input, cx);
             }
@@ -1871,9 +1896,10 @@ impl Workspace {
             Message::Event(AgentEvent::Done(text)) => {
                 agent.finished = true;
                 let action = agent.map_action.clone();
+                let proposed = agent.proposed.take();
                 self.finish_agent(text.clone(), window, cx);
                 if let Some(action) = action {
-                    self.answer_map_action(action, &text, window, cx);
+                    self.answer_map_action(action, &text, proposed.as_ref(), window, cx);
                 }
                 return false;
             }
@@ -1979,13 +2005,11 @@ impl Workspace {
             }
             // Asked in the conversation, answered with the review keys in
             // the code.
-            // Allowed always earlier in this conversation, or a command
-            // that only reads, for a Map action.
+            // Allowed always earlier in this conversation, or, for a Map
+            // action, anything that only reads.
             Some(Request::Permission(request))
                 if agent.always_allowed.contains(&request.title)
-                    || (agent.map_action.is_some()
-                        && request.title == "Run a command"
-                        && read_only_command(&request.detail)) =>
+                    || (agent.map_action.is_some() && only_reads(&request)) =>
             {
                 if let Some(session) = agent.session.clone() {
                     cx.background_executor()

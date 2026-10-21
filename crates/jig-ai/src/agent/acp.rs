@@ -22,7 +22,7 @@ use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
 use super::{
-    Access, AgentCommand, AgentEvent, AgentRequest, Conversation, EditChange, EditRequest,
+    Access, AgentCommand, AgentEvent, AgentRequest, Asking, Conversation, EditChange, EditRequest,
     PermissionRequest, Permissions, Turn, canonical, relative,
 };
 use crate::{map, tasks};
@@ -805,6 +805,7 @@ impl Session {
                             id: ours.clone(),
                             title: call.asking(),
                             detail: call.detail(&self.directory),
+                            kind: call.what(),
                             always,
                         };
                         let waiting = Waiting::Permission {
@@ -1121,6 +1122,21 @@ impl ToolCall {
             "edit" => "Edit a file".into(),
             _ if self.title.is_empty() => "Use a tool".into(),
             _ => format!("Use {}", self.title),
+        }
+    }
+
+    /// What it does, by its kind.
+    fn what(&self) -> Asking {
+        match self.kind.as_str() {
+            "execute" => Asking::Command,
+            "read" | "search" => Asking::Read,
+            "fetch" => Asking::Web,
+            _ => match self.raw_input["subagent_type"].as_str() {
+                Some(kind) => Asking::Subagent {
+                    explores: kind.eq_ignore_ascii_case("explore"),
+                },
+                None => Asking::Other,
+            },
         }
     }
 

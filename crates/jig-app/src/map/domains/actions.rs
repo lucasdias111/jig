@@ -6,6 +6,7 @@
 //! what was confirmed.
 
 use anyhow::{Result, bail};
+use jig_ai::agent::{Asking, PermissionRequest};
 
 use super::{Domain, Domains, Flow, Home};
 
@@ -29,24 +30,47 @@ impl Action {
         }
     }
 
-    /// The domains its answer `reply` proposes, from `saved`.
+    /// The domains its answer `reply` proposes, from `saved`: the TOML in
+    /// it, for an agent that answered in words rather than with
+    /// `map_propose_domains`.
     pub fn proposal(&self, reply: &str, saved: Option<&Domains>) -> Result<Domains> {
         let text = fenced_toml(reply);
-        match self {
-            Action::Index => {
-                let mut domains: Domains = toml::from_str(text)?;
+        let answer = match self {
+            Action::Update(_) => Answer::Update(toml::from_str(text)?),
+            Action::Index | Action::Split(_) => Answer::Domains(toml::from_str(text)?),
+        };
+        self.apply(answer, saved)
+    }
+
+    /// The domains a call of `map_propose_domains` with `input` proposes,
+    /// from `saved`, checked against `files`, every source file: what's
+    /// wrong comes back for the agent to fix.
+    pub fn proposal_from_call(
+        &self,
+        input: &serde_json::Value,
+        saved: Option<&Domains>,
+        files: &[String],
+    ) -> Result<Domains, String> {
+        let answer = super::tools::answer(self, input)?;
+        super::tools::check(self, &answer, saved, files)?;
+        self.apply(answer, saved)
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    /// `answer` made into the domains it proposes, from `saved`.
+    fn apply(&self, answer: Answer, saved: Option<&Domains>) -> Result<Domains> {
+        match (self, answer) {
+            (Action::Index, Answer::Domains(mut domains)) => {
                 if domains.domains.is_empty() {
                     bail!("The agent's answer has no domains in it.");
                 }
                 domains.tidy_flows();
                 Ok(domains)
             }
-            Action::Update(unsorted) => {
-                let update: Update = toml::from_str(text)?;
+            (Action::Update(unsorted), Answer::Update(update)) => {
                 Ok(update.apply(saved.cloned().unwrap_or_default(), unsorted))
             }
-            Action::Split(name) => {
-                let split: Domains = toml::from_str(text)?;
+            (Action::Split(name), Answer::Domains(split)) => {
                 let Some(saved) = saved else {
                     bail!("There are no saved domains to split.");
                 };
@@ -58,26 +82,36 @@ impl Action {
                 }
                 Ok(apply_split(saved.clone(), ix, split))
             }
+            _ => bail!("The answer is for another action."),
         }
     }
+}
+
+/// What an answer says, read from TOML or from a tool call, before Jig
+/// applies it.
+#[derive(Debug)]
+pub(super) enum Answer {
+    /// Index Domains' or a split's: the domains, their flows and Shared.
+    Domains(Domains),
+    Update(Update),
 }
 
 /// Update Domains' answer: where each unsorted file goes, and any new
 /// domain or flow it needs.
 #[derive(Debug, Default, serde::Deserialize)]
-struct Update {
+pub(super) struct Update {
     #[serde(default)]
-    place: Vec<Place>,
+    pub(super) place: Vec<Place>,
     #[serde(default)]
-    new_domain: Vec<Domain>,
+    pub(super) new_domain: Vec<Domain>,
     #[serde(default)]
-    new_flow: Vec<Flow>,
+    pub(super) new_flow: Vec<Flow>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct Place {
-    file: String,
-    domain: String,
+pub(super) struct Place {
+    pub(super) file: String,
+    pub(super) domain: String,
 }
 
 impl Update {
@@ -135,7 +169,7 @@ impl Update {
     }
 }
 
-fn is_shared(name: &str) -> bool {
+pub(super) fn is_shared(name: &str) -> bool {
     name.trim().eq_ignore_ascii_case("shared")
 }
 
@@ -202,24 +236,41 @@ members = ["…"]
 
 A folder ending in `/` stands for every file under it."#;
 
+/// How every action asks the agent to work: with tools that need no
+/// go-ahead.
+const TOOLS: &str = "Work only with these, so nothing waits for the user's go-ahead: the map_project tool (Jig's outline of the project: its grouping, every source file, and each file's purpose, types, functions, imports and calls), your own tools for reading files and searching them, and the map_propose_domains tool to answer. Don't run shell commands and don't start subagents. Only read; change nothing.";
+
+/// What to do with the answer, and the fallback for an agent without the
+/// tool.
+fn answer_with(action: &str, format: &str) -> String {
+    format!(
+        "Answer by calling map_propose_domains with \"action\": {action}. It checks the answer against the project: if it reports problems, fix them and call it again with the whole answer. Once it's accepted, reply in a sentence or two; the user sees the proposal on the Map.
+
+Only if you have no map_propose_domains tool, reply instead with only this TOML, in one fenced block:
+
+{format}"
+    )
+}
+
 /// What Index Domains asks, with Jig's grouping as a hint.
 pub fn index_instruction(hint: &str) -> String {
     format!(
         "You are indexing this project's business domains for Jig's Map. Its top level shows the project as a few business areas, for programmers finding their way and for non-engineers (a product manager, a client) who never read code.
 
-Below is Jig's own grouping of the project: every source file, including ones Jig's index can't read, grouped by folder and calls, with the words their function names use most and the calls between groups. It's a starting hint, not an answer: folders often cut across business areas, and the words are guesses.
+{TOOLS}
+
+Below is Jig's own grouping of the project: source files, including ones Jig's index can't read, grouped by folder and calls, with the words their function names use most and the calls between groups. It's a starting hint, not an answer: folders often cut across business areas, and the words are guesses.
 
 Do this:
-1. Read enough of the code to know what the project does for the people who use it: entry points (routes, controllers, screens, commands, jobs), the main entities, and names in the domain's own language (keep non-English business terms, and explain them).
-2. Group the files into 3 to 9 business domains. Each file belongs to one domain; when a file mixes several, name a type instead (`path#Type`). Code used everywhere (configuration, logging, HTTP plumbing, shared utilities, build scripts) goes in `shared`, not in a domain. Every file in the hint must end up in a domain or in `shared`.
+1. Call map_project with a group or folder for each file's purpose, types, functions and calls, and read enough of the code to know what the project does for the people who use it: entry points (routes, controllers, screens, commands, jobs), the main entities, and names in the domain's own language (keep non-English business terms, such as Danish ones, and explain them).
+2. Group the files into 3 to 9 business domains. Each file belongs to one domain; when a file mixes several, name a type instead (`path#Type`). Code used everywhere (configuration, logging, HTTP plumbing, shared utilities, build scripts) goes in shared, not in a domain. Every source file must end up in a domain or in shared; a folder ending in `/` stands for every file under it.
 3. For each domain write a name a non-engineer understands (two or three words), a purpose of one or two plain sentences with no code terms, what it offers people in plain words (screens, commands, jobs, emails: what someone can do or gets, never routes, URLs, endpoints or code names), and one sentence on why these files belong together.
 4. For the arrows between domains, say what flows along each in a few plain words (\"books rooms for\", \"sends invites to\").
 
-Only read; change nothing. Use your read and search tools. Reply with only this TOML, in one fenced block:
+{}
 
-{DOMAINS_FORMAT}
-
-{hint}"
+{hint}",
+        answer_with("\"index\"", DOMAINS_FORMAT)
     )
 }
 
@@ -231,14 +282,22 @@ pub fn update_instruction(unsorted: &[String], saved: &Domains) -> String {
 
 {}
 
+{TOOLS}
+
 Do this:
-1. Read the unsorted files, and as much around them as you need, to know what they do for the people who use the project.
-2. Put each in the existing domain it belongs to, or in `Shared` if it's code used everywhere. Only when none fits, propose one new domain (a name a non-engineer understands, a plain purpose, what it offers people in plain words with no routes or code names, why). Never move or rename what is already placed, and don't change existing domains.
+1. Read the unsorted files, and as much around them as you need (map_project with their folder gives each file's purpose, types, functions and calls), to know what they do for the people who use the project.
+2. Put each in the existing domain it belongs to, or in Shared if it's code used everywhere. Only when none fits, propose one new domain (a name a non-engineer understands, a plain purpose, what it offers people in plain words with no routes or code names, why; keep non-English business terms and explain them). Never move or rename what is already placed, and don't change existing domains.
 3. Say if the new code adds a flow between domains.
 
-Only read; change nothing. Reply with only this TOML, in one fenced block:
+{}
 
-```toml
+The saved domains:
+
+{}",
+        files.join("\n"),
+        answer_with(
+            "\"update\", a placement for every unsorted file, and new_domains and new_flows only if needed",
+            "```toml
 [[place]]
 file = \"…\"
 domain = \"<existing or new domain name, or Shared>\"
@@ -253,12 +312,8 @@ why = \"…\"
 from = \"…\"
 to = \"…\"
 label = \"…\"
-```
-
-The saved domains:
-
-{}",
-        files.join("\n"),
+```"
+        ),
         saved.to_toml()
     )
 }
@@ -268,18 +323,22 @@ pub fn split_instruction(name: &str, saved: &Domains) -> String {
     format!(
         "You are splitting one of this project's business domains for Jig's Map: \"{name}\" holds too much. The saved domains are below; the others were confirmed by a person and stay as they are.
 
+{TOOLS}
+
 Do this:
-1. Read the files of \"{name}\", as much as you need, to see the business areas in it.
-2. Split it into two or more domains, each with a name a non-engineer understands (two or three words), a purpose of one or two plain sentences with no code terms, what it offers people in plain words (no routes or code names), why its files belong together, and its members. Every member of \"{name}\" must end up in one of them. Don't reuse another domain's name.
+1. Read the files of \"{name}\", as much as you need (map_project with a folder gives each file's purpose, types, functions and calls), to see the business areas in it.
+2. Split it into two or more domains, each with a name a non-engineer understands (two or three words), a purpose of one or two plain sentences with no code terms, what it offers people in plain words (no routes or code names), why its files belong together, and its members. Every member of \"{name}\" must end up in one of them. Don't reuse another domain's name; keep non-English business terms and explain them.
 3. Give the flows between the new domains, and between them and the other domains, each in a few plain words.
 
-Only read; change nothing. Reply with only this TOML, in one fenced block, holding just the new domains and their flows:
-
-{DOMAINS_FORMAT}
+{}
 
 The saved domains:
 
 {}",
+        answer_with(
+            &format!("\"split\", \"domain\": \"{name}\", and just the new domains and their flows"),
+            DOMAINS_FORMAT
+        ),
         saved.to_toml()
     )
 }
@@ -308,41 +367,136 @@ pub fn read_only_command(command: &str) -> bool {
         "ls-tree",
         "cat-file",
     ];
-    if command.contains('>') || command.contains('`') || command.contains("$(") {
+    let Some(parts) = simple_commands(command) else {
         return false;
-    }
-    command
-        .split(['|', ';', '&', '\n'])
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .all(|part| {
-            let words: Vec<&str> = part.split_whitespace().collect();
-            let Some(&program) = words.first() else {
-                return true;
-            };
-            let program = program.rsplit('/').next().unwrap_or(program);
-            match program {
-                "git" => words
-                    .iter()
-                    .skip(1)
-                    .find(|word| !word.starts_with('-'))
-                    .is_some_and(|sub| GIT_READERS.contains(sub)),
-                "find" | "fd" => !words.iter().any(|word| {
-                    matches!(
-                        *word,
-                        "-exec" | "-execdir" | "-delete" | "-ok" | "-okdir" | "-x" | "-X"
-                    )
-                }),
-                "sed" => !words.iter().any(|word| word.starts_with("-i")),
-                "awk" => !part.contains("system"),
-                "xargs" => words
-                    .iter()
-                    .skip(1)
-                    .find(|word| !word.starts_with('-'))
-                    .is_some_and(|next| READERS.contains(next) && *next != "xargs"),
-                _ => READERS.contains(&program),
+    };
+    parts.iter().map(|part| part.as_str()).all(|part| {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        let Some(&program) = words.first() else {
+            return true;
+        };
+        let program = program.rsplit('/').next().unwrap_or(program);
+        match program {
+            "git" => words
+                .iter()
+                .skip(1)
+                .find(|word| !word.starts_with('-'))
+                .is_some_and(|sub| GIT_READERS.contains(sub)),
+            "find" | "fd" => !words.iter().any(|word| {
+                matches!(
+                    *word,
+                    "-exec" | "-execdir" | "-delete" | "-ok" | "-okdir" | "-x" | "-X"
+                )
+            }),
+            "sed" => !words.iter().any(|word| word.starts_with("-i")),
+            "awk" => !part.contains("system"),
+            "xargs" => words
+                .iter()
+                .skip(1)
+                .find(|word| !word.starts_with('-'))
+                .is_some_and(|next| READERS.contains(next) && *next != "xargs"),
+            _ => READERS.contains(&program),
+        }
+    })
+}
+
+/// A command's simple commands, split at `|`, `;`, `&` and new lines
+/// outside quotes, with redirections that throw output away
+/// (`2>/dev/null`, `>/dev/null`, `&>/dev/null`, `2>&1`) left out. `None`
+/// when it writes anywhere else or runs a command inside it.
+fn simple_commands(command: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut parts = vec![String::new()];
+    let mut quote: Option<char> = None;
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let next = chars.get(at + 1).copied();
+        let part = parts.last_mut().expect("one part at least");
+        match quote {
+            Some(open) => {
+                // Double quotes still substitute commands.
+                if open == '"' && (c == '`' || (c == '$' && next == Some('('))) {
+                    return None;
+                }
+                if c == open {
+                    quote = None;
+                } else if c == '\\'
+                    && open == '"'
+                    && let Some(next) = next
+                {
+                    part.push(c);
+                    part.push(next);
+                    at += 2;
+                    continue;
+                }
+                part.push(c);
             }
-        })
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    part.push(c);
+                }
+                '`' => return None,
+                '$' | '<' if next == Some('(') => return None,
+                '\\' => {
+                    part.push(c);
+                    if let Some(next) = next {
+                        part.push(next);
+                        at += 1;
+                    }
+                }
+                '&' if next == Some('>') => {}
+                '|' | ';' | '&' | '\n' => parts.push(String::new()),
+                '>' => {
+                    // The descriptor written against it goes too.
+                    while part.ends_with(|c: char| c.is_ascii_digit()) {
+                        part.pop();
+                    }
+                    let rest: String = chars[at + 1..].iter().collect();
+                    if rest.starts_with("&1") || rest.starts_with("&2") {
+                        at += 3;
+                        continue;
+                    }
+                    let target = rest.trim_start();
+                    let spaces = rest.chars().count() - target.chars().count();
+                    let quiet = target.strip_prefix("/dev/null").is_some_and(|after| {
+                        after
+                            .chars()
+                            .next()
+                            .is_none_or(|c| c.is_whitespace() || matches!(c, ';' | '|' | '&' | ')'))
+                    });
+                    if !quiet {
+                        return None;
+                    }
+                    part.push(' ');
+                    at += 1 + spaces + "/dev/null".len();
+                    continue;
+                }
+                _ => part.push(c),
+            },
+        }
+        at += 1;
+    }
+    Some(
+        parts
+            .into_iter()
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect(),
+    )
+}
+
+/// Whether `request` may go ahead without asking during a Map action:
+/// it only reads, whatever the agent titles it. A shell command that only
+/// reads, reading and searching, or a subagent that only looks around.
+pub fn only_reads(request: &PermissionRequest) -> bool {
+    match request.kind {
+        Asking::Command => read_only_command(&request.detail),
+        Asking::Read => true,
+        Asking::Subagent { explores } => explores,
+        Asking::Web | Asking::Other => false,
+    }
 }
 
 #[cfg(test)]
@@ -470,6 +624,12 @@ label = "cancels into"
             "cd src && git ls-files | wc -l",
             "sed -n 1,80p src/main.rs",
             "find . -name '*.rs' | xargs grep -l Booking",
+            "ls src/bookings 2>/dev/null",
+            "find . -name '*.svelte' 2> /dev/null | head -50",
+            "cat package.json >/dev/null 2>&1",
+            "rg -n 'book|pay' src &>/dev/null",
+            "grep -E \"Booking|Payment\" -r src | sort",
+            "rg -n '->' src",
         ] {
             assert!(read_only_command(command), "{command}");
         }
@@ -481,8 +641,38 @@ label = "cancels into"
             "git checkout main",
             "cat $(which python)",
             "npm install",
+            "ls > files.txt 2>/dev/null",
+            "cat a >> /dev/nullish",
+            "grep x src 2>errors.log",
+            "echo \"$(rm -rf src)\"",
+            "diff <(rm -rf src) b",
+            "ls; rm -rf src 2>/dev/null",
         ] {
             assert!(!read_only_command(command), "{command}");
         }
+    }
+
+    #[test]
+    fn requests_are_known_by_what_they_do() {
+        let request = |kind: Asking, detail: &str| PermissionRequest {
+            id: "1".into(),
+            title: "Bash".into(),
+            detail: detail.into(),
+            kind,
+            always: None,
+        };
+        assert!(only_reads(&request(Asking::Command, "ls 2>/dev/null")));
+        assert!(!only_reads(&request(Asking::Command, "rm -rf src")));
+        assert!(only_reads(&request(Asking::Read, "src/main.rs")));
+        assert!(only_reads(&request(
+            Asking::Subagent { explores: true },
+            "Find the routes"
+        )));
+        assert!(!only_reads(&request(
+            Asking::Subagent { explores: false },
+            "Do it"
+        )));
+        assert!(!only_reads(&request(Asking::Web, "https://example.com")));
+        assert!(!only_reads(&request(Asking::Other, "ls")));
     }
 }

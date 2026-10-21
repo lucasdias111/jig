@@ -1,6 +1,7 @@
-//! The Map's drawing tools as agents get them: Jig's own executable,
-//! started with [`FLAG`], is an MCP server beside the task tool, whose
-//! tools draw on the Map the user is looking at. The server lives in the
+//! The Map's tools as agents get them: Jig's own executable, started with
+//! [`FLAG`], is an MCP server beside the task tool, whose tools draw on
+//! the Map the user is looking at, and read the project and answer for
+//! the Map's actions on domains ([`PROJECT`], [`PROPOSE_DOMAINS`]). The server lives in the
 //! app, which has the project's index to check the places named; here is
 //! how agents are handed it, already allowed (the tools change no code,
 //! and an agent run without a prompt refuses a tool it must ask about),
@@ -17,8 +18,14 @@ pub const FLAG: &str = "--map-mcp";
 /// on, Claude Code `mcp__jig-map__map_trace`.
 pub const NAME: &str = "jig-map";
 
-/// The tools by name, longest first where one name starts another's.
-pub const TOOLS: [&str; 8] = [
+/// The tool that hands over Jig's outline of the project.
+pub const PROJECT: &str = "map_project";
+
+/// The tool a Map action's answer comes in by.
+pub const PROPOSE_DOMAINS: &str = "map_propose_domains";
+
+/// The tools by name.
+pub const TOOLS: [&str; 10] = [
     "map_highlight",
     "map_note",
     "map_trace",
@@ -27,6 +34,8 @@ pub const TOOLS: [&str; 8] = [
     "map_propose",
     "map_describe",
     "map_clear",
+    PROJECT,
+    PROPOSE_DOMAINS,
 ];
 
 /// The tool as OpenCode's config takes it, under `mcp`.
@@ -96,5 +105,11 @@ mod tests {
         assert_eq!(tool_of("map_trace"), None, "another server's");
         assert_eq!(tool_of("mcp__jig__create_task"), None);
         assert_eq!(tool_of("mcp__jig-map__map_tracer"), None);
+        assert_eq!(
+            tool_of("jig-map_map_propose_domains"),
+            Some("map_propose_domains")
+        );
+        assert_eq!(tool_of("mcp__jig-map__map_propose"), Some("map_propose"));
+        assert_eq!(tool_of("mcp__jig-map__map_project"), Some("map_project"));
     }
 }

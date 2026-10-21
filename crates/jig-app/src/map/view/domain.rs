@@ -497,7 +497,7 @@ impl MapView {
                 let Some(grouping) = self.grouping() else {
                     return;
                 };
-                actions::index_instruction(&grouping.hint())
+                actions::index_instruction(&crate::map::domains::tools::grouping_hint(&grouping))
             }
             Action::Update(files) => {
                 let Some(saved) = &self.domains.saved else {
@@ -529,18 +529,27 @@ impl MapView {
         self.start_action(Action::Update(files), cx);
     }
 
-    /// The agent answered action `action` with `reply`: its proposal shows,
-    /// or why it can't.
+    /// The agent answered action `action` with `call`, its call of
+    /// `map_propose_domains`, else in its words `reply`: its proposal
+    /// shows, or why it can't.
     pub fn answer(
         &mut self,
         action: Action,
         reply: &str,
+        call: Option<&serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         self.domains.working = None;
-        let proposal = action
-            .proposal(reply, self.domains.saved.as_ref())
-            .map_err(|error| format!("{error:#}"));
+        let saved = self.domains.saved.as_ref();
+        let proposal = match (call, self.project()) {
+            (Some(call), Some(project)) => {
+                let files = crate::map::domains::tools::source_files(project);
+                action.proposal_from_call(call, saved, &files)
+            }
+            _ => action
+                .proposal(reply, saved)
+                .map_err(|error| format!("{error:#}")),
+        };
         if let Ok(domains) = &proposal {
             self.remember();
             self.domains.proposal = Some(Proposal {

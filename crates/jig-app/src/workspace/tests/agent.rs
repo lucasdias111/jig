@@ -127,6 +127,7 @@ fn permission(detail: &str) -> jig_ai::agent::AgentEvent {
         id: "per_1".into(),
         title: "Run a command".into(),
         detail: detail.into(),
+        kind: jig_ai::agent::Asking::Command,
         always: None,
     })
 }

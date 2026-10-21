@@ -18,7 +18,7 @@ use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
 use super::{
-    Access, AgentCommand, AgentEvent, AgentRequest, Conversation, EditChange, EditRequest,
+    Access, AgentCommand, AgentEvent, AgentRequest, Asking, Conversation, EditChange, EditRequest,
     PermissionRequest, Permissions, Question, QuestionRequest, Turn, asked, canonical, relative,
 };
 use crate::ProviderConfig;
@@ -817,27 +817,34 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let field = |name: &str| metadata[name].as_str().map(str::to_string);
-    let (title, detail) = match properties["permission"].as_str()? {
+    let (title, detail, kind) = match properties["permission"].as_str()? {
         "bash" => (
             "Run a command",
             field("command").unwrap_or_else(|| pattern.into()),
+            Asking::Command,
         ),
         "webfetch" => (
             "Fetch a page",
             field("url").unwrap_or_else(|| pattern.into()),
+            Asking::Web,
         ),
         "websearch" => (
             "Search the web",
             field("query").unwrap_or_else(|| pattern.into()),
+            Asking::Web,
         ),
+        // Its pattern is the kind of subagent.
         "task" => (
             "Start a subagent",
             field("description").unwrap_or_else(|| pattern.into()),
+            Asking::Subagent {
+                explores: field("subagent_type").as_deref().unwrap_or(pattern) == "explore",
+            },
         ),
-        "doom_loop" => ("Repeat the same step again", pattern.into()),
-        "jig_create_task" => ("Save a task", String::new()),
-        "jig_update_task" => ("Update a task", String::new()),
-        "jig_list_tasks" => ("Read the tasks", String::new()),
+        "doom_loop" => ("Repeat the same step again", pattern.into(), Asking::Other),
+        "jig_create_task" => ("Save a task", String::new(), Asking::Other),
+        "jig_update_task" => ("Update a task", String::new(), Asking::Other),
+        "jig_list_tasks" => ("Read the tasks", String::new(), Asking::Other),
         _ => return None,
     };
     // OpenCode remembers these patterns once allowed always.
@@ -853,6 +860,7 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
         id: properties["id"].as_str()?.to_string(),
         title: title.into(),
         detail,
+        kind,
         always: Some(if patterns.is_empty() {
             "Always allow".into()
         } else {
@@ -1144,6 +1152,7 @@ mod tests {
                 id: "per_1".into(),
                 title: "Run a command".into(),
                 detail: "cargo test".into(),
+                kind: Asking::Command,
                 always: Some("Always allow".into()),
             })
         );

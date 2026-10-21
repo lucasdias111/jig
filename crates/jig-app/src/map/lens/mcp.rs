@@ -1,9 +1,12 @@
-//! `Jig --map-mcp [--project <folder>]`: the Map's drawing tools as an
-//! MCP server on stdio, beside the task tool. Each call is checked against
-//! the project's index (read once, in the background, as the server
-//! starts) and answered with what was drawn or the names it couldn't find
-//! with names like them, so the agent can correct itself. The drawing
-//! itself reaches the Map from the agent's own report of the call.
+//! `Jig --map-mcp [--project <folder>]`: the Map's tools as an MCP server
+//! on stdio, beside the task tool. Each call is checked against the
+//! project's index (read in the background as the server starts, and
+//! again, file by file, for the tools of the Map's actions on domains)
+//! and answered with what was drawn or the names it couldn't find with
+//! names like them, so the agent can correct itself. The drawing, or the
+//! domains proposed, reach the Map from the agent's own report of the
+//! call. `map_project` and `map_propose_domains` (`domains::tools`) let
+//! Index Domains and the rest run without a shell.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -12,12 +15,12 @@ use std::sync::mpsc;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::super::domains::Domains;
+use super::super::domains::{Domains, tools as domain_tools};
 use super::super::index::Project;
 use super::{Call, check};
 
 /// How the agent should draw, sent as the server's instructions.
-pub const INSTRUCTIONS: &str = "These tools draw on Jig's Map, the zoomable picture of the project the user is looking at (its levels: Domain, the business areas; Site, components, folders and files; Plan, functions and their calls). Drawing changes no code. When the user asks how something works, where something happens or what to change, read the code first so every place you name is real, then answer by drawing: map_trace for a flow in order, each step labelled with what happens there in a few plain words (map_tour for one worth flying through step by step); map_highlight for the places that matter; map_note for a remark on one place; map_group to circle places that belong together; map_propose for new boxes and arrows you suggest, as ghosts; map_describe to propose purposes for boxes or labels for arrows. Then reply with a short text, a few sentences, that refers to what you drew, writing each place you mention as a Markdown link to it, e.g. [BookingService.create](src/bookings/BookingService.java#BookingService.create), so a click flies the Map there. Name places relative to the project as path/to/file.ext#Type.method for a method, path/to/file.ext#function for a free function, path/to/file.ext for a file (any file, a Svelte page or template too), path/to/folder/ for a folder, or domain:Name for a domain. A name that isn't found is reported back with names like it, and nothing is drawn: fix it and draw again. map_clear removes what you drew in this conversation.";
+pub const INSTRUCTIONS: &str = "These tools draw on Jig's Map, the zoomable picture of the project the user is looking at (its levels: Domain, the business areas; Site, components, folders and files; Plan, functions and their calls). Drawing changes no code. When the user asks how something works, where something happens or what to change, read the code first so every place you name is real, then answer by drawing: map_trace for a flow in order, each step labelled with what happens there in a few plain words (map_tour for one worth flying through step by step); map_highlight for the places that matter; map_note for a remark on one place; map_group to circle places that belong together; map_propose for new boxes and arrows you suggest, as ghosts; map_describe to propose purposes for boxes or labels for arrows. Then reply with a short text, a few sentences, that refers to what you drew, writing each place you mention as a Markdown link to it, e.g. [BookingService.create](src/bookings/BookingService.java#BookingService.create), so a click flies the Map there. Name places relative to the project as path/to/file.ext#Type.method for a method, path/to/file.ext#function for a free function, path/to/file.ext for a file (any file, a Svelte page or template too), path/to/folder/ for a folder, or domain:Name for a domain. A name that isn't found is reported back with names like it, and nothing is drawn: fix it and draw again. map_clear removes what you drew in this conversation. For Jig's actions on domains (Index Domains, Update Domains, splitting a domain), map_project gives Jig's outline of the project and map_propose_domains takes the answer, so no shell command is needed.";
 
 /// A place, as each tool's schema describes it.
 const PLACE: &str = "path/to/file.ext#Type.method, path/to/file.ext#function, path/to/file.ext, path/to/folder/ or domain:Name, relative to the project";
@@ -28,9 +31,9 @@ pub fn serve(root: &Path, input: impl BufRead, mut output: impl Write) -> Result
     let (sender, read) = mpsc::channel();
     let at = root.to_path_buf();
     std::thread::spawn(move || {
-        let _ = sender.send((Project::read_again(&at, None), Domains::read(&at)));
+        let _ = sender.send(Project::read_again(&at, None));
     });
-    let mut project: Option<(Project, Option<Domains>)> = None;
+    let mut project: Option<Project> = None;
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -61,10 +64,15 @@ pub fn serve(root: &Path, input: impl BufRead, mut output: impl Write) -> Result
                     project = read.recv().ok();
                 }
                 let name = params["name"].as_str().unwrap_or_default();
+                // The domains tools see the project as it is now.
+                if [jig_ai::map::PROJECT, jig_ai::map::PROPOSE_DOMAINS].contains(&name)
+                    && let Some(before) = &project
+                {
+                    project = Some(Project::read_again(root, Some(before)));
+                }
+                let domains = Domains::read(root);
                 let answer = match &project {
-                    Some((project, domains)) => {
-                        answer(project, domains.as_ref(), name, &params["arguments"])
-                    }
+                    Some(project) => answer(project, domains.as_ref(), name, &params["arguments"]),
                     None => Err("The project couldn't be read.".into()),
                 };
                 Ok(match answer {
@@ -95,6 +103,18 @@ fn answer(
     tool: &str,
     arguments: &Value,
 ) -> Result<String, String> {
+    if tool == jig_ai::map::PROJECT {
+        return domain_tools::project_outline(project, domains, arguments);
+    }
+    if tool == jig_ai::map::PROPOSE_DOMAINS {
+        let files = domain_tools::source_files(project);
+        let action = domain_tools::action_of(arguments, domains, &files)?;
+        let proposal = action.proposal_from_call(arguments, domains, &files)?;
+        return Ok(format!(
+            "Proposed {} domains on the Map. The user keeps, edits or discards them there; reply in a sentence or two.",
+            proposal.domains.len()
+        ));
+    }
     match super::call(tool, arguments)? {
         Call::Clear => Ok("Cleared what you drew on the Map.".into()),
         Call::Draw(drawing) => {
@@ -132,36 +152,36 @@ fn tools() -> Value {
             "annotations": {"readOnlyHint": true, "destructiveHint": false},
         })
     };
-    json!([
+    let mut tools = vec![
         tool(
             "map_trace",
             "Trace a flow",
             "Draw a flow through the project on the Map, step by step in order, each step a place with what happens there. At coarse levels the steps fold onto the boxes holding them.",
-            json!({"type": "object", "properties": {"title": title("What the flow is, in a few words."), "steps": steps}, "required": ["title", "steps"]})
+            json!({"type": "object", "properties": {"title": title("What the flow is, in a few words."), "steps": steps}, "required": ["title", "steps"]}),
         ),
         tool(
             "map_tour",
             "Draw a tour",
             "A trace the user can fly through step by step with the arrow keys: for a flow worth following closely.",
-            json!({"type": "object", "properties": {"title": title("What the tour shows, in a few words."), "steps": steps}, "required": ["title", "steps"]})
+            json!({"type": "object", "properties": {"title": title("What the tour shows, in a few words."), "steps": steps}, "required": ["title", "steps"]}),
         ),
         tool(
             "map_highlight",
             "Highlight places",
             "Light up places on the Map that matter to the answer, and optionally arrows between them.",
-            json!({"type": "object", "properties": {"title": title("What they have in common."), "places": places, "arrows": arrows}, "required": ["title", "places"]})
+            json!({"type": "object", "properties": {"title": title("What they have in common."), "places": places, "arrows": arrows}, "required": ["title", "places"]}),
         ),
         tool(
             "map_note",
             "Pin a note",
             "Pin a short note to one place on the Map.",
-            json!({"type": "object", "properties": {"place": place, "text": title("The note, a sentence or two.")}, "required": ["place", "text"]})
+            json!({"type": "object", "properties": {"place": place, "text": title("The note, a sentence or two.")}, "required": ["place", "text"]}),
         ),
         tool(
             "map_group",
             "Group places",
             "Circle places that belong together, with a label.",
-            json!({"type": "object", "properties": {"title": title("The group's label."), "places": places}, "required": ["title", "places"]})
+            json!({"type": "object", "properties": {"title": title("The group's label."), "places": places}, "required": ["title", "places"]}),
         ),
         tool(
             "map_propose",
@@ -177,7 +197,7 @@ fn tools() -> Value {
                 "arrows": {"type": "array", "items": {"type": "object", "properties": {
                     "from": title("A new box's name, or a place."), "to": title("A new box's name, or a place."), "label": {"type": "string"}
                 }, "required": ["from", "to"]}}
-            }, "required": ["title", "boxes"]})
+            }, "required": ["title", "boxes"]}),
         ),
         tool(
             "map_describe",
@@ -188,15 +208,17 @@ fn tools() -> Value {
                     "place": place, "purpose": title("What it's for, one plain line.")
                 }, "required": ["place", "purpose"]}},
                 "labels": arrows
-            }})
+            }}),
         ),
         tool(
             "map_clear",
             "Clear the Map",
             "Remove everything drawn on the Map in this conversation.",
-            json!({"type": "object", "properties": {}})
+            json!({"type": "object", "properties": {}}),
         ),
-    ])
+    ];
+    tools.extend(domain_tools::schemas());
+    Value::Array(tools)
 }
 
 #[cfg(test)]
