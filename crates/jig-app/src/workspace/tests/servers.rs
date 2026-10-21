@@ -40,3 +40,78 @@ fn tabs_leave_a_server_started_before_its_project(cx: &mut TestAppContext) {
         .any(|message| message["method"] == "textDocument/didClose");
     assert!(closed, "the old server is told the file closed");
 }
+
+#[gpui_kit::test]
+#[ignore]
+fn a_mended_cargo_toml_brings_problems_back_live(cx: &mut TestAppContext) {
+    assert!(std::env::var_os("JIG_LIVE_LSP").is_some(), "JIG_LIVE_LSP=1");
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let manifest = "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("Cargo.toml"), manifest).unwrap();
+    let main = root.join("src/main.rs");
+    std::fs::write(&main, "fn main() {\n    let x: u32 = \"s\";\n}\n").unwrap();
+    let (window, workspace) = open(cx, &root);
+    open_file(cx, window, &workspace, &main);
+    let key = crate::lsp::diagnostics::path_key(&main);
+    let problems = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            cx.try_global::<crate::lsp::diagnostics::Diagnostics>()
+                .and_then(|store| store.get(&key))
+                .map_or(0, |stored| stored.published.items.len())
+        })
+    };
+    let wait = |cx: &mut TestAppContext, seconds: u64, done: &dyn Fn(usize) -> bool| {
+        for _ in 0..seconds * 10 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            if done(problems(cx)) {
+                return true;
+            }
+        }
+        false
+    };
+    let save_manifest = |cx: &mut TestAppContext, text: &'static str| {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                let editor = this.editor().clone();
+                let len = editor.text(cx).len();
+                editor.apply_edit(0..len, text, window, cx);
+                this.save(&crate::workspace::Save, window, cx);
+            });
+        });
+    };
+    assert!(wait(cx, 60, &|n| n > 0), "the type error shows");
+    open_file(cx, window, &workspace, &root.join("Cargo.toml"));
+    save_manifest(cx, "[package\nname = ");
+    eprintln!("broken: cleared = {}", wait(cx, 15, &|n| n == 0));
+    save_manifest(cx, manifest);
+    assert!(wait(cx, 60, &|n| n > 0), "the type error shows again");
+
+    // Back on main.rs, as you'd go: its squiggles and hover are back.
+    open_file(cx, window, &workspace, &main);
+    let squiggles = cx.update(|cx| {
+        let state = workspace.read(cx).editor().state().read(cx);
+        state.diagnostics().map_or(0, |set| set.iter().count())
+    });
+    assert!(squiggles > 0, "the tab draws the problems");
+    let (client, uri) = cx.update(|cx| {
+        let lsp = workspace.read(cx).tab().lsp.as_ref().expect("in a server");
+        (lsp.client.clone(), lsp.uri.clone())
+    });
+    let hover = futures::executor::block_on(client.request(
+        "textDocument/hover",
+        serde_json::json!({
+            "textDocument": {"uri": uri},
+            "position": {"line": 1, "character": 8},
+        }),
+    ));
+    let hover = hover.unwrap().unwrap();
+    eprintln!("hover: {hover}");
+    assert!(hover.to_string().contains("u32"), "hover answers");
+}
