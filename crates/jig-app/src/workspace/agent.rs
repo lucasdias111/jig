@@ -1694,21 +1694,39 @@ impl Workspace {
             .unwrap_or_default()
     }
 
-    /// Where the conversation opens: just right of the code it's about, so
-    /// it doesn't cover it, when the window has room for it there; below
-    /// the cursor otherwise.
+    /// Where the conversation opens: centred in the window's right half
+    /// (nearer the middle in a narrow window), level with the code it's
+    /// about, or further right when that code reaches past it, so it doesn't
+    /// cover it, when the window has room for it there; below the cursor
+    /// otherwise.
     pub(super) fn agent_anchor(
         &self,
         range: Range<usize>,
         window: &Window,
         cx: &App,
     ) -> Point<Pixels> {
+        const GAP: f32 = 32.;
+        const MARGIN: f32 = 8.;
         let width = self
             .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .map_or(px(jig_commands::chat::WIDTH), |agent| agent.frame.width);
-        self.beside_anchor(range, width, window, cx)
+        let beside = self.beside_anchor(range.clone(), width, window, cx);
+        let Some(line) = self.editor().beside_point(range, cx) else {
+            return beside;
+        };
+        let viewport = window.viewport_size().width;
+        let edge = viewport - self.docked_chat_width();
+        // Clear of the code, as `beside_anchor` places it.
+        let clear = line.x + px(GAP);
+        if clear + width + px(MARGIN) > edge {
+            return beside;
+        }
+        // Pulled in from the edge when it would cross it, but never onto the
+        // code.
+        let centred = (viewport * 0.75 - width / 2.).min(edge - width - px(MARGIN));
+        gpui_kit::point(centred.max(clear), line.y - px(4.))
     }
 
     /// Pressed on the conversation's header: a drag may follow.

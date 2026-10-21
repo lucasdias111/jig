@@ -7,7 +7,11 @@ fn the_agent_conversation_moves_by_its_header(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
-        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            // Clear of the window's edge, with room to move and grow.
+            this.chat.as_mut().unwrap().anchor = gpui_kit::point(px(120.), px(80.));
+        })
     });
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
     vcx.update(|window, cx| window.render_frame(cx));
@@ -114,6 +118,16 @@ fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppCon
         "right of the code: {anchor:?} {end:?}"
     );
     assert!((anchor.y - end.top()).abs() < px(8.), "level with it");
+    let viewport = cx
+        .update(|cx| window.update(cx, |_, window, _| window.viewport_size().width))
+        .unwrap();
+    // Centred in the right half, pulled in as far as it must to fit.
+    let width = px(jig_commands::chat::WIDTH);
+    let expected = (viewport * 0.75 - width / 2.).min(viewport - width - px(8.));
+    assert!(
+        (anchor.x - expected).abs() < px(1.),
+        "centred in the right half: {anchor:?} in {viewport:?}"
+    );
 
     let (anchor, end) = open_on(cx, short.len()..short.len() + long.len());
     assert!(
@@ -598,7 +612,11 @@ fn the_agent_conversation_resizes_by_its_corner(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = three_files(cx);
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
-        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+        ws.update(cx, |this, cx| {
+            this.open_test_conversation(window, cx);
+            // Clear of the window's edge, with room to move and grow.
+            this.chat.as_mut().unwrap().anchor = gpui_kit::point(px(120.), px(80.));
+        })
     });
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
     vcx.update(|window, cx| window.render_frame(cx));
