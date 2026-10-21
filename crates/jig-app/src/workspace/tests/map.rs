@@ -764,6 +764,13 @@ fn map_pictures_live(cx: &mut TestAppContext) {
             .enumerate()
             .collect();
         view.update(cx, |view, cx| view.set_drawings(drawings, cx));
+        // `JIG_MAP_TOUR=<step>`: touring the first drawing, there.
+        if let Some(step) = std::env::var("JIG_MAP_TOUR")
+            .ok()
+            .and_then(|step| step.parse().ok())
+        {
+            view.update(cx, |view, _| view.show_tour_step(0, step));
+        }
     }
     draw(cx, window);
     let write = |name: String, bytes: Vec<u8>| {

@@ -42,6 +42,9 @@ pub struct LensState {
     /// The Pinned layer shows.
     pub pins_shown: bool,
     pub tour: Option<Tour>,
+    /// Where the conversation on screen was last drawn, in the window: the
+    /// list of drawings keeps clear of it.
+    pub conversation: Option<jig_commands::chat::ChatBounds>,
     /// Places as resolved against the project, by name: forgotten when
     /// it's read again.
     resolved: RefCell<HashMap<String, Option<Place>>>,
@@ -54,6 +57,7 @@ impl Default for LensState {
             pins: Vec::new(),
             pins_shown: true,
             tour: None,
+            conversation: None,
             resolved: RefCell::default(),
         }
     }
@@ -128,6 +132,12 @@ impl MapView {
         }
         self.lens.drawings = drawings;
         cx.notify();
+    }
+
+    /// Where the conversation is drawn, for the list of drawings to keep
+    /// clear of.
+    pub fn set_conversation_bounds(&mut self, bounds: Option<jig_commands::chat::ChatBounds>) {
+        self.lens.conversation = bounds;
     }
 
     /// The pins as saved now.
@@ -559,6 +569,20 @@ impl MapView {
     /// The tour's step, if one is under way.
     pub fn tour_step(&self) -> Option<usize> {
         self.lens.tour.map(|tour| tour.step)
+    }
+
+    /// Touring the conversation's drawing `id` at `step`, the camera left
+    /// where it is: for pictures of a tour.
+    pub fn show_tour_step(&mut self, id: usize, step: usize) {
+        self.lens.tour = Some(Tour {
+            source: Source::Conversation(id),
+            step,
+        });
+    }
+
+    /// Where the canvas is in the window.
+    pub fn canvas_bounds(&self) -> Bounds<Pixels> {
+        self.bounds.get()
     }
 
     pub fn pin_names(&self) -> Vec<String> {

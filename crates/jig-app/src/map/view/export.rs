@@ -265,10 +265,18 @@ fn draw_lens(out: &mut String, picture: &Picture, size: (f32, f32), palette: &Pa
     };
     for marked in &picture.boxes {
         let r = marked.rect;
+        // Touring, the step's box stands out and the rest fall back.
+        let fade = if picture.touring && !marked.toured {
+            0.35
+        } else {
+            1.
+        };
+        let _ = write!(out, r#"<g opacity="{fade}">"#);
         if !r.overlaps(&canvas) {
             let (x, y, arrow) = super::lens_draw::edge_spot(r, size);
             let _ = write!(out, r#"<circle cx="{x}" cy="{y}" r="13" fill="{agent}"/>"#);
             text(out, x - 6., y + 5., 14., palette.background, true, arrow);
+            out.push_str("</g>");
             continue;
         }
         let _ = write!(
@@ -293,10 +301,19 @@ fn draw_lens(out: &mut String, picture: &Picture, size: (f32, f32), palette: &Pa
             );
             text(out, x + 6., y + 15.5, 12., palette.card, true, badge);
         }
-        let lines = super::lens_draw::capped(&marked.words);
+        let (font, row) = if marked.toured {
+            (14., 19.)
+        } else {
+            (12.5, 17.)
+        };
+        let width = r.width.max(if marked.toured { 320. } else { 260. });
+        // Each line wrapped to the box, as the canvas does.
+        let lines: Vec<String> = super::lens_draw::capped(&marked.words)
+            .iter()
+            .flat_map(|line| wrap(line, width - 16., font))
+            .collect();
         if !lines.is_empty() {
-            let width = r.width.max(240.);
-            let height = 8. + lines.len() as f32 * 15.;
+            let height = 10. + lines.len() as f32 * row;
             // A frame's words above it, clear of the boxes inside.
             let top = if marked.above {
                 r.y - 22. - height
@@ -305,10 +322,11 @@ fn draw_lens(out: &mut String, picture: &Picture, size: (f32, f32), palette: &Pa
             };
             let _ = write!(
                 out,
-                r#"<rect x="{}" y="{}" width="{width}" height="{height}" rx="6" fill="{}" fill-opacity="0.95" stroke="{agent}" stroke-opacity="0.6"{}/>"#,
+                r#"<rect x="{}" y="{}" width="{width}" height="{height}" rx="8" fill="{}" stroke="{agent}" stroke-opacity="0.7" stroke-width="{}"{}/>"#,
                 r.x,
                 top,
                 hex(palette.card),
+                if marked.toured { 2.5 } else { 1. },
                 if marked.proposed {
                     r#" stroke-dasharray="5 4""#
                 } else {
@@ -319,14 +337,15 @@ fn draw_lens(out: &mut String, picture: &Picture, size: (f32, f32), palette: &Pa
                 text(
                     out,
                     r.x + 8.,
-                    top + 14. + n as f32 * 15.,
-                    11.,
+                    top + 4. + row * (n as f32 + 0.8),
+                    font,
                     palette.foreground,
-                    false,
-                    &clip(line, width - 16., 11.),
+                    marked.toured,
+                    &clip(line, width - 16., font),
                 );
             }
         }
+        out.push_str("</g>");
     }
     for ghost in &picture.ghosts {
         let r = ghost.rect;

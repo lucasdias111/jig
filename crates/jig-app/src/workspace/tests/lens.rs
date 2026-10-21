@@ -510,3 +510,34 @@ fn map_agent_live(cx: &mut TestAppContext) {
         "the agent drew on the Map"
     );
 }
+
+#[gpui_kit::test]
+fn the_list_keeps_clear_of_the_conversation_and_the_guide_steps(cx: &mut TestAppContext) {
+    let (_dir, window, workspace, view) = on_the_map(cx);
+    drew(cx, window, &workspace, "map_trace", trace());
+    draw(cx, window);
+    // The conversation drawn over the canvas's top left: the list goes
+    // top right.
+    let canvas = cx.update(|cx| view.read(cx).canvas_bounds());
+    let over = std::rc::Rc::new(std::cell::Cell::new(gpui_kit::Bounds {
+        origin: canvas.origin,
+        size: gpui_kit::size(px(200.), px(200.)),
+    }));
+    view.update(cx, |view, _| {
+        view.set_conversation_bounds(Some(over.clone()))
+    });
+    assert!(cx.update(|cx| view.read(cx).list_goes_right()));
+    over.set(gpui_kit::Bounds {
+        origin: canvas.origin + gpui_kit::point(canvas.size.width - px(100.), px(0.)),
+        size: gpui_kit::size(px(100.), px(100.)),
+    });
+    assert!(!cx.update(|cx| view.read(cx).list_goes_right()));
+    // The guide's Next and Back are the arrow keys' steps.
+    press(cx, window, "right");
+    view.update(cx, |view, cx| {
+        view.tour_by(1, cx);
+        view.tour_by(1, cx);
+        view.tour_by(-1, cx);
+    });
+    assert_eq!(cx.update(|cx| view.read(cx).tour_step()), Some(1));
+}

@@ -24,6 +24,10 @@ use super::{MapEvent, MapView};
 const MOST_WORDS: usize = 3;
 /// How far from the canvas edge an arrow to a box out of view sits.
 const EDGE: f32 = 22.;
+/// Where the list of drawings and the tour's guide sit, and how wide the
+/// list is.
+const LIST_TOP: f32 = 12.;
+const LIST_WIDTH: f32 = 360.;
 /// A ghost box's size on screen.
 const GHOST: (f32, f32) = (190., 54.);
 
@@ -97,6 +101,8 @@ pub(super) struct Picture {
     /// The conversation's proposals, by id, and their first ghost: where
     /// what to do with them goes.
     pub(super) proposals: Vec<(usize, Rect)>,
+    /// A tour is under way: its step's box stands out, the rest fade.
+    pub(super) touring: bool,
 }
 
 impl Picture {
@@ -135,6 +141,7 @@ impl MapView {
     pub(super) fn lens_picture(&self, screen: &dyn Fn(Rect) -> Rect) -> Picture {
         let mut picture = Picture::default();
         let tour = self.lens.tour;
+        picture.touring = tour.is_some();
         for (source, drawing) in self.drawings_showing() {
             let pinned = matches!(source, Source::Pin(_));
             let landings: Vec<Option<Landing>> = drawing
@@ -406,10 +413,14 @@ impl MapView {
             );
         }
         let mut words = Vec::new();
+        let mut current = Vec::new();
         let mut edges = Vec::new();
         for marked in &picture.boxes {
             let rect = marked.rect;
             let colour = colour(marked.pinned);
+            // Touring, the step's box stands out and the rest fall back.
+            let faded = picture.touring && !marked.toured;
+            let fade = if faded { 0.35 } else { 1. };
             if !rect.overlaps(&canvas_rect) {
                 edges.push(self.render_edge_arrow(&marked.key, marked.drawn, rect, size, cx));
                 continue;
@@ -426,6 +437,7 @@ impl MapView {
                     .border_color(colour)
                     .bg(colour.opacity(if marked.toured { 0.2 } else { 0.07 }))
                     .when(marked.toured, |this| this.border_4())
+                    .opacity(fade)
                     .into_any_element(),
             );
             for (n, badge) in marked.badges.iter().enumerate() {
@@ -448,34 +460,48 @@ impl MapView {
                         .font_weight(FontWeight::BOLD)
                         .text_color(white())
                         .child(badge.clone())
+                        .opacity(fade)
                         .into_any_element(),
                 );
             }
             if !marked.words.is_empty() {
-                words.push(
-                    v_flex()
-                        .absolute()
-                        .left(px(rect.x))
-                        .when(marked.above, |this| this.bottom(px(size.1 - rect.y + 22.)))
-                        .when(!marked.above, |this| this.top(px(rect.bottom() + 8.)))
-                        .max_w(px(rect.width.max(240.)))
-                        .px_2()
-                        .py_1()
-                        .gap_0p5()
-                        .rounded(px(6.))
-                        .bg(theme.background.opacity(0.94))
-                        .border_1()
-                        .border_color(colour.opacity(0.6))
-                        .when(marked.proposed, |this| this.border_dashed())
-                        .text_xs()
-                        .text_color(theme.foreground)
-                        .children(
-                            capped(&marked.words)
-                                .into_iter()
-                                .map(|line| div().child(line)),
-                        )
-                        .into_any_element(),
-                );
+                let active = marked.toured;
+                let explanation = v_flex()
+                    .absolute()
+                    .left(px(rect.x))
+                    .when(marked.above, |this| this.bottom(px(size.1 - rect.y + 22.)))
+                    .when(!marked.above, |this| this.top(px(rect.bottom() + 8.)))
+                    .max_w(px(rect.width.max(if active { 320. } else { 260. })))
+                    .px_2p5()
+                    .py_1p5()
+                    .gap_1()
+                    .rounded(px(8.))
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(colour.opacity(0.7))
+                    .shadow_md()
+                    .when(marked.proposed, |this| this.border_dashed())
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .when(active, |this| {
+                        this.border_2()
+                            .border_color(colour)
+                            .shadow_lg()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                    })
+                    .opacity(fade)
+                    .children(
+                        capped(&marked.words)
+                            .into_iter()
+                            .map(|line| div().child(line)),
+                    )
+                    .into_any_element();
+                if active {
+                    current.push(explanation);
+                } else {
+                    words.push(explanation);
+                }
             }
         }
         for ghost in &picture.ghosts {
@@ -536,6 +562,7 @@ impl MapView {
             out.push(self.render_proposal_buttons(*id, *first, cx));
         }
         out.extend(words);
+        out.extend(current);
         out.extend(edges);
         out.extend(self.render_legend(cx));
         out.extend(self.render_tour_bar(cx));
@@ -632,47 +659,48 @@ impl MapView {
                 Source::Pin(ix) => self.lens.pins.get(ix).map(|pin| pin.name.clone()),
                 Source::Conversation(_) => None,
             };
-            let header =
-                h_flex()
-                    .gap_1p5()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if pinned.is_some() {
-                                agent.opacity(0.75)
-                            } else {
-                                agent
-                            })
-                            .child(match &pinned {
-                                Some(_) => format!("Pinned · {}", drawing.summary()),
-                                None => drawing.summary(),
-                            }),
-                    )
-                    .when(drawing.kind.stepped(), |this| {
-                        this.child(legend_button(("map-tour", n), "Tour", cx).on_click(
+            let header = h_flex()
+                .gap_1p5()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if pinned.is_some() {
+                            agent.opacity(0.75)
+                        } else {
+                            agent
+                        })
+                        .child(match &pinned {
+                            Some(_) => format!("Pinned · {}", drawing.summary()),
+                            None => drawing.summary(),
+                        }),
+                )
+                .when(drawing.kind.stepped(), |this| {
+                    this.child(
+                        legend_button(("map-tour", n), "Step through  →", cx).on_click(
                             cx.listener(move |view, _, _, cx| view.start_tour(source, cx)),
-                        ))
-                    })
-                    .when(drawing.kind == Kind::Describe && pinned.is_none(), |this| {
-                        this.child(legend_button(("map-keep", n), "Keep", cx).on_click(
-                            cx.listener(move |view, _, _, cx| {
-                                view.settle_descriptions(source, true, cx)
-                            }),
-                        ))
-                        .child(
-                            legend_button(("map-reject", n), "Reject", cx).on_click(cx.listener(
-                                move |view, _, _, cx| view.settle_descriptions(source, false, cx),
-                            )),
-                        )
-                    })
-                    .when_some(pinned, |this, name| {
-                        this.child(
-                            legend_button(("map-unpin", n), "Unpin", cx)
-                                .on_click(cx.listener(move |view, _, _, cx| view.unpin(&name, cx))),
-                        )
-                    });
+                        ),
+                    )
+                })
+                .when(drawing.kind == Kind::Describe && pinned.is_none(), |this| {
+                    this.child(
+                        legend_button(("map-keep", n), "Keep", cx).on_click(cx.listener(
+                            move |view, _, _, cx| view.settle_descriptions(source, true, cx),
+                        )),
+                    )
+                    .child(
+                        legend_button(("map-reject", n), "Reject", cx).on_click(cx.listener(
+                            move |view, _, _, cx| view.settle_descriptions(source, false, cx),
+                        )),
+                    )
+                })
+                .when_some(pinned, |this, name| {
+                    this.child(
+                        legend_button(("map-unpin", n), "Unpin", cx)
+                            .on_click(cx.listener(move |view, _, _, cx| view.unpin(&name, cx))),
+                    )
+                });
             let steps = drawing.steps.iter().enumerate().map(|(ix, step)| {
                 let landed = self.landing(&step.place).is_some();
                 let toured = tour.is_some_and(|t| t.source == source && t.step == ix);
@@ -693,7 +721,6 @@ impl MapView {
                     .id(("map-legend-step", n * 1000 + ix))
                     .debug_selector(move || format!("map-legend-step-{n}-{ix}"))
                     .cursor_pointer()
-                    .truncate()
                     .text_color(if landed {
                         theme.foreground
                     } else {
@@ -727,15 +754,17 @@ impl MapView {
                     .into_any_element(),
             );
         }
+        let right = self.list_goes_right();
         Some(
             v_flex()
                 .id("map-lens-list")
                 .debug_selector(|| "map-lens-list".into())
                 .absolute()
-                .left(px(12.))
-                .bottom(px(32.))
-                .w(px(330.))
-                .max_h(relative(0.45))
+                .top(px(LIST_TOP))
+                .when(right, |this| this.right(px(12.)))
+                .when(!right, |this| this.left(px(12.)))
+                .w(px(LIST_WIDTH))
+                .max_h(relative(0.7))
                 .overflow_y_scroll()
                 .p_2p5()
                 .gap_2()
@@ -752,39 +781,99 @@ impl MapView {
         )
     }
 
-    /// While touring: the step showing, and the keys that move on.
+    /// Whether the list of drawings goes top right: when the conversation
+    /// covers the top left of the canvas, where it goes otherwise.
+    pub fn list_goes_right(&self) -> bool {
+        let Some(chat) = self.lens.conversation.as_ref().map(|bounds| bounds.get()) else {
+            return false;
+        };
+        if chat.size.width <= px(0.) {
+            return false;
+        }
+        let canvas = self.bounds.get();
+        let list = Bounds {
+            origin: canvas.origin + point(px(12.), px(LIST_TOP)),
+            size: size(px(LIST_WIDTH), canvas.size.height * 0.7),
+        };
+        list.intersects(&chat)
+    }
+
+    /// The guide along the top while touring: the step showing, with
+    /// buttons and the arrow keys to go back and on.
     fn render_tour_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let tour = self.lens.tour?;
         let drawing = self.drawing(tour.source)?;
         let step = drawing.steps.get(tour.step)?;
         let agent = agent_accent(cx);
+        let count = drawing.steps.len();
+        let arrow = |id: &'static str, label: &'static str, delta: i32, enabled: bool| {
+            h_flex()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_none()
+                .h(px(30.))
+                .px_3()
+                .gap_1()
+                .rounded_full()
+                .bg(white().opacity(if enabled { 0.22 } else { 0.08 }))
+                .text_color(white().opacity(if enabled { 1. } else { 0.45 }))
+                .font_weight(FontWeight::SEMIBOLD)
+                .when(enabled, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(white().opacity(0.34)))
+                })
+                .child(label)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.tour_by(delta, cx);
+                }))
+        };
         Some(
             h_flex()
                 .id("map-tour-bar")
                 .debug_selector(|| "map-tour-bar".into())
                 .absolute()
-                .bottom(px(32.))
-                .left(px(360.))
-                .right(px(12.))
+                .top(px(LIST_TOP))
+                .left(px(LIST_WIDTH + 24.))
+                .right(px(LIST_WIDTH + 24.))
                 .justify_center()
                 .child(
                     h_flex()
-                        .gap_2()
-                        .px_3()
+                        .gap_3()
+                        .pl_1p5()
+                        .pr_1p5()
                         .py_1p5()
                         .rounded_full()
                         .bg(agent)
-                        .text_sm()
                         .text_color(white())
-                        .shadow_md()
-                        .child(format!("{} of {}", tour.step + 1, drawing.steps.len()))
+                        .shadow_lg()
+                        .child(arrow("map-tour-back", "← Back", -1, tour.step > 0))
                         .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(step.label.clone()),
+                            v_flex()
+                                .min_w_0()
+                                .items_center()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .text_base()
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .opacity(0.85)
+                                                .child(format!("{} of {count}", tour.step + 1)),
+                                        )
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(step.label.clone()),
+                                        ),
+                                )
+                                .child(div().text_xs().opacity(0.85).child(format!(
+                                    "{} · ← → step through · Esc ends",
+                                    self.short_name(&step.place)
+                                ))),
                         )
-                        .child(div().opacity(0.8).child(self.short_name(&step.place)))
-                        .child(div().opacity(0.8).child("← → · Esc")),
+                        .child(arrow("map-tour-next", "Next →", 1, tour.step + 1 < count)),
                 )
                 .into_any_element(),
         )

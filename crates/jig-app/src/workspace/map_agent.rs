@@ -164,8 +164,15 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        pane.view
-            .update(cx, |view, cx| view.set_drawings(drawings, cx));
+        let bounds = self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .map(|agent| agent.frame_bounds());
+        pane.view.update(cx, |view, cx| {
+            view.set_conversation_bounds(bounds);
+            view.set_drawings(drawings, cx)
+        });
     }
 
     /// A drawing's row asked to show or hide it, pin it or tour it.

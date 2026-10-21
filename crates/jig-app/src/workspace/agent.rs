@@ -199,6 +199,11 @@ struct PendingEdit {
 }
 
 impl AgentRun {
+    /// Where the conversation was last drawn, in the window.
+    pub(super) fn frame_bounds(&self) -> jig_commands::chat::ChatBounds {
+        self.frame.bounds.clone()
+    }
+
     /// The project folder it works in.
     pub(super) fn directory(&self) -> &Path {
         &self.directory
