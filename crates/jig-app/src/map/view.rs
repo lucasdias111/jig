@@ -119,7 +119,10 @@ pub struct MapView {
     drawn: RefCell<Scene>,
     /// Site's arrows for the boxes showing, kept while they stay the same.
     site_arrows: RefCell<Option<(u64, SiteArrows)>>,
-    /// Tests, and calls into Shared, shown at Site.
+    /// Where each link's words were put, in the drawing, and how big they
+    /// were: kept so they stay put as the view moves.
+    label_spots: RefCell<HashMap<String, LabelSpot>>,
+    /// Tests shown at Site.
     site_show: Show,
     /// The level is changing by zooming on, not by a jump: the view stays
     /// where it is, since Domain and Site share their drawing.
@@ -172,6 +175,7 @@ impl MapView {
             hover: None,
             drawn: RefCell::new(Scene::default()),
             site_arrows: RefCell::new(None),
+            label_spots: RefCell::new(HashMap::new()),
             site_show: Show::default(),
             continuous: false,
             stack: Vec::new(),
@@ -779,6 +783,10 @@ pub enum Expand {
 }
 
 use plan::Node;
+
+/// Where a link's words were put, in the drawing, and their size on
+/// screen.
+type LabelSpot = ((f32, f32), (f32, f32));
 
 /// Site's arrows for the boxes showing.
 type SiteArrows = Rc<Vec<super::site::Arrow>>;

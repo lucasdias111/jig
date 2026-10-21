@@ -110,6 +110,7 @@ impl MapView {
     pub(super) fn domains_changed(&mut self) {
         *self.domains.level.borrow_mut() = None;
         *self.site_arrows.borrow_mut() = None;
+        self.label_spots.borrow_mut().clear();
         self.domains.homes.clear();
         if let (Some(project), Some(domains)) = (self.project.clone(), self.shown_domains()) {
             self.site = Some(Rc::new(Site::of(&project, &domains, self.site_show)));

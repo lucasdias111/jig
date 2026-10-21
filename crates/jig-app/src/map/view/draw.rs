@@ -17,11 +17,14 @@ use super::super::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT, Rect};
 use super::super::plan::Focus;
 use super::super::site::Show;
 use super::input::Hover;
-use super::scene::{Card, FrameBox, Look, Scene};
+use super::scene::{Arrow, Card, FrameBox, Look, Scene};
 use super::zoom::Camera;
 use super::{Expand, Level, MapView, domain};
 
 const BAR_HEIGHT: f32 = 34.;
+/// A link's words kept where they were stay within this many points of
+/// it, as zooming in spreads them apart.
+const STICKY_REACH: f32 = 220.;
 const GRID: f32 = 24.;
 
 /// Where a scene goes on a canvas `size` big, seen by `camera`.
@@ -388,6 +391,77 @@ impl MapView {
             .child(self.render_hint(cx))
     }
 
+    /// Where a link's words go on screen, its top left: where they went
+    /// last time, kept in the drawing so they move with it, as long as
+    /// that's still clear of `avoid` and near the link; else a spot found
+    /// afresh (`label_spot`), kept for next time. Looking again every frame
+    /// would have them jump about as the view moves.
+    fn sticky_spot(
+        &self,
+        arrow: &Arrow,
+        ends: ((f32, f32), (f32, f32)),
+        size: (f32, f32),
+        avoid: &[Rect],
+        view: View,
+    ) -> (f32, f32) {
+        let key = format!("{}|{}", arrow.keys.0, arrow.keys.1);
+        let zoom = view.camera.zoom.max(0.0001);
+        let to_screen = |at: (f32, f32)| {
+            let p = view.point(at);
+            (f32::from(p.x), f32::from(p.y))
+        };
+        let to_drawing = |(x, y): (f32, f32)| {
+            (
+                (x - view.size.0 / 2.) / zoom + view.camera.x,
+                (y - view.size.1 / 2.) / zoom + view.camera.y,
+            )
+        };
+        if let Some(&(at, was)) = self.label_spots.borrow().get(&key)
+            && was == size
+        {
+            let (x, y) = to_screen(at);
+            let rect = Rect {
+                x,
+                y,
+                width: size.0,
+                height: size.1,
+            };
+            let clear = avoid.iter().all(|other| !rect.overlaps(other));
+            let near = leader(ends.0, ends.1, rect)
+                .is_none_or(|(on, edge)| (on.0 - edge.0).hypot(on.1 - edge.1) < STICKY_REACH);
+            if clear && near {
+                return (x, y);
+            }
+        }
+        // Kept on screen when the link's middle is; else wherever's clear.
+        let middle = bow_point(
+            point(px(ends.0.0), px(ends.0.1)),
+            point(px(ends.1.0), px(ends.1.1)),
+            0.5,
+        );
+        let screen = Rect {
+            x: 0.,
+            y: 0.,
+            width: view.size.0,
+            height: view.size.1,
+        };
+        let within = if screen.contains((f32::from(middle.x), f32::from(middle.y))) {
+            screen
+        } else {
+            Rect {
+                x: -1e6,
+                y: -1e6,
+                width: 2e6,
+                height: 2e6,
+            }
+        };
+        let spot = label_spot(ends.0, ends.1, size, avoid, within);
+        self.label_spots
+            .borrow_mut()
+            .insert(key, (to_drawing(spot), size));
+        spot
+    }
+
     /// The keys of the boxes on the paused program's stack.
     fn path_keys(&self) -> Vec<String> {
         let Some(project) = &self.project else {
@@ -475,13 +549,7 @@ impl MapView {
                         (f32::from(to.x), f32::from(to.y)),
                     );
                     let size = flow_label_size(&arrow.labels, arrow.title.as_deref());
-                    let screen = Rect {
-                        x: 0.,
-                        y: 0.,
-                        width: view.size.0,
-                        height: view.size.1,
-                    };
-                    let spot = label_spot(ends.0, ends.1, size, &avoid, screen);
+                    let spot = self.sticky_spot(arrow, ends, size, &avoid, view);
                     let placed = Rect {
                         x: spot.0,
                         y: spot.1,

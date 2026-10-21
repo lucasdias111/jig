@@ -462,3 +462,40 @@ fn flows_are_faint_but_for_the_selected_domains(cx: &mut TestAppContext) {
     draw(cx, window);
     assert_eq!(cx.update(|cx| view.read(cx).drawn_faint()), [true]);
 }
+
+#[gpui_kit::test]
+fn flows_stay_put_as_the_view_pans(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx, true);
+    let view = to_domain(cx, window, &workspace);
+    let at = cx.update(|cx| view.read(cx).region_point("Bookings", true));
+    click(cx, window, at);
+    draw(cx, window);
+    let label = |cx: &mut TestAppContext| {
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.debug_bounds("map-flow-0").expect("a flow label").origin
+    };
+    let mut was = label(cx);
+    // Each nudge of the view moves the label with it, no more, no less,
+    // out past the window's edge too.
+    let step = point(px(-40.), px(0.));
+    let mut gone_past = false;
+    for _ in 0..40 {
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at,
+            delta: gpui_kit::ScrollDelta::Pixels(step),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui_kit::TouchPhase::Moved,
+        });
+        vcx.run_until_parked();
+        draw(cx, window);
+        let now = label(cx);
+        assert_eq!(now - was, step, "it moved with the view");
+        was = now;
+        if now.x < px(0.) {
+            gone_past = true;
+            break;
+        }
+    }
+    assert!(gone_past, "it went off the edge with its link");
+}
