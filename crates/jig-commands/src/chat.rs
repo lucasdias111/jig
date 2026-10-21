@@ -104,6 +104,9 @@ pub enum ChatStatus {
         /// The label of the button that allows it always.
         always: String,
     },
+    /// The agent proposes saving its plan as a task: the user saves it,
+    /// turns it down, or says in the reply box what to change.
+    SaveTask { title: String, todos: Vec<String> },
     /// The agent asked a question; the user picks an option or answers in
     /// the reply box.
     Question {
@@ -607,6 +610,59 @@ impl RenderOnce for Conversation {
                         ))
                         .child(decide_button(2, "Deny", "esc", false, &self.on_decide, cx)),
                 ),
+            ChatStatus::SaveTask { title, todos } => v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Save this plan as a task?"),
+                )
+                .child(
+                    v_flex()
+                        .id("jig-agent-task-draft")
+                        .debug_selector(|| "agent-task-draft".into())
+                        .max_h(px(REQUEST_DETAIL_HEIGHT))
+                        .overflow_y_scroll()
+                        .gap_0p5()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.))
+                        .bg(theme.foreground.opacity(0.05))
+                        .text_xs()
+                        .when(!title.is_empty(), |this| {
+                            this.child(div().font_weight(FontWeight::MEDIUM).child(title))
+                        })
+                        .children(todos.into_iter().enumerate().map(|(index, todo)| {
+                            h_flex()
+                                .items_start()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("{}.", index + 1)),
+                                )
+                                .child(div().flex_1().min_w_0().child(todo))
+                        })),
+                )
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1p5()
+                        .child(decide_button(0, "Save", "↩", true, &self.on_decide, cx))
+                        .child(decide_button(
+                            2,
+                            "Don't save",
+                            "esc",
+                            false,
+                            &self.on_decide,
+                            cx,
+                        )),
+                )
+                .child(reply_box(&self.input, accent, cx))
+                .child(crate::surface::hint(
+                    "enter to save, or say what to change · esc not to save",
+                    cx,
+                )),
             ChatStatus::Question {
                 question,
                 options,

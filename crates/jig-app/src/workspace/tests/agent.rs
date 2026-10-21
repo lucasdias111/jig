@@ -129,6 +129,7 @@ fn permission(detail: &str) -> jig_ai::agent::AgentEvent {
         detail: detail.into(),
         kind: jig_ai::agent::Asking::Command,
         always: None,
+        task: None,
     })
 }
 
@@ -271,6 +272,85 @@ fn the_agent_s_question_is_answered_by_number_or_in_words(cx: &mut TestAppContex
         entries.last(),
         Some(&ChatEntry::User("No · only if it's quick".into()))
     );
+}
+
+fn save_task() -> jig_ai::agent::AgentEvent {
+    jig_ai::agent::AgentEvent::Permission(jig_ai::agent::PermissionRequest {
+        id: "per_task".into(),
+        title: "Save this plan as a task".into(),
+        detail: String::new(),
+        kind: jig_ai::agent::Asking::Other,
+        always: Some("Always allow".into()),
+        task: Some(jig_ai::agent::TaskDraft {
+            title: "Split the parser".into(),
+            todos: vec!["Move the lexer".into(), "Add tests".into()],
+        }),
+    })
+}
+
+#[gpui_kit::test]
+fn saving_a_plan_is_a_question_answered_yes_no_or_in_words(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = three_files(cx);
+    let ask = |cx: &mut TestAppContext| {
+        let ws = workspace.clone();
+        step(cx, window, move |window, cx| {
+            ws.update(cx, |this, cx| {
+                this.test_agent_request(save_task(), window, cx)
+            })
+        });
+    };
+    let waiting = |cx: &mut TestAppContext| cx.update(|cx| workspace.read(cx).agent_waiting_on());
+    let last = |cx: &mut TestAppContext| {
+        cx.update(|cx| workspace.read(cx).agent_entries().last().cloned())
+    };
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    ask(cx);
+    // The plan is shown with Save and Don't save, and no Always allow.
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    assert!(vcx.debug_bounds("agent-task-draft").is_some());
+    assert!(vcx.debug_bounds("agent-decide-0").is_some());
+    assert!(vcx.debug_bounds("agent-decide-1").is_none());
+    assert!(vcx.debug_bounds("agent-decide-2").is_some());
+
+    // Enter with nothing typed saves it.
+    let before = last(cx);
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(waiting(cx), None);
+    assert_eq!(last(cx), before, "nothing to say about it");
+
+    // Words in the reply box turn it down, for the agent to follow.
+    ask(cx);
+    step(cx, window, |window, cx| {
+        window.input("leave out the tests", cx)
+    });
+    step(cx, window, |window, cx| window.press("enter", cx));
+    assert_eq!(waiting(cx), None);
+    assert_eq!(
+        last(cx),
+        Some(ChatEntry::User("leave out the tests".into()))
+    );
+
+    // Esc doesn't save it.
+    ask(cx);
+    step(cx, window, |window, cx| window.press("escape", cx));
+    assert_eq!(waiting(cx), None);
+    assert_eq!(
+        last(cx),
+        Some(ChatEntry::Note("Not saved as a task.".into()))
+    );
+
+    // ⌘↩ just saves it: the next plan is asked about again.
+    ask(cx);
+    let before = last(cx);
+    step(cx, window, |window, cx| window.press("secondary-enter", cx));
+    assert_eq!(waiting(cx), None);
+    assert_eq!(last(cx), before);
+    ask(cx);
+    assert_eq!(waiting(cx), Some("permission"));
 }
 
 #[gpui_kit::test]

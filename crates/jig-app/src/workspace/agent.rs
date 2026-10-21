@@ -132,6 +132,9 @@ pub(super) struct AgentRun {
     /// the rest of the conversation, for agents that can't remember that
     /// themselves.
     always_allowed: Vec<String>,
+    /// What the user answered a question with that the agent can't hear
+    /// until its turn is over: sent as the next message then.
+    follow_up: Option<String>,
     /// ⌘↩ on an edit: the agent's edits are written without review for the
     /// rest of the conversation, each still listed in it.
     accept_edits: bool,
@@ -807,6 +810,7 @@ impl Workspace {
             cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = event
                     && !this.answer_agent_question(None, window, cx)
+                    && !this.answer_task_question(window, cx)
                 {
                     this.reply_to_agent(window, cx);
                 }
@@ -831,6 +835,7 @@ impl Workspace {
             models_open: false,
             sign_in: None,
             always_allowed: Vec::new(),
+            follow_up: None,
             accept_edits: false,
             title: asked.clone(),
             touched: Vec::new(),
@@ -1252,6 +1257,54 @@ impl Workspace {
         true
     }
 
+    /// Enter in the reply box while the agent asks to save a plan as a
+    /// task: saves it when nothing's typed, otherwise turns it down with
+    /// what's typed for the agent to follow. Returns false when it isn't
+    /// asking that.
+    pub(super) fn answer_task_question(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(run) = self.chat.as_mut() else {
+            return false;
+        };
+        let id = run.id;
+        let Some(agent) = run.agent.as_mut() else {
+            return false;
+        };
+        if !matches!(&agent.pending, Some(Pending::Permission(request)) if request.task.is_some()) {
+            return false;
+        }
+        let said = agent.input.read(cx).value().trim().to_string();
+        if said.is_empty() {
+            return self.settle_agent_request(true, window, cx);
+        }
+        let Some(Pending::Permission(request)) = agent.pending.take() else {
+            return false;
+        };
+        agent
+            .input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        agent.entries.push(ChatEntry::User(said.clone()));
+        agent.scroll.scroll_to_bottom();
+        if let Some(session) = agent.session.clone() {
+            let note = session.hears_notes().then(|| said.clone());
+            if note.is_none() {
+                agent.follow_up = Some(said);
+            }
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = session.reply(&request.id, false, note.as_deref());
+                })
+                .detach();
+        }
+        self.editor().focus(window, cx);
+        self.show_next_request(id, window, cx);
+        cx.notify();
+        true
+    }
+
     /// Allow or turn down what the agent asked to do (a command, the web, a
     /// subagent), or decline its question. Returns false when it isn't
     /// waiting on one.
@@ -1268,10 +1321,28 @@ impl Workspace {
         let Some(agent) = run.agent.as_mut() else {
             return false;
         };
+        // Enter with words in the reply box answers the plan with them.
+        let typed = !agent.input.read(cx).value().trim().is_empty();
+        if allow
+            && typed
+            && matches!(&agent.pending, Some(Pending::Permission(request)) if request.task.is_some())
+        {
+            return self.answer_task_question(window, cx);
+        }
         let session = agent.session.clone();
         match agent.pending.take() {
             Some(Pending::Permission(request)) => {
-                if !allow {
+                if request.task.is_some() {
+                    agent
+                        .input
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                    if !allow {
+                        agent
+                            .entries
+                            .push(ChatEntry::Note("Not saved as a task.".into()));
+                    }
+                    self.editor().focus(window, cx);
+                } else if !allow {
                     agent
                         .entries
                         .push(ChatEntry::Note(format!("Not allowed: {}", request.detail)));
@@ -1330,6 +1401,11 @@ impl Workspace {
             return false;
         };
         let request = match agent.pending.take() {
+            // Saving a plan has no "always": the next one is asked again.
+            Some(Pending::Permission(request)) if request.task.is_some() => {
+                agent.pending = Some(Pending::Permission(request));
+                return self.settle_agent_request(true, window, cx);
+            }
             Some(Pending::Permission(request)) => request,
             Some(edit @ Pending::Edit(_)) => {
                 agent.pending = Some(edit);
@@ -1595,6 +1671,7 @@ impl Workspace {
         agent.finished = true;
         agent.queue.clear();
         agent.pending = None;
+        agent.follow_up = None;
         if let Some(session) = agent.session.clone() {
             std::thread::spawn(move || session.abort());
         }
@@ -1735,6 +1812,15 @@ impl Workspace {
                     })
                     .collect(),
                 opened: sign_in.opened,
+            },
+            (
+                Some(Pending::Permission(PermissionRequest {
+                    task: Some(task), ..
+                })),
+                _,
+            ) => ChatStatus::SaveTask {
+                title: task.title.clone(),
+                todos: task.todos.clone(),
             },
             (Some(Pending::Permission(request)), _) => ChatStatus::Asking {
                 title: request.title.clone(),
@@ -1912,14 +1998,20 @@ impl Workspace {
                 agent.finished = true;
                 let action = agent.map_action.clone();
                 let proposed = agent.proposed.take();
+                let follow_up = agent.follow_up.take();
                 self.finish_agent(text.clone(), window, cx);
                 if let Some(action) = action {
                     self.answer_map_action(action, &text, proposed.as_ref(), window, cx);
+                }
+                // Already in the transcript, from when the user said it.
+                if let Some(said) = follow_up {
+                    self.start_turn(id, TurnInput::Prompt(said), window, cx);
                 }
                 return false;
             }
             Message::SignIn(needed) => {
                 agent.finished = true;
+                agent.follow_up = None;
                 agent.loading = false;
                 let said = needed.to_string();
                 agent.sign_in = Some(PendingSignIn {
@@ -1935,6 +2027,7 @@ impl Workspace {
             }
             Message::Failed(error) => {
                 agent.finished = true;
+                agent.follow_up = None;
                 agent.loading = false;
                 if agent.map_action.is_some() {
                     self.end_map_action(cx);
@@ -2034,6 +2127,14 @@ impl Workspace {
                         .detach();
                 }
                 self.show_next_request(id, window, cx);
+            }
+            // Saved with Enter, or answered in the reply box.
+            Some(Request::Permission(request)) if request.task.is_some() => {
+                agent.pending = Some(Pending::Permission(request));
+                agent.scroll.scroll_to_bottom();
+                let input = agent.input.clone();
+                input.update(cx, |input, cx| input.focus(window, cx));
+                cx.notify();
             }
             Some(Request::Permission(request)) => {
                 agent.pending = Some(Pending::Permission(request));

@@ -211,7 +211,7 @@ fn permissions_section() -> Section {
         .row(access_row(
             "tasks",
             "Tasks",
-            "Saving and updating tasks in the task planner. It asks you in the conversation first.",
+            "Updating tasks in the task planner. Saving a plan as a new task always asks you first, unless tasks aren't allowed.",
             &["task", "planner", "todo", "plan"],
             |p| p.tasks,
             |p, access| p.tasks = access,

@@ -21,10 +21,13 @@ pub const FLAG: &str = "--tasks-mcp";
 pub const NAME: &str = "jig";
 
 /// The tools by name, for agents that want them listed.
-pub const TOOLS: [&str; 3] = ["create_task", "list_tasks", "update_task"];
+pub const TOOLS: [&str; 3] = [CREATE, "list_tasks", "update_task"];
+
+/// The tool that saves a plan as a task, which the user is asked about.
+pub const CREATE: &str = "create_task";
 
 /// How agents should go about tasks, sent as the server's instructions.
-const INSTRUCTIONS: &str = "Jig's task planner: tasks with a title, a description and a todo list, which the user keeps in Jig's sidebar and works through. Write a plan as a numbered list, one step per item. Whenever you propose three or more steps, or work that spans several files, end your reply by asking whether to save the plan as a Jig task, and only call create_task once the user agrees. As you finish a todo of a task you're working on, check it off with update_task.";
+const INSTRUCTIONS: &str = "Jig's task planner: tasks with a title, a description and a todo list, which the user keeps in Jig's sidebar and works through. Write a plan as a numbered list, one step per item. Whenever you propose three or more steps, or work that spans several files, call create_task with the plan instead of asking in your reply whether to save it: Jig asks the user, who saves it, turns it down, or answers with something to change, which you should follow. Don't propose the same plan again once it's turned down. As you finish a todo of a task you're working on, check it off with update_task.";
 
 /// What a task holds, and no more, so it reads at a glance in the sidebar.
 const SHAPE: &str = "Keep a task short and concise. Its description is a one or two sentence summary, then exactly these four sections, each a sentence or two: `### Background` (how things are now), `### Context` (what else it touches), `### Purpose` (why it's worth doing) and `### Risks` (what could go wrong). Nothing else: no rules, file lists or deferred work. The steps go in the todos, one short line each.";
@@ -142,7 +145,7 @@ fn tools() -> Value {
         {
             "name": "create_task",
             "title": "Create a task",
-            "description": format!("Save a plan as a task in Jig's task planner, which the user sees in the sidebar and works through. Only call this once the user has agreed: whenever you propose three or more steps, or work across several files, first ask them (with your question tool if you have one) whether to save the plan as a Jig task. {SHAPE} {link}"),
+            "description": format!("Save a plan as a task in Jig's task planner, which the user sees in the sidebar and works through. Call this whenever you propose three or more steps, or work across several files, rather than asking in your reply or with a question tool: Jig shows the user the plan and asks whether to save it. If they turn it down, the call fails, maybe with what to change; follow that. {SHAPE} {link}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -311,7 +314,7 @@ mod tests {
             answers[0]["result"]["instructions"]
                 .as_str()
                 .unwrap()
-                .contains("asking whether to save the plan")
+                .contains("call create_task with the plan")
         );
         let create = &answers[1]["result"]["tools"][0]["description"];
         assert!(

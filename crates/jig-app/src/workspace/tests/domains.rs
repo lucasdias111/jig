@@ -208,6 +208,7 @@ fn index_domains_is_a_conversation_whose_answer_is_kept_on_the_map(cx: &mut Test
                     detail: "rg -n book src | head".into(),
                     kind: jig_ai::agent::Asking::Command,
                     always: None,
+                    task: None,
                 }),
                 window,
                 cx,
@@ -225,6 +226,7 @@ fn index_domains_is_a_conversation_whose_answer_is_kept_on_the_map(cx: &mut Test
                     detail: "rm -rf target".into(),
                     kind: jig_ai::agent::Asking::Command,
                     always: None,
+                    task: None,
                 }),
                 window,
                 cx,
@@ -294,6 +296,7 @@ fn index_domains_with_the_maps_tools_asks_for_nothing(cx: &mut TestAppContext) {
             detail: detail.into(),
             kind,
             always: None,
+            task: None,
         })
     };
     send(
@@ -371,6 +374,7 @@ fn send_outside_a_map_action(
                     detail: "ls src 2>/dev/null".into(),
                     kind: jig_ai::agent::Asking::Command,
                     always: None,
+                    task: None,
                 }),
                 window,
                 cx,

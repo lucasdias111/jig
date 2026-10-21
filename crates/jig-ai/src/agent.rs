@@ -52,9 +52,10 @@ pub struct Permissions {
     pub web_fetch: Access,
     pub web_search: Access,
     pub subagents: Access,
-    /// Saving and updating tasks in Jig's task planner, which only writes
-    /// `.jig/tasks/`. The agent asks in the conversation first, so it's
-    /// allowed unless the user says otherwise.
+    /// Updating tasks in Jig's task planner, which only writes
+    /// `.jig/tasks/`: allowed unless the user says otherwise. Saving a new
+    /// one is always put to the user as a question, unless this denies it
+    /// ([`Permissions::creating_tasks`]).
     pub tasks: Access,
     /// Its question tool; without it, it asks in its reply.
     pub questions: bool,
@@ -69,6 +70,18 @@ impl Default for Permissions {
             subagents: Access::Ask,
             tasks: Access::Allow,
             questions: true,
+        }
+    }
+}
+
+impl Permissions {
+    /// Saving a plan as a new task: the agent proposes it with
+    /// `create_task` and the user is asked whether to save it, the
+    /// question being the call's go-ahead. Only turning tasks off skips it.
+    pub fn creating_tasks(&self) -> Access {
+        match self.tasks {
+            Access::Deny => Access::Deny,
+            Access::Ask | Access::Allow => Access::Ask,
         }
     }
 }
@@ -295,6 +308,34 @@ pub struct PermissionRequest {
     /// e.g. "Always allow `cargo test *`". `None` when the agent can't
     /// remember; Jig then stops asking for the rest of the conversation.
     pub always: Option<String>,
+    /// The plan it wants saved as a task, when that's what it asks: put to
+    /// the user as "Save this plan as a task?" rather than as a go-ahead.
+    pub task: Option<TaskDraft>,
+}
+
+/// A plan the agent proposes with `create_task`, as the user is asked it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TaskDraft {
+    pub title: String,
+    pub todos: Vec<String>,
+}
+
+impl TaskDraft {
+    /// From `create_task`'s input; what's missing is left empty.
+    pub fn from_input(input: &Value) -> Self {
+        Self {
+            title: input["title"].as_str().unwrap_or_default().trim().into(),
+            todos: input["todos"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|todo| !todo.is_empty())
+                .map(str::to_string)
+                .collect(),
+        }
+    }
 }
 
 /// What a request does, so it's told apart by that rather than by how an

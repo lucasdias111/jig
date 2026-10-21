@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use super::{
     Access, AgentCommand, AgentEvent, AgentRequest, Asking, Conversation, EditChange, EditRequest,
-    PermissionRequest, Permissions, Turn, canonical, relative,
+    PermissionRequest, Permissions, TaskDraft, Turn, canonical, relative,
 };
 use crate::{map, tasks};
 
@@ -780,6 +780,8 @@ impl Session {
                 let access = if call.map_tool().is_some() {
                     // Drawing on the Map changes no code.
                     Access::Allow
+                } else if call.creates_task() {
+                    turn.permissions.creating_tasks()
                 } else if call.is_task_tool() {
                     turn.permissions.tasks
                 } else {
@@ -801,12 +803,19 @@ impl Session {
                                     .to_string(),
                             )
                         });
+                        let task = call
+                            .creates_task()
+                            .then(|| TaskDraft::from_input(&call.raw_input));
                         let request = PermissionRequest {
                             id: ours.clone(),
-                            title: call.asking(),
+                            title: match task {
+                                Some(_) => "Save this plan as a task".into(),
+                                None => call.asking(),
+                            },
                             detail: call.detail(&self.directory),
                             kind: call.what(),
                             always,
+                            task,
                         };
                         let waiting = Waiting::Permission {
                             id,
@@ -1095,6 +1104,11 @@ impl ToolCall {
         let title = self.title.to_lowercase();
         title.contains(tasks::mcp::NAME)
             && tasks::mcp::TOOLS.iter().any(|tool| title.contains(tool))
+    }
+
+    /// Jig's `create_task`, whose go-ahead is the user saving the plan.
+    fn creates_task(&self) -> bool {
+        self.is_task_tool() && self.title.to_lowercase().contains(tasks::mcp::CREATE)
     }
 
     fn command(&self) -> Option<String> {
@@ -1799,6 +1813,8 @@ sleep 30
         assert!(call("update_task (jig MCP Server)").is_task_tool());
         assert!(!call("mcp__other__create_task").is_task_tool());
         assert!(!call("mcp__jig__something_else").is_task_tool());
+        assert!(call("mcp__jig__create_task").creates_task());
+        assert!(!call("mcp__jig__update_task").creates_task());
         assert_eq!(Permissions::default().tasks, Access::Allow);
     }
 

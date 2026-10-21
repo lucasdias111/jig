@@ -660,6 +660,7 @@ label = "cancels into"
             detail: detail.into(),
             kind,
             always: None,
+            task: None,
         };
         assert!(only_reads(&request(Asking::Command, "ls 2>/dev/null")));
         assert!(!only_reads(&request(Asking::Command, "rm -rf src")));

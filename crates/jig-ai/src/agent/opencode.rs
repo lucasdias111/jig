@@ -6,7 +6,7 @@
 //! in OpenCode, which Jig marks as its own so they can be listed again.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 
 use super::{
     Access, AgentCommand, AgentEvent, AgentRequest, Asking, Conversation, EditChange, EditRequest,
-    PermissionRequest, Permissions, Question, QuestionRequest, Turn, asked, canonical, relative,
+    PermissionRequest, Permissions, Question, QuestionRequest, TaskDraft, Turn, asked, canonical,
+    relative,
 };
 use crate::ProviderConfig;
 use crate::config::{AgentModel, ProviderKind};
@@ -101,7 +102,7 @@ fn opencode_provider(provider: &ProviderConfig, model: &str, api_key: Option<&st
 }
 
 /// How the agent should behave inside Jig, added to its own system prompt.
-const SYSTEM: &str = "You are running inside Jig, a code editor. The user talks to you from the code itself; a message may say which file they are in and what they selected. Make changes with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Shell commands, web access and subagents may wait for the user's go-ahead or be turned off; if one is turned down, carry on without it or ask. Change only what the task needs. When you are done, say briefly what you did; Markdown is fine. If the task is unclear, ask with your question tool or in your reply; later messages continue the same conversation. Write a plan as a numbered list, one step per item. Whenever you propose three or more steps, or work that spans several files, end your reply by asking whether to save the plan as a task in Jig's task planner, and save it with the jig_create_task tool only once the user agrees, short and laid out as the tool describes.";
+const SYSTEM: &str = "You are running inside Jig, a code editor. The user talks to you from the code itself; a message may say which file they are in and what they selected. Make changes with your edit tools. Each edit is shown to the user, who accepts or rejects it; a rejection may come with a note, which you should follow. Shell commands, web access and subagents may wait for the user's go-ahead or be turned off; if one is turned down, carry on without it or ask. Change only what the task needs. When you are done, say briefly what you did; Markdown is fine. If the task is unclear, ask with your question tool or in your reply; later messages continue the same conversation. Write a plan as a numbered list, one step per item. Whenever you propose three or more steps, or work that spans several files, propose it with the jig_create_task tool, short and laid out as the tool describes, rather than asking in your reply or with your question tool: Jig asks the user whether to save it, and they may answer with something to change instead.";
 
 /// `permissions` as OpenCode takes them for a session.
 fn rules(permissions: &Permissions) -> Value {
@@ -124,7 +125,14 @@ fn rules(permissions: &Permissions) -> Value {
         .chain(
             tasks::mcp::TOOLS
                 .iter()
-                .map(|tool| (format!("{}_{tool}", tasks::mcp::NAME), permissions.tasks)),
+                .map(|tool| {
+                    let access = if *tool == tasks::mcp::CREATE {
+                        permissions.creating_tasks()
+                    } else {
+                        permissions.tasks
+                    };
+                    (format!("{}_{tool}", tasks::mcp::NAME), access)
+                }),
         )
         // Drawing on the Map changes no code: never asked about.
         .chain(map::opencode_permissions().map(|tool| (tool, Access::Allow)))
@@ -599,15 +607,17 @@ impl Session {
                     ),
                 }))
             }
-            "permission.asked" => match permission(properties) {
-                Some(request) => Some(AgentEvent::Permission(request)),
-                None => {
-                    // Anything else Jig can't show: say no, so the agent moves on.
-                    let id = properties["id"].as_str().unwrap_or_default();
-                    self.reply(id, false, Some("That isn't available inside Jig."))?;
-                    None
+            "permission.asked" => {
+                match permission(properties, sessions.borrow_mut().draft_for(properties)) {
+                    Some(request) => Some(AgentEvent::Permission(request)),
+                    None => {
+                        // Anything else Jig can't show: say no, so the agent moves on.
+                        let id = properties["id"].as_str().unwrap_or_default();
+                        self.reply(id, false, Some("That isn't available inside Jig."))?;
+                        None
+                    }
                 }
-            },
+            }
             "question.asked" => Some(AgentEvent::Question(QuestionRequest {
                 id: properties["id"].as_str().unwrap_or_default().to_string(),
                 questions: properties["questions"]
@@ -632,6 +642,7 @@ impl Session {
                 // The `task` tool starts a subagent; its child session tells
                 // them apart, its output is what the subagent reported.
                 let child = state["metadata"]["sessionId"].as_str();
+                sessions.borrow_mut().keep_draft(part);
                 match (state["status"].as_str(), child) {
                     (Some("running"), Some(child)) if tool == "task" => {
                         Some(AgentEvent::Subagent {
@@ -809,7 +820,7 @@ fn history(messages: &Value, directory: &str) -> Vec<Turn> {
 
 /// A request that isn't an edit, as the user is asked it. `None` for
 /// requests Jig doesn't ask about.
-fn permission(properties: &Value) -> Option<PermissionRequest> {
+fn permission(properties: &Value, input: Option<Value>) -> Option<PermissionRequest> {
     let metadata = &properties["metadata"];
     let pattern = properties["patterns"]
         .as_array()
@@ -842,7 +853,7 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
             },
         ),
         "doom_loop" => ("Repeat the same step again", pattern.into(), Asking::Other),
-        "jig_create_task" => ("Save a task", String::new(), Asking::Other),
+        CREATE_TASK => ("Save this plan as a task", String::new(), Asking::Other),
         "jig_update_task" => ("Update a task", String::new(), Asking::Other),
         "jig_list_tasks" => ("Read the tasks", String::new(), Asking::Other),
         _ => return None,
@@ -866,8 +877,13 @@ fn permission(properties: &Value) -> Option<PermissionRequest> {
         } else {
             format!("Always allow {}", patterns.join(", "))
         }),
+        task: (properties["permission"] == CREATE_TASK)
+            .then(|| TaskDraft::from_input(input.as_ref().unwrap_or(&Value::Null))),
     })
 }
+
+/// `create_task` as OpenCode names it, under Jig's tool server.
+const CREATE_TASK: &str = "jig_create_task";
 
 fn is_edit(tool: &str) -> bool {
     matches!(
@@ -897,6 +913,9 @@ fn did(tool: &str, input: &Value) -> Option<String> {
 struct Sessions {
     own: String,
     subagents: HashSet<String>,
+    /// The plans `create_task` was called with, by call: its permission
+    /// doesn't carry them, and the user is asked about the plan.
+    drafts: HashMap<String, Value>,
 }
 
 impl Sessions {
@@ -904,6 +923,7 @@ impl Sessions {
         Self {
             own: own.to_string(),
             subagents: HashSet::new(),
+            drafts: HashMap::new(),
         }
     }
 
@@ -915,6 +935,22 @@ impl Sessions {
 
     fn follows(&self, session: &str) -> bool {
         session == self.own || self.subagents.contains(session)
+    }
+
+    /// Remember the plan of a `create_task` call, once its input is known.
+    fn keep_draft(&mut self, part: &Value) {
+        let input = &part["state"]["input"];
+        if part["tool"] == CREATE_TASK
+            && let Some(call) = part["callID"].as_str()
+            && input.is_object()
+        {
+            self.drafts.insert(call.to_string(), input.clone());
+        }
+    }
+
+    /// The plan of the call a permission is for.
+    fn draft_for(&mut self, properties: &Value) -> Option<Value> {
+        self.drafts.remove(properties["tool"]["callID"].as_str()?)
     }
 }
 
@@ -1147,25 +1183,50 @@ mod tests {
     fn asks_about_commands_and_the_web_but_not_the_rest() {
         let bash = json!({"id": "per_1", "permission": "bash", "patterns": ["cargo test"], "metadata": {}});
         assert_eq!(
-            permission(&bash),
+            permission(&bash, None),
             Some(PermissionRequest {
                 id: "per_1".into(),
                 title: "Run a command".into(),
                 detail: "cargo test".into(),
                 kind: Asking::Command,
                 always: Some("Always allow".into()),
+                task: None,
             })
         );
         let with_pattern = json!({"id": "per_4", "permission": "bash", "patterns": ["cargo test"], "always": ["cargo test *"], "metadata": {}});
         assert_eq!(
-            permission(&with_pattern).unwrap().always.as_deref(),
+            permission(&with_pattern, None).unwrap().always.as_deref(),
             Some("Always allow `cargo test *`"),
             "says what OpenCode will remember"
         );
         let fetch = json!({"id": "per_2", "permission": "webfetch", "patterns": [], "metadata": {"url": "https://x.dev"}});
-        assert_eq!(permission(&fetch).unwrap().detail, "https://x.dev");
+        assert_eq!(permission(&fetch, None).unwrap().detail, "https://x.dev");
         let other = json!({"id": "per_3", "permission": "external_directory", "patterns": ["/etc"], "metadata": {}});
-        assert_eq!(permission(&other), None);
+        assert_eq!(permission(&other, None), None);
+    }
+
+    #[test]
+    fn saving_a_task_asks_about_the_plan_it_was_called_with() {
+        let mut sessions = Sessions::new("ses_1");
+        sessions.keep_draft(&json!({
+            "type": "tool", "tool": "jig_create_task", "callID": "call_1",
+            "state": {"status": "running", "input": {"title": "Split the parser", "todos": ["Move the lexer", " ", "Add tests"]}},
+        }));
+        let asked = json!({
+            "id": "per_1", "permission": "jig_create_task", "patterns": ["*"], "always": ["*"],
+            "metadata": {}, "tool": {"messageID": "msg_1", "callID": "call_1"},
+        });
+        let draft = sessions.draft_for(&asked);
+        assert!(draft.is_some());
+        let request = permission(&asked, draft).unwrap();
+        assert_eq!(request.title, "Save this plan as a task");
+        assert_eq!(
+            request.task,
+            Some(TaskDraft {
+                title: "Split the parser".into(),
+                todos: vec!["Move the lexer".into(), "Add tests".into()],
+            })
+        );
     }
 
     #[test]
@@ -1190,9 +1251,23 @@ mod tests {
         assert_eq!(action("question").as_deref(), Some("deny"));
         assert_eq!(action("edit").as_deref(), Some("ask"), "always");
         assert_eq!(
-            action("jig_create_task").as_deref(),
+            action("jig_update_task").as_deref(),
             Some("allow"),
             "by default"
+        );
+        assert_eq!(
+            action("jig_create_task").as_deref(),
+            Some("ask"),
+            "the user is asked whether to save the plan"
+        );
+        let off = rules(&Permissions {
+            tasks: Access::Deny,
+            ..Permissions::default()
+        });
+        assert!(
+            off.as_array().unwrap().contains(
+                &json!({"permission": "jig_create_task", "pattern": "*", "action": "deny"})
+            )
         );
         let asking = rules(&Permissions {
             tasks: Access::Ask,

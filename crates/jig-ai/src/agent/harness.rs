@@ -125,6 +125,13 @@ impl Session {
         }
     }
 
+    /// Whether a turned-down request's note reaches the agent. An ACP
+    /// agent only hears that it was turned down, so the note goes as the
+    /// next message instead.
+    pub fn hears_notes(&self) -> bool {
+        matches!(self, Session::OpenCode(_))
+    }
+
     /// Let a request through, and the agent not ask about ones like it again.
     pub fn allow_always(&self, request_id: &str) -> Result<()> {
         match self {
