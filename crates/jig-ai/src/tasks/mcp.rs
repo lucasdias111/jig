@@ -40,6 +40,11 @@ pub fn set_command(executable: PathBuf) {
     let _ = COMMAND.set(executable);
 }
 
+/// The executable agents start Jig's tools with, once it's set.
+pub fn command() -> Option<&'static PathBuf> {
+    COMMAND.get()
+}
+
 /// The tool as OpenCode's config takes it, under `mcp`.
 pub fn opencode_server() -> Option<Value> {
     let command = COMMAND.get()?;

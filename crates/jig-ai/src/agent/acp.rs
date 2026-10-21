@@ -25,7 +25,7 @@ use super::{
     Access, AgentCommand, AgentEvent, AgentRequest, Conversation, EditChange, EditRequest,
     PermissionRequest, Permissions, Turn, canonical, relative,
 };
-use crate::tasks;
+use crate::{map, tasks};
 
 /// The protocol version Jig speaks.
 const PROTOCOL_VERSION: u64 = 1;
@@ -588,7 +588,7 @@ impl Session {
         let directory = canonical(directory);
         let created = connection.request(
             "session/new",
-            json!({"cwd": directory, "mcpServers": tasks::mcp::acp_servers(&directory)}),
+            json!({"cwd": directory, "mcpServers": map::acp_servers(&directory)}),
         )?;
         connection.learn_models(&created);
         let id = created["sessionId"]
@@ -668,7 +668,7 @@ impl Session {
             json!({
                 "sessionId": self.id,
                 "cwd": self.directory,
-                "mcpServers": tasks::mcp::acp_servers(&self.directory),
+                "mcpServers": map::acp_servers(&self.directory),
             }),
             Box::new(move |result| {
                 let _ = sender.send(result);
@@ -777,7 +777,10 @@ impl Session {
                     lock(&self.waiting).insert(ours.clone(), waiting);
                     return Ok(Some(AgentEvent::Edit(EditRequest { id: ours, ..edit })));
                 }
-                let access = if call.is_task_tool() {
+                let access = if call.map_tool().is_some() {
+                    // Drawing on the Map changes no code.
+                    Access::Allow
+                } else if call.is_task_tool() {
                     turn.permissions.tasks
                 } else {
                     turn.permissions.access(call.kind.as_str())
@@ -991,6 +994,8 @@ fn commands(list: &Value) -> Vec<AgentCommand> {
 struct ToolCall {
     id: String,
     title: String,
+    /// The tool's own name, where the agent says it.
+    name: String,
     kind: String,
     status: String,
     raw_input: Value,
@@ -1006,6 +1011,13 @@ impl ToolCall {
         }
         if let Some(title) = text("title") {
             self.title = title;
+        }
+        if let Some(name) = text("name").or_else(|| {
+            update["_meta"]["claudeCode"]["toolName"]
+                .as_str()
+                .map(str::to_string)
+        }) {
+            self.name = name;
         }
         if let Some(kind) = text("kind") {
             self.kind = kind;
@@ -1069,6 +1081,11 @@ impl ToolCall {
                 new: new.to_string(),
             },
         })
+    }
+
+    /// Which of the Map's tools this is, if it's one.
+    fn map_tool(&self) -> Option<&'static str> {
+        map::tool_of(&self.name).or_else(|| map::tool_of(&self.title))
     }
 
     /// One of Jig's own task tools, as the agent names it: Claude Code's
@@ -1289,8 +1306,19 @@ impl TurnState {
     /// it runs, a line for the transcript once it's done. An edit made
     /// without asking is always the conversation's own line, so it shows.
     fn tool_call(&mut self, update: &Value, subagent: Option<&str>) -> Vec<AgentEvent> {
+        let was_done = update["toolCallId"]
+            .as_str()
+            .and_then(|id| self.calls.get(id))
+            .is_some_and(|call| call.status == "completed");
         let call = self.merge(update);
         match call.status.as_str() {
+            "completed" if was_done => Vec::new(),
+            "completed" if subagent.is_none() && call.map_tool().is_some() => {
+                vec![AgentEvent::Drew {
+                    tool: call.map_tool().unwrap_or_default().to_string(),
+                    input: call.raw_input.clone(),
+                }]
+            }
             "completed" if call.kind == "edit" => {
                 let asked = self.reviewed.contains(&call.id)
                     || call.content.iter().any(|content| {
@@ -1380,6 +1408,7 @@ impl Transcript {
                     .unwrap_or_default()
                     .to_string();
                 let call = self.calls.entry(id).or_default();
+                let was_done = call.status == "completed";
                 call.merge(update);
                 let call = call.clone();
                 let line = match call.status.as_str() {
@@ -1389,9 +1418,17 @@ impl Transcript {
                             accepted: call.status == "completed",
                         })
                     }
+                    "completed" if call.map_tool().is_some() => Some(Line::Drew {
+                        tool: call.map_tool().unwrap_or_default().to_string(),
+                        input: call.raw_input.clone(),
+                    }),
                     "completed" => call.done(&self.directory).map(Line::Did),
                     _ => None,
                 };
+                // Updates after the call is done change nothing.
+                if was_done {
+                    return;
+                }
                 self.turns.extend(line);
                 return;
             }
@@ -1638,6 +1675,27 @@ sleep 30
             "content": [{"type": "diff", "path": "/p/src/b.rs", "newText": "b"}],
         }));
         assert!(events.is_empty(), "it was reviewed");
+    }
+
+    #[test]
+    fn a_drawing_on_the_map_is_reported_once_with_what_it_was_given() {
+        let mut turn = TurnState::new("/p", Permissions::default());
+        let started = turn.update(&json!({
+            "sessionUpdate": "tool_call", "toolCallId": "d1", "status": "pending",
+            "title": "mcp__jig-map__map_trace", "kind": "other",
+            "rawInput": {"title": "Booking", "steps": [{"node": "a.rs#book", "label": "Book"}]},
+        }));
+        assert!(matches!(started.as_slice(), [AgentEvent::Step(_)]));
+        let update =
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "d1", "status": "completed"});
+        assert_eq!(
+            turn.update(&update),
+            [AgentEvent::Drew {
+                tool: "map_trace".into(),
+                input: json!({"title": "Booking", "steps": [{"node": "a.rs#book", "label": "Book"}]}),
+            }]
+        );
+        assert!(turn.update(&update).is_empty(), "only once");
     }
 
     #[test]

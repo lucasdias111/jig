@@ -1,5 +1,5 @@
-//! The AI layer: providers' config and keys, the coding agents, and the
-//! task planner's tasks.
+//! The AI layer: providers' config and keys, the coding agents, the task
+//! planner's tasks, and how agents get the Map's drawing tools.
 //!
 //! Calls are blocking; the app runs them on a background thread.
 
@@ -8,6 +8,7 @@ pub mod config;
 pub mod config_file;
 mod http;
 pub mod keys;
+pub mod map;
 mod models;
 pub mod tasks;
 

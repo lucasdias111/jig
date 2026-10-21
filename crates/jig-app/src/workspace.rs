@@ -24,6 +24,7 @@ mod line_edits;
 mod live;
 mod lsp;
 mod map;
+mod map_agent;
 mod navigation;
 mod occurrences;
 mod planner;
@@ -119,7 +120,8 @@ actions!(
         GoForward,
         ShowMap,
         IndexDomains,
-        UpdateDomains
+        UpdateDomains,
+        ExplainLevel
     ]
 );
 
@@ -623,6 +625,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
         .chain(crate::find_panel::key_bindings())
+        .chain(crate::map::view::key_bindings())
         .collect()
 }
 
@@ -740,6 +743,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_forward))
             .on_action(cx.listener(Self::show_map))
             .on_action(cx.listener(Self::index_domains))
+            .on_action(cx.listener(Self::explain_level))
             .on_action(cx.listener(Self::update_domains))
             .capture_any_mouse_down(cx.listener(Self::navigation_button))
             .capture_action(cx.listener(Self::on_escape))

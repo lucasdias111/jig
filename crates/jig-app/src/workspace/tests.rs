@@ -13,6 +13,7 @@ mod format;
 mod git;
 mod home;
 mod input;
+mod lens;
 mod map;
 mod occurrences;
 mod quick_fix;

@@ -183,6 +183,40 @@ impl MapView {
                     Tooltip::new("Show the test files, and the calls they make").build(window, cx)
                 })
         });
+        let pinned = (!self.lens.pins.is_empty()).then(|| {
+            h_flex()
+                .id("map-pinned")
+                .gap_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(
+                    Switch::new("map-pinned-switch")
+                        .small()
+                        .checked(self.lens.pins_shown)
+                        .on_click(
+                            cx.listener(|this, on: &bool, _, cx| this.set_pins_shown(*on, cx)),
+                        ),
+                )
+                .child("Pinned")
+                .tooltip(|window, cx| {
+                    Tooltip::new("Show the agent's drawings pinned to the Map").build(window, cx)
+                })
+        });
+        let agent = jig_commands::surface::agent_accent(cx);
+        let explain = self.project.is_some().then(|| {
+            button(
+                "map-explain",
+                "Explain",
+                "Ask the agent to explain this level",
+            )
+            .text_color(agent)
+            .child(
+                jig_commands::surface::agent_icon()
+                    .size(px(11.))
+                    .text_color(agent),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.explain_level(cx)))
+        });
         let domain_buttons = (self.level == Level::Domain).then(|| self.render_domain_buttons(cx));
         let export = self.render_export_button(cx);
         h_flex()
@@ -210,7 +244,9 @@ impl MapView {
                 h_flex()
                     .flex_none()
                     .gap_2()
+                    .children(explain)
                     .children(domain_buttons)
+                    .children(pinned)
                     .children(tests)
                     .children(tints)
                     .child(export)
@@ -371,6 +407,7 @@ impl MapView {
             .children(leaving)
             .child(current)
             .child(over)
+            .children(self.render_lens(view, cx))
             .children(self.render_marquee(cx))
             .children(self.render_domain_overlay(cx))
             .children(self.render_hover(cx))
@@ -1276,22 +1313,22 @@ pub(super) fn blend(a: Hsla, b: Hsla, t: f32) -> Hsla {
 }
 
 /// An arrow as painted, in canvas points.
-struct Line {
-    from: Point<Pixels>,
-    to: Point<Pixels>,
-    colour: Hsla,
-    width: f32,
-    dashed: bool,
-    across: bool,
-    zoom: f32,
+pub(super) struct Line {
+    pub(super) from: Point<Pixels>,
+    pub(super) to: Point<Pixels>,
+    pub(super) colour: Hsla,
+    pub(super) width: f32,
+    pub(super) dashed: bool,
+    pub(super) across: bool,
+    pub(super) zoom: f32,
     /// How far down it a pulse is, and its colour.
-    pulse: Option<(f32, Hsla)>,
+    pub(super) pulse: Option<(f32, Hsla)>,
     /// Heads where it leaves and where it arrives.
-    heads: (bool, bool),
+    pub(super) heads: (bool, bool),
 }
 
 impl Line {
-    fn paint(self, origin: Point<Pixels>, window: &mut Window) {
+    pub(super) fn paint(self, origin: Point<Pixels>, window: &mut Window) {
         let (from, to) = (origin + self.from, origin + self.to);
         let mut path = PathBuilder::stroke(px(self.width));
         if self.dashed {

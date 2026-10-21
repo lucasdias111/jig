@@ -1,7 +1,8 @@
 //! Export Image: the level showing as a picture, to copy or save. Domain
 //! and Plan are drawn whole, Site as it is in view. It's drawn from the
 //! same scene the canvas draws, as SVG, and turned into a PNG (or saved as
-//! the SVG, for a name ending in `.svg`).
+//! the SVG, for a name ending in `.svg`). The agent's drawings come too,
+//! with a list of them.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -16,6 +17,7 @@ use super::domain_draw::{glyph, name_label, name_room};
 use super::draw::{
     blend, bow_point, flow_label_size, label_spot, leader, look_colour, obstacles, theme,
 };
+use super::lens_draw::Picture;
 use super::scene::{Look, Scene};
 use super::zoom::Camera;
 use super::{Level, MapView, domain};
@@ -130,7 +132,250 @@ impl MapView {
                 region.open = 0.;
             }
         }
-        draw_svg(&scene, camera, size, &palette, cx)
+        let svg = draw_svg(&scene, camera, size, &palette, cx);
+        self.with_lens(svg, camera, size, &palette)
+    }
+
+    /// `svg` with the agent's drawings over it, and a list of them.
+    fn with_lens(
+        &self,
+        svg: String,
+        camera: Camera,
+        size: (f32, f32),
+        palette: &Palette,
+    ) -> String {
+        if self.drawings_showing().is_empty() {
+            return svg;
+        }
+        let screen = |rect: Rect| Rect {
+            x: (rect.x - camera.x) * camera.zoom + size.0 / 2.,
+            y: (rect.y - camera.y) * camera.zoom + size.1 / 2.,
+            width: rect.width * camera.zoom,
+            height: rect.height * camera.zoom,
+        };
+        let picture = self.lens_picture(&screen);
+        let list = self.lens_list();
+        let band = 24. + list.len() as f32 * 17.;
+        // The list goes in a band below the picture, covering nothing.
+        let (w, h) = (size.0.ceil(), size.1.ceil());
+        let taller = h + band;
+        let mut out = svg.trim_end_matches("</svg>").replacen(
+            &format!(r#"height="{h}" viewBox="0 0 {w} {h}""#),
+            &format!(r#"height="{taller}" viewBox="0 0 {w} {taller}""#),
+            1,
+        );
+        let _ = write!(
+            out,
+            r#"<rect x="0" y="{h}" width="{w}" height="{band}" fill="{}"/>"#,
+            hex(palette.card)
+        );
+        draw_lens(&mut out, &picture, size, palette);
+        for (n, (line, heading)) in list.iter().enumerate() {
+            let colour = if *heading {
+                palette.agent
+            } else {
+                palette.foreground
+            };
+            text(
+                &mut out,
+                16.,
+                h + 22. + n as f32 * 17.,
+                11.5,
+                colour,
+                *heading,
+                &clip(line, w - 32., 11.5),
+            );
+        }
+        out.push_str("</svg>");
+        out
+    }
+
+    /// The list of drawings: each, with its steps.
+    fn lens_list(&self) -> Vec<(String, bool)> {
+        let mut lines: Vec<(String, bool)> = Vec::new();
+        for (_, drawing) in self.drawings_showing() {
+            lines.push((drawing.summary(), true));
+            if drawing.kind.stepped() {
+                for (ix, step) in drawing.steps.iter().enumerate() {
+                    let text = format!(
+                        "{}. {} — {}",
+                        ix + 1,
+                        step.label,
+                        self.short_name(&step.place)
+                    );
+                    lines.push((text, false));
+                }
+            }
+        }
+        lines
+    }
+}
+
+/// The agent's drawings, as the canvas draws them, in SVG.
+fn draw_lens(out: &mut String, picture: &Picture, size: (f32, f32), palette: &Palette) {
+    let agent = hex(palette.agent);
+    let opacity = |pinned: bool| if pinned { 0.55 } else { 1. };
+    for group in &picture.groups {
+        let r = group.rect;
+        let _ = write!(
+            out,
+            r#"<rect x="{}" y="{}" width="{}" height="{}" rx="16" fill="{agent}" fill-opacity="0.04" stroke="{agent}" stroke-opacity="{}" stroke-width="2" stroke-dasharray="8 6"/>"#,
+            r.x,
+            r.y,
+            r.width,
+            r.height,
+            opacity(group.pinned),
+        );
+        text(
+            out,
+            r.x + 12.,
+            r.y - 4.,
+            12.,
+            palette.agent,
+            true,
+            &group.label,
+        );
+    }
+    for path in &picture.paths {
+        let middle = bow(path.from, path.to);
+        let _ = write!(
+            out,
+            r#"<path d="M{} {} Q{} {} {} {}" fill="none" stroke="{agent}" stroke-opacity="{}" stroke-width="{}"{}/>"#,
+            path.from.0,
+            path.from.1,
+            middle.0,
+            middle.1,
+            path.to.0,
+            path.to.1,
+            opacity(path.pinned),
+            path.width,
+            if path.dashed {
+                r#" stroke-dasharray="8 6""#
+            } else {
+                ""
+            },
+        );
+        head(out, middle, path.to, path.width, palette.agent);
+    }
+    let canvas = Rect {
+        x: 0.,
+        y: 0.,
+        width: size.0,
+        height: size.1,
+    };
+    for marked in &picture.boxes {
+        let r = marked.rect;
+        if !r.overlaps(&canvas) {
+            let (x, y, arrow) = super::lens_draw::edge_spot(r, size);
+            let _ = write!(out, r#"<circle cx="{x}" cy="{y}" r="13" fill="{agent}"/>"#);
+            text(out, x - 6., y + 5., 14., palette.background, true, arrow);
+            continue;
+        }
+        let _ = write!(
+            out,
+            r#"<rect x="{}" y="{}" width="{}" height="{}" rx="10" fill="{agent}" fill-opacity="{}" stroke="{agent}" stroke-opacity="{}" stroke-width="{}"/>"#,
+            r.x - 4.,
+            r.y - 4.,
+            r.width + 8.,
+            r.height + 8.,
+            if marked.toured { 0.2 } else { 0.07 },
+            opacity(marked.pinned),
+            if marked.toured { 4. } else { 2.5 },
+        );
+        for (n, badge) in marked.badges.iter().enumerate() {
+            let width = 12. + badge.chars().count() as f32 * 7.5;
+            let from_right = (marked.badges.len() - 1 - n) as f32;
+            let (x, y) = (r.right() + 4. - width - from_right * 44., r.y - 14.);
+            let _ = write!(
+                out,
+                r#"<rect x="{x}" y="{y}" width="{width}" height="22" rx="11" fill="{agent}" fill-opacity="{}"/>"#,
+                opacity(marked.pinned),
+            );
+            text(out, x + 6., y + 15.5, 12., palette.card, true, badge);
+        }
+        let lines = super::lens_draw::capped(&marked.words);
+        if !lines.is_empty() {
+            let width = r.width.max(240.);
+            let height = 8. + lines.len() as f32 * 15.;
+            // A frame's words above it, clear of the boxes inside.
+            let top = if marked.above {
+                r.y - 22. - height
+            } else {
+                r.bottom() + 8.
+            };
+            let _ = write!(
+                out,
+                r#"<rect x="{}" y="{}" width="{width}" height="{height}" rx="6" fill="{}" fill-opacity="0.95" stroke="{agent}" stroke-opacity="0.6"{}/>"#,
+                r.x,
+                top,
+                hex(palette.card),
+                if marked.proposed {
+                    r#" stroke-dasharray="5 4""#
+                } else {
+                    ""
+                },
+            );
+            for (n, line) in lines.iter().enumerate() {
+                text(
+                    out,
+                    r.x + 8.,
+                    top + 14. + n as f32 * 15.,
+                    11.,
+                    palette.foreground,
+                    false,
+                    &clip(line, width - 16., 11.),
+                );
+            }
+        }
+    }
+    for ghost in &picture.ghosts {
+        let r = ghost.rect;
+        let _ = write!(
+            out,
+            r#"<rect x="{}" y="{}" width="{}" height="{}" rx="8" fill="{}" stroke="{agent}" stroke-width="2" stroke-dasharray="6 4"/>"#,
+            r.x,
+            r.y,
+            r.width,
+            r.height,
+            hex(palette.card),
+        );
+        text(
+            out,
+            r.x + 8.,
+            r.y + 18.,
+            12.5,
+            palette.agent,
+            true,
+            &clip(&ghost.name, r.width - 16., 12.5),
+        );
+        text(
+            out,
+            r.x + 8.,
+            r.y + 36.,
+            11.,
+            palette.foreground,
+            false,
+            &clip(&ghost.purpose, r.width - 16., 11.),
+        );
+    }
+    for tag in &picture.tags {
+        let width = (tag.text.chars().count() as f32 * 6.2 + 12.).min(220.);
+        let _ = write!(
+            out,
+            r#"<rect x="{}" y="{}" width="{width}" height="20" rx="5" fill="{}" stroke="{agent}" stroke-dasharray="4 3"/>"#,
+            tag.at.0 - width / 2.,
+            tag.at.1 - 10.,
+            hex(palette.card),
+        );
+        text(
+            out,
+            tag.at.0 - width / 2. + 6.,
+            tag.at.1 + 4.,
+            11.,
+            palette.foreground,
+            false,
+            &clip(&tag.text, width - 12., 11.),
+        );
     }
 }
 
@@ -727,7 +972,8 @@ impl MapView {
         };
         let camera = self.camera();
         let scene = self.scene(camera, Instant::now());
-        png(&draw_svg(&scene, camera, self.canvas_size(), &palette, cx)).ok()
+        let svg = draw_svg(&scene, camera, self.canvas_size(), &palette, cx);
+        png(&self.with_lens(svg, camera, self.canvas_size(), &palette)).ok()
     }
 }
 

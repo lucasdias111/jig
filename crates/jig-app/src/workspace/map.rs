@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 
 use super::definitions::with_timeout;
 use super::tabs::canonical;
-use super::{IndexDomains, ShowMap, UpdateDomains, Workspace};
+use super::{ExplainLevel, IndexDomains, ShowMap, UpdateDomains, Workspace};
 use crate::lsp;
 use crate::map::domains::actions::Action;
 use crate::map::index::{FnId, Project, Target};
@@ -82,7 +82,7 @@ impl Workspace {
     }
 
     /// Show the Map where it was left; read the project for it.
-    fn open_map_pane(
+    pub(super) fn open_map_pane(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -136,6 +136,7 @@ impl Workspace {
         view.focus_handle(cx).focus(window, cx);
         self.sync_live_points(cx);
         self.refresh_map_debug(cx);
+        self.sync_map_drawings(cx);
         cx.notify();
         Some(view)
     }
@@ -149,6 +150,31 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.map_action_at_domain(false, window, cx);
+    }
+
+    /// View > Explain This Level: the agent asked about the Map's level,
+    /// the Map shown first if it isn't.
+    pub(super) fn explain_level(
+        &mut self,
+        _: &ExplainLevel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.map_showing().cloned() {
+            return view.update(cx, |view, cx| view.explain_level(cx));
+        }
+        self.leave_tab(cx);
+        let path = (!self.home).then(|| self.document().path.clone()).flatten();
+        let offset = self.editor().cursor(cx);
+        let Some(view) = self.open_map_pane(window, cx) else {
+            return;
+        };
+        self.read_and(&view, cx, move |view, cx| {
+            if let Some(path) = path {
+                view.arrive_from_code(&path, offset, cx);
+            }
+            view.explain_level(cx);
+        });
     }
 
     pub(super) fn update_domains(
@@ -219,7 +245,7 @@ impl Workspace {
 
     /// Read the project again (it may have changed since: only files that
     /// did are read), then run `then` on the Map.
-    fn read_and(
+    pub(super) fn read_and(
         &mut self,
         view: &Entity<MapView>,
         cx: &mut Context<Self>,
@@ -271,6 +297,14 @@ impl Workspace {
                 let root = view.read(cx).root().to_path_buf();
                 self.start_map_action(action.clone(), instruction.clone(), root, window, cx);
             }
+            MapEvent::Explain(instruction) => self.start_map_conversation(
+                Some("Explain this level".into()),
+                instruction.clone(),
+                window,
+                cx,
+            ),
+            MapEvent::Settled(at, kept) => self.drawing_settled(*at, *kept, cx),
+            MapEvent::Proposal(at, choice) => self.proposal_chosen(*at, *choice, window, cx),
         }
     }
 

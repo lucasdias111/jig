@@ -23,7 +23,7 @@ use super::{
 };
 use crate::ProviderConfig;
 use crate::config::{AgentModel, ProviderKind};
-use crate::tasks;
+use crate::{map, tasks};
 
 /// A model OpenCode knows by itself, for trying the agent on its own.
 pub const DEFAULT_MODEL: &str = "opencode-go/qwen3.8-flash";
@@ -126,20 +126,25 @@ fn rules(permissions: &Permissions) -> Value {
                 .iter()
                 .map(|tool| (format!("{}_{tool}", tasks::mcp::NAME), permissions.tasks)),
         )
+        // Drawing on the Map changes no code: never asked about.
+        .chain(map::opencode_permissions().map(|tool| (tool, Access::Allow)))
         .map(|(permission, access)| {
             json!({"permission": permission, "pattern": "*", "action": access.key()})
         })
         .collect()
 }
 
-/// `config` with Jig's task tool added, which OpenCode starts in each
-/// project's folder.
+/// `config` with Jig's task tool and the Map's tools added, which
+/// OpenCode starts in each project's folder.
 fn with_task_tool(config: Option<&Value>) -> Option<Value> {
     let Some(tool) = tasks::mcp::opencode_server() else {
         return config.cloned();
     };
     let mut config = config.cloned().unwrap_or_else(|| json!({}));
     config["mcp"][tasks::mcp::NAME] = tool;
+    if let Some(map) = map::opencode_server() {
+        config["mcp"][map::NAME] = map;
+    }
     Some(config)
 }
 
@@ -646,6 +651,12 @@ impl Session {
                     (Some("running"), _) if part["type"] == "tool" => Some(AgentEvent::Step(
                         describe(tool, &state["input"], &self.directory),
                     )),
+                    (Some("completed"), None) if map::tool_of(tool).is_some() => {
+                        Some(AgentEvent::Drew {
+                            tool: map::tool_of(tool).unwrap_or_default().to_string(),
+                            input: state["input"].clone(),
+                        })
+                    }
                     (Some("completed"), _) if part["type"] == "tool" => match subagent {
                         Some(id) => Some(AgentEvent::SubagentDid {
                             id: id.to_string(),
@@ -779,6 +790,11 @@ fn history(messages: &Value, directory: &str) -> Vec<Turn> {
                         turns.push(Turn::Edit {
                             path: relative(&path_of(&state["input"]), directory),
                             accepted: completed,
+                        });
+                    } else if completed && let Some(map_tool) = map::tool_of(tool) {
+                        turns.push(Turn::Drew {
+                            tool: map_tool.to_string(),
+                            input: state["input"].clone(),
                         });
                     } else if completed && let Some(text) = did(tool, &state["input"]) {
                         turns.push(Turn::Did(text));
@@ -1093,6 +1109,7 @@ mod tests {
                 {"type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": "cargo test"}}},
                 {"type": "tool", "tool": "edit", "state": {"status": "completed", "input": {"filePath": "/p/src/lib.rs"}}},
                 {"type": "tool", "tool": "edit", "state": {"status": "error", "input": {"filePath": "/p/src/main.rs"}}},
+                {"type": "tool", "tool": "jig-map_map_highlight", "state": {"status": "completed", "input": {"title": "Docs", "nodes": ["src/lib.rs"]}}},
                 {"type": "text", "text": "Documented `b`."},
             ]},
         ]);
@@ -1108,6 +1125,10 @@ mod tests {
                 Turn::Edit {
                     path: "src/main.rs".into(),
                     accepted: false
+                },
+                Turn::Drew {
+                    tool: "map_highlight".into(),
+                    input: json!({"title": "Docs", "nodes": ["src/lib.rs"]}),
                 },
                 Turn::Agent("Documented `b`.".into()),
             ]
@@ -1177,6 +1198,11 @@ mod tests {
             action("external_directory").as_deref(),
             Some("deny"),
             "always"
+        );
+        assert_eq!(
+            action("jig-map_map_trace").as_deref(),
+            Some("allow"),
+            "drawing on the Map changes no code"
         );
     }
 

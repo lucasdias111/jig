@@ -11,11 +11,14 @@
 //! boxes were dragged, the hops opened, where it was scrolled and zoomed
 //! to. Tidy lays a Plan out afresh. The canvas never changes code.
 
+mod ask;
 mod domain;
 mod domain_draw;
 mod draw;
 mod export;
 mod input;
+pub mod lens;
+mod lens_draw;
 mod scene;
 mod zoom;
 
@@ -35,8 +38,17 @@ use super::index::{FnId, Project, Target};
 use super::layout::{self, Placed, Rect};
 use super::plan::{self, Focus, Item, Opened, Plan, function_key, slashed};
 use super::site::{Kind, Show, Site};
+pub use lens_draw::ProposalChoice;
 use scene::Scene;
 use zoom::{Camera, Transition};
+
+actions!(map, [KeepDescriptions]);
+
+/// The Map's own keys that GPUI would otherwise take: Tab keeps the
+/// agent's descriptions rather than moving the focus.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    vec![KeyBinding::new("tab", KeepDescriptions, Some("Map"))]
+}
 
 /// How long boxes take to glide to their new places.
 const GLIDE: f32 = 0.22;
@@ -84,6 +96,13 @@ pub enum MapEvent {
     /// Start a conversation for a Map action: what it is, and what the
     /// agent is asked.
     Ask(Action, String),
+    /// Explain this level: the agent is asked, with the level as context.
+    Explain(String),
+    /// The agent's descriptions in the conversation's drawing (by its id)
+    /// kept, or not.
+    Settled(usize, bool),
+    /// What to do with the conversation's proposal (by its id).
+    Proposal(usize, lens_draw::ProposalChoice),
 }
 
 pub struct MapView {
@@ -139,6 +158,8 @@ pub struct MapView {
     /// Going into Site from Domain: the box entered, and the Site boxes it
     /// stands for.
     arriving_at: Option<(Rect, Vec<usize>)>,
+    /// What the agent drew, and the pins.
+    lens: lens::LensState,
 }
 
 impl EventEmitter<MapEvent> for MapView {}
@@ -185,6 +206,7 @@ impl MapView {
             notice: None,
             domains: domain::DomainState::default(),
             arriving_at: None,
+            lens: lens::LensState::default(),
         }
     }
 
@@ -212,6 +234,8 @@ impl MapView {
             }
         }
         self.project = Some(project);
+        self.lens.forget_places();
+        self.reload_pins();
         self.reload_domains();
         self.rebuild(true);
         self.on_stack = self.stack_functions();
@@ -845,6 +869,12 @@ impl Render for MapView {
             .track_focus(&self.focus)
             .size_full()
             .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &KeepDescriptions, _, cx| {
+                match this.descriptions_waiting() {
+                    Some(source) => this.settle_descriptions(source, true, cx),
+                    None => cx.propagate(),
+                }
+            }))
             .child(self.render_header(cx))
             .child(self.render_canvas(now, window, cx))
     }

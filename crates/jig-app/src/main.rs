@@ -73,6 +73,17 @@ fn main() {
         serve_tasks(&args);
         return;
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == jig_ai::map::FLAG)
+    {
+        let args: Vec<String> = std::env::args_os()
+            .skip(2)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        serve_map(&args);
+        return;
+    }
     // Agents start Jig itself as their task tool.
     if let Ok(executable) = std::env::current_exe() {
         jig_ai::tasks::mcp::set_command(executable);
@@ -190,6 +201,17 @@ pub fn open_window(
 
 /// `Jig --tasks-mcp`: the task planner as an agent's tool, on stdio, until
 /// the agent hangs up.
+/// `Jig --map-mcp`: the Map's drawing tools, for an agent.
+fn serve_map(args: &[String]) {
+    let served = map::lens::mcp::project_from_args(args).and_then(|project| {
+        map::lens::mcp::serve(&project, std::io::stdin().lock(), std::io::stdout().lock())
+    });
+    if let Err(error) = served {
+        eprintln!("jig: {error:#}");
+        std::process::exit(1);
+    }
+}
+
 fn serve_tasks(args: &[String]) {
     let served = jig_ai::tasks::mcp::project_from_args(args).and_then(|project| {
         jig_ai::tasks::mcp::serve(&project, std::io::stdin().lock(), std::io::stdout().lock())

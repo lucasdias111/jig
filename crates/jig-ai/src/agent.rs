@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
+use serde_json::Value;
 
 /// Whether the agent may use a tool: after asking the user each time, on
 /// its own, or not at all.
@@ -336,6 +337,13 @@ pub enum AgentEvent {
     },
     /// The commands and skills it offers, when it says.
     Commands(Vec<AgentCommand>),
+    /// It drew on the Map: which of the Map's tools (`map_trace`), with
+    /// what it was given. Sent once the call is done; the app checks the
+    /// places named, as the tool did.
+    Drew {
+        tool: String,
+        input: Value,
+    },
     /// The agent finished; its closing words.
     Done(String),
 }
@@ -345,8 +353,16 @@ pub enum AgentEvent {
 pub enum Turn {
     User(String),
     Agent(String),
-    Edit { path: String, accepted: bool },
+    Edit {
+        path: String,
+        accepted: bool,
+    },
     Did(String),
+    /// A drawing on the Map, as [`AgentEvent::Drew`].
+    Drew {
+        tool: String,
+        input: Value,
+    },
 }
 
 pub(crate) fn relative(path: &str, directory: &str) -> String {

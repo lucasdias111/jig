@@ -6,8 +6,10 @@
 //! domain's name renames it. Resting on a Plan's function peeks at its
 //! code; on a Site arrow, lists its calls. Keys: ⌘↑ out, ⌘↓ or Enter in,
 //! ⌘A all, ⌘Z and ⇧⌘Z undo and redo edits to domains, F2 renames the
-//! domain selected, ⌘↩ keeps a proposal, Esc clears the selection (or
-//! discards a proposal) and then goes back to the code.
+//! domain selected, ⌘↩ keeps a proposal, ←/→ step through the agent's
+//! trace, Tab or Enter keeps the agent's descriptions, Esc ends a tour,
+//! rejects descriptions, clears the selection (or discards a proposal) and
+//! then goes back to the code.
 
 use std::time::Instant;
 
@@ -577,6 +579,9 @@ impl MapView {
                 if self.drag.take().is_some() {
                 } else if self.domains.editing.is_some() {
                     self.finish_edit(false, cx);
+                } else if self.end_tour(cx) {
+                } else if let Some(source) = self.descriptions_waiting() {
+                    self.settle_descriptions(source, false, cx);
                 } else if !self.selected.is_empty() {
                     self.selected.clear();
                 } else if self.level == Level::Domain && self.domains.proposal.is_some() {
@@ -605,6 +610,17 @@ impl MapView {
                 match domain {
                     Some(domain) => self.begin_edit(domain, Field::Name, window, cx),
                     None => return,
+                }
+            }
+            "enter" if !secondary && self.descriptions_waiting().is_some() => {
+                if let Some(source) = self.descriptions_waiting() {
+                    self.settle_descriptions(source, true, cx);
+                }
+            }
+            "left" | "right" if !secondary && !keystroke.modifiers.shift => {
+                let delta = if keystroke.key == "left" { -1 } else { 1 };
+                if !self.tour_by(delta, cx) {
+                    return;
                 }
             }
             "up" if secondary => self.step_out(cx),

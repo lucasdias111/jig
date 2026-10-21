@@ -70,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         AgentEvent::SubagentDid { id, text } => println!("  [{id}] {text}"),
         AgentEvent::SubagentDone { id, report } => println!("subagent {id} done: {report}"),
         AgentEvent::Commands(_) => {}
+        AgentEvent::Drew { tool, input } => println!("drew {tool}: {input}"),
         AgentEvent::Done(text) => println!("done: {text}"),
     })
 }

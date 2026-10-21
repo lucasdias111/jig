@@ -748,6 +748,23 @@ fn map_pictures_live(cx: &mut TestAppContext) {
     press(cx, window, "secondary-b");
     println!("arrived at {:?}", read_level(cx, &workspace));
     let view = map(cx, &workspace).unwrap();
+    // The agent's drawings over every level, from `JIG_MAP_DRAWING`: a
+    // JSON list of `{"tool": "map_trace", "input": {…}}`.
+    if let Some(file) = std::env::var_os("JIG_MAP_DRAWING") {
+        let calls: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let drawings = calls
+            .iter()
+            .filter_map(|call| {
+                match crate::map::lens::call(call["tool"].as_str()?, &call["input"]).ok()? {
+                    crate::map::lens::Call::Draw(drawing) => Some(drawing),
+                    crate::map::lens::Call::Clear => None,
+                }
+            })
+            .enumerate()
+            .collect();
+        view.update(cx, |view, cx| view.set_drawings(drawings, cx));
+    }
     draw(cx, window);
     let write = |name: String, bytes: Vec<u8>| {
         let path = out.join(format!("{name}.png"));

@@ -10,6 +10,7 @@ pub mod surface;
 pub use bubble::{Bubble, LiveStep};
 pub use chat::{
     ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus, Conversation, DiffLine,
+    DrawingAction, LinkHandler,
 };
 pub use palette::{
     AgentCommandInfo, CommandPalette, ModelChoice, ModelMenu, PaletteEvent, PastConversation,

@@ -159,6 +159,21 @@ impl Domains {
         self.domains[ix].purpose = purpose.trim().to_string();
     }
 
+    /// What flows from domain `from` to `to`, in words: the flow between
+    /// them relabelled, or a new one.
+    pub fn set_flow(&mut self, from: &str, to: &str, label: &str) {
+        let label = label.trim().to_string();
+        match self.flows.iter_mut().find(|f| f.from == from && f.to == to) {
+            Some(flow) => flow.label = label,
+            None => self.flows.push(Flow {
+                from: from.to_string(),
+                to: to.to_string(),
+                label,
+            }),
+        }
+        self.tidy_flows();
+    }
+
     /// `place` (a file or `path#Type`) moved to `home`: named there, and no
     /// longer named anywhere else. A folder holding it elsewhere still
     /// does, but the closer name wins.

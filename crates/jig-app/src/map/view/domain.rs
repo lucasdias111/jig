@@ -113,7 +113,16 @@ impl MapView {
         self.label_spots.borrow_mut().clear();
         self.domains.homes.clear();
         if let (Some(project), Some(domains)) = (self.project.clone(), self.shown_domains()) {
-            self.site = Some(Rc::new(Site::of(&project, &domains, self.site_show)));
+            let mut site = Site::of(&project, &domains, self.site_show);
+            // Purposes kept from the agent's descriptions win over the
+            // code's own.
+            let kept = super::super::lens::purposes::read(&self.root);
+            for node in &mut site.nodes {
+                if let Some(purpose) = kept.purposes.get(&node.place) {
+                    node.purpose = Some(purpose.clone());
+                }
+            }
+            self.site = Some(Rc::new(site));
         }
         let (Some(saved), Some(site)) = (&self.domains.saved, &self.site) else {
             return;
@@ -611,7 +620,7 @@ impl MapView {
 
     /// An edit by hand: to the proposal while there is one, else to the
     /// saved domains, which are written at once. ⌘Z undoes it.
-    fn edit_domains(&mut self, edit: impl FnOnce(&mut Domains), cx: &mut Context<Self>) {
+    pub(super) fn edit_domains(&mut self, edit: impl FnOnce(&mut Domains), cx: &mut Context<Self>) {
         if let Some(proposal) = &self.domains.proposal {
             let mut domains = proposal.domains.clone();
             edit(&mut domains);

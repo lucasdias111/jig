@@ -195,7 +195,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.home {
+        let map = self.map_showing().cloned();
+        if self.home && map.is_none() {
             return;
         }
         // ⌘K and the Agent button toggle it.
@@ -208,9 +209,18 @@ impl Workspace {
         self.close_find_panel(cx);
         self.note = None;
         let selection = self.editor().selection(cx);
-        let has_selection = !selection.is_empty();
-        // Beside the selection, or the cursor's line.
-        let anchor = self.beside_anchor(selection, px(jig_commands::palette::WIDTH), window, cx);
+        // On the Map, beside the boxes selected; in the code, beside the
+        // selection, or the cursor's line.
+        let (has_selection, anchor) = match &map {
+            Some(view) => {
+                let beside = view.read(cx).question().beside;
+                (beside.is_some(), self.map_chat_anchor(beside, window))
+            }
+            None => (
+                !selection.is_empty(),
+                self.beside_anchor(selection, px(jig_commands::palette::WIDTH), window, cx),
+            ),
+        };
         let models = self.model_menu(cx);
         let view = cx.new(|cx| CommandPalette::new(has_selection, window, cx).with_models(models));
         let events = cx.subscribe_in(
@@ -222,6 +232,9 @@ impl Workspace {
                 }
                 this.close_palette(window, cx);
                 match event {
+                    PaletteEvent::Run(text) if this.map_showing().is_some() => {
+                        this.start_map_conversation(None, text.clone(), window, cx)
+                    }
                     PaletteEvent::Run(text) => {
                         this.start_conversation(Ask::new(text.clone()), window, cx)
                     }
@@ -246,7 +259,7 @@ impl Workspace {
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.take().is_some() {
-            self.editor().focus(window, cx);
+            self.focus_code(window, cx);
             cx.notify();
         }
     }

@@ -53,9 +53,29 @@ pub enum ChatEntry {
         calls: Vec<String>,
         report: Option<String>,
     },
+    /// Something the agent drew on the Map: its summary, whether it shows
+    /// there and whether it's pinned. `stepped` drawings can be toured;
+    /// `settled` says what became of a proposal ("Kept", "Dismissed").
+    Drawing {
+        id: usize,
+        summary: String,
+        shown: bool,
+        pinned: bool,
+        stepped: bool,
+        settled: Option<String>,
+    },
     /// Something that happened to the run, e.g. "Stopped."
     Note(String),
     Error(String),
+}
+
+/// What a drawing's row in the transcript was asked to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawingAction {
+    /// Show it on the Map, or hide it.
+    Toggle,
+    Pin,
+    Tour,
 }
 
 /// One line of an edit's diff.
@@ -167,6 +187,9 @@ const GRIP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 type GrabHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type OptionHandler = Rc<dyn Fn(&usize, &mut Window, &mut App)>;
+type DrawingHandler = Rc<dyn Fn(&(usize, DrawingAction), &mut Window, &mut App)>;
+/// Called with a link clicked in the agent's words, instead of opening it.
+pub type LinkHandler = std::sync::Arc<dyn Fn(&SharedString, &mut Window, &mut App) + Send + Sync>;
 
 /// The conversation as drawn. The workspace owns the transcript and the
 /// reply box; this only lays them out.
@@ -188,6 +211,8 @@ pub struct Conversation {
     models: Option<ChatModels>,
     on_models: Option<ClickHandler>,
     on_model: Option<OptionHandler>,
+    on_drawing: Option<DrawingHandler>,
+    on_link: Option<LinkHandler>,
 }
 
 impl Conversation {
@@ -216,7 +241,25 @@ impl Conversation {
             models: None,
             on_models: None,
             on_model: None,
+            on_drawing: None,
+            on_link: None,
         }
+    }
+
+    /// Called when a drawing's row is asked to show or hide it, pin it or
+    /// tour it.
+    pub fn on_drawing(
+        mut self,
+        handler: impl Fn(&(usize, DrawingAction), &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_drawing = Some(Rc::new(handler));
+        self
+    }
+
+    /// Called with a link clicked in the agent's words.
+    pub fn on_link(mut self, handler: LinkHandler) -> Self {
+        self.on_link = Some(handler);
+        self
     }
 
     /// The models it can run on, picked from its header: `on_toggle` opens
@@ -296,7 +339,13 @@ impl Conversation {
 
 impl RenderOnce for Conversation {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let entries = transcript_rows(self.entries, window, cx);
+        let entries = transcript_rows(
+            self.entries,
+            self.on_drawing.clone(),
+            self.on_link.clone(),
+            window,
+            cx,
+        );
         let theme = cx.theme();
         let accent = crate::surface::agent_accent(cx);
         let pinned = self.frame.pinned;
@@ -827,7 +876,13 @@ fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div
 /// The transcript's rows. A run of two or more tool calls folds into one
 /// "Used 5 tools" row that opens to list them, so the agent's words aren't
 /// lost among its `grep`s.
-fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+fn transcript_rows(
+    entries: Vec<ChatEntry>,
+    on_drawing: Option<DrawingHandler>,
+    on_link: Option<LinkHandler>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Vec<AnyElement> {
     let mut rows = Vec::new();
     let mut entries = entries.into_iter().enumerate().peekable();
     while let Some((index, entry)) = entries.next() {
@@ -850,6 +905,29 @@ fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -
                 rows.push(subagent(index, description, calls, report, window, cx));
                 continue;
             }
+            ChatEntry::Drawing {
+                id,
+                summary,
+                shown,
+                pinned,
+                stepped,
+                settled,
+            } => {
+                let row = drawing(
+                    id,
+                    summary,
+                    (shown, pinned, stepped),
+                    settled,
+                    on_drawing.clone(),
+                    cx,
+                );
+                rows.push(row);
+                continue;
+            }
+            ChatEntry::Agent(text) => {
+                rows.push(agent_words(index, text, on_link.clone(), cx));
+                continue;
+            }
             entry => {
                 rows.push(render_entry(index, entry, cx));
                 continue;
@@ -868,6 +946,104 @@ fn transcript_rows(entries: Vec<ChatEntry>, window: &mut Window, cx: &mut App) -
         });
     }
     rows
+}
+
+/// The agent's words, in Markdown; a link clicked goes to `on_link` when
+/// there is one.
+fn agent_words(index: usize, text: String, on_link: Option<LinkHandler>, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let code = StyleRefinement::default()
+        .font_family(theme.mono_font_family.clone())
+        .text_size(px(12.));
+    let view = TextView::markdown(("jig-agent-text", index), text)
+        .style(
+            TextViewStyle::default()
+                .paragraph_gap(rems(0.5))
+                .code_block(code),
+        )
+        .selectable(true);
+    match on_link {
+        Some(on_link) => view
+            .on_link_click(move |link, _, window, cx| on_link(link, window, cx))
+            .into_any_element(),
+        None => view.into_any_element(),
+    }
+}
+
+/// A drawing on the Map: what it is, and buttons to show or hide it, pin
+/// it and tour it.
+fn drawing(
+    id: usize,
+    summary: String,
+    (shown, pinned, stepped): (bool, bool, bool),
+    settled: Option<String>,
+    on_drawing: Option<DrawingHandler>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let accent = crate::surface::agent_accent(cx);
+    let button = |name: &'static str, label: &'static str, action: DrawingAction, on: bool| {
+        let handler = on_drawing.clone();
+        div()
+            .id((name, id))
+            .debug_selector(move || format!("agent-drawing-{name}-{id}"))
+            .flex_none()
+            .px_1p5()
+            .rounded(px(4.))
+            .text_xs()
+            .cursor_pointer()
+            .text_color(if on { accent } else { theme.muted_foreground })
+            .hover(|this| this.bg(theme.foreground.opacity(0.08)))
+            .child(label)
+            .when_some(handler, |this, handler| {
+                this.on_click(move |_, window, cx| handler(&(id, action), window, cx))
+            })
+    };
+    h_flex()
+        .id(("jig-agent-drawing", id))
+        .debug_selector(move || format!("agent-drawing-{id}"))
+        .gap_1p5()
+        .text_xs()
+        .text_color(if shown {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .child(
+            crate::surface::agent_icon()
+                .size(px(11.))
+                .flex_none()
+                .text_color(if shown {
+                    accent
+                } else {
+                    theme.muted_foreground
+                }),
+        )
+        .child(div().flex_1().min_w_0().truncate().child(summary))
+        .when_some(settled, |this, settled| {
+            this.child(
+                div()
+                    .flex_none()
+                    .text_color(theme.muted_foreground)
+                    .child(settled),
+            )
+        })
+        .when(stepped && shown, |this| {
+            this.child(button("tour", "Tour", DrawingAction::Tour, false))
+        })
+        .child(button(
+            "pin",
+            if pinned { "Pinned" } else { "Pin" },
+            DrawingAction::Pin,
+            pinned,
+        ))
+        .child(button(
+            "toggle",
+            if shown { "Hide" } else { "Show" },
+            DrawingAction::Toggle,
+            shown,
+        ))
+        .into_any_element()
 }
 
 /// Tool calls in a row, folded to their count; a click lists them.
@@ -1175,6 +1351,12 @@ fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
         ChatEntry::Error(text) => div()
             .text_color(theme.danger)
             .child(text)
+            .into_any_element(),
+        // Drawn by `drawing`, which has its buttons.
+        ChatEntry::Drawing { summary, .. } => div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(summary)
             .into_any_element(),
     }
 }

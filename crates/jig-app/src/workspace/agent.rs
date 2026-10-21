@@ -23,7 +23,8 @@ use jig_ai::agent::{
 };
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus,
-    CommandPalette, Conversation, LiveStep, ModelChoice, ModelMenu, PastConversation,
+    CommandPalette, Conversation, DrawingAction, LiveStep, ModelChoice, ModelMenu,
+    PastConversation,
 };
 use jig_editor::EditorHandle;
 
@@ -65,7 +66,7 @@ fn failure(error: anyhow::Error) -> Message {
 
 /// What a turn sends the agent.
 #[derive(Clone)]
-enum TurnInput {
+pub(super) enum TurnInput {
     Prompt(String),
     /// An OpenCode command or skill, with its arguments.
     Command {
@@ -144,7 +145,7 @@ pub(super) struct AgentRun {
     context: Vec<String>,
     /// The current turn is over (or stopped), so dropping the run leaves
     /// the agent alone.
-    finished: bool,
+    pub(super) finished: bool,
     /// The project folder the agent works in.
     directory: PathBuf,
     /// The project's folder name, for its header.
@@ -152,7 +153,7 @@ pub(super) struct AgentRun {
     pub(super) entries: Vec<ChatEntry>,
     /// The reply box, shown between turns.
     pub(super) input: Entity<InputState>,
-    scroll: ScrollHandle,
+    pub(super) scroll: ScrollHandle,
     /// The conversation's size, and where it is on screen.
     frame: ChatFrame,
     /// While it's dragged, where the mouse holds it from its corner.
@@ -166,6 +167,8 @@ pub(super) struct AgentRun {
     /// The Map action this conversation is, whose answers the Map reads
     /// back as proposals; it may run commands that only read.
     pub(super) map_action: Option<Action>,
+    /// What it drew on the Map, by their place here.
+    pub(super) drawings: Vec<super::map_agent::Drawn>,
     _input_events: Subscription,
 }
 
@@ -192,6 +195,11 @@ struct PendingEdit {
 }
 
 impl AgentRun {
+    /// The project folder it works in.
+    pub(super) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
     /// The transcript's row for subagent `id`: its description, what it
     /// did and its report, added when it's first heard of.
     fn subagent(&mut self, id: &str) -> (&mut String, &mut Vec<String>, &mut Option<String>) {
@@ -480,6 +488,7 @@ impl Workspace {
         }
         if self.chat.take().is_some() {
             self.editor().clear_highlights(cx);
+            self.sync_map_drawings(cx);
             cx.notify();
         }
     }
@@ -774,7 +783,7 @@ impl Workspace {
 
     /// A conversation that starts with the user asking `asked`, in the
     /// project around `path`. The agent isn't contacted yet.
-    fn new_agent_run(
+    pub(super) fn new_agent_run(
         &mut self,
         name: Option<String>,
         asked: String,
@@ -836,6 +845,7 @@ impl Workspace {
             resize: None,
             moved: false,
             map_action: None,
+            drawings: Vec::new(),
             _input_events: input_events,
         }
     }
@@ -920,7 +930,7 @@ impl Workspace {
 
     /// Send `input` to the agent, in the run's session once there is one,
     /// and follow what it does until it's done.
-    fn start_turn(
+    pub(super) fn start_turn(
         &mut self,
         id: u64,
         input: TurnInput,
@@ -1022,6 +1032,25 @@ impl Workspace {
                 .update(cx, |view, cx| view.working_on_action(action, cx));
         }
         cx.notify();
+    }
+
+    /// Send `text` to the agent as the user's reply, between turns.
+    pub(super) fn send_to_agent(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(run) = self.chat.as_mut() else {
+            return;
+        };
+        let id = run.id;
+        let Some(agent) = run.agent.as_mut().filter(|agent| agent.finished) else {
+            return;
+        };
+        agent.entries.push(ChatEntry::User(text.clone()));
+        agent.scroll.scroll_to_bottom();
+        self.start_turn(id, TurnInput::Prompt(text), window, cx);
     }
 
     /// Enter in the reply box: the agent takes the reply as its next turn.
@@ -1747,11 +1776,26 @@ impl Workspace {
                     this.answer_agent_question(Some(*index), window, cx);
                 }
             }))
+            .on_drawing(
+                cx.listener(|this, (at, action): &(usize, DrawingAction), window, cx| {
+                    this.act_on_drawing(*at, *action, window, cx)
+                }),
+            )
+            .on_link({
+                let this = cx.weak_entity();
+                std::sync::Arc::new(
+                    move |link: &SharedString, window: &mut Window, cx: &mut App| {
+                        let link = link.to_string();
+                        this.update(cx, |this, cx| this.open_agent_link(&link, window, cx))
+                            .ok();
+                    },
+                )
+            })
             .into_any_element(),
         )
     }
 
-    fn agent_run(&mut self, id: u64) -> Option<&mut AgentRun> {
+    pub(super) fn agent_run(&mut self, id: u64) -> Option<&mut AgentRun> {
         self.chat
             .as_mut()
             .filter(|run| run.id == id)
@@ -1776,10 +1820,11 @@ impl Workspace {
             Message::Resumed(session, turns) => {
                 agent.session = Some(session);
                 agent.loading = false;
-                agent.entries = turns.into_iter().map(chat_entry).collect();
+                (agent.entries, agent.drawings) = super::map_agent::transcript(turns);
                 agent.scroll.scroll_to_bottom();
                 let input = agent.input.clone();
                 input.update(cx, |input, cx| input.focus(window, cx));
+                self.sync_map_drawings(cx);
                 cx.notify();
                 return false;
             }
@@ -1790,6 +1835,9 @@ impl Workspace {
             }
             Message::Event(AgentEvent::Question(request)) => {
                 agent.queue.push_back(Request::Question(request))
+            }
+            Message::Event(AgentEvent::Drew { tool, input }) => {
+                self.agent_drew(id, &tool, &input, cx);
             }
             Message::Event(AgentEvent::Commands(commands)) => {
                 let directory = agent.directory.clone();
@@ -2344,7 +2392,7 @@ impl Workspace {
 }
 
 /// A line of an earlier conversation, as the transcript shows it.
-fn chat_entry(turn: Turn) -> ChatEntry {
+pub(super) fn chat_entry(turn: Turn) -> ChatEntry {
     match turn {
         Turn::User(text) => ChatEntry::User(text),
         Turn::Agent(text) => ChatEntry::Agent(text),
@@ -2354,6 +2402,8 @@ fn chat_entry(turn: Turn) -> ChatEntry {
             diff: Vec::new(),
         },
         Turn::Did(text) => ChatEntry::Did(text),
+        // Drawings are read back with what they drew (`map_agent`).
+        Turn::Drew { tool, .. } => ChatEntry::Did(format!("Drew with {tool}")),
     }
 }
 
