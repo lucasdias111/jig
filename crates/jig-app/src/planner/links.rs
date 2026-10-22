@@ -3,6 +3,7 @@
 //! so a link still lands on its function after the file has changed.
 
 use std::ops::Range;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -55,6 +56,113 @@ pub fn first_code_link(markdown: &str) -> Option<CodeLink> {
             Some(Target::Code(link)) => Some(link),
             _ => None,
         })
+}
+
+/// A file named in prose: `src/a.rs`, `a.rs:42`, `/abs/a.rs:42:5`.
+static BARE_FILE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[\s(\[{<'])((?:\.{1,2}/|/)?[\w\-.]+(?:/[\w\-.]+)*\.[A-Za-z0-9]+)(?::(\d+)(?:[:\-–]\d+)?)?")
+        .expect("a valid pattern")
+});
+
+/// A file in inline code: the whole span, with an optional `:42` or `#L42`.
+static CODE_FILE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^((?:\.{1,2}/|/)?[\w\-.]+(?:/[\w\-.]+)*\.[A-Za-z0-9]+)(?:(?::|#L)(\d+)(?:[:\-–C]L?\d+)?)?$")
+        .expect("a valid pattern")
+});
+
+/// A Markdown link, `[text](url)`, kept as it is.
+static LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[[^\]\n]*\]\([^)\s]*\)").expect("a valid pattern"));
+
+/// `markdown` with the files it names left unlinked made links:
+/// `` `src/a.rs:42` `` becomes ``[`src/a.rs:42`](src/a.rs#L42)``, and so
+/// does a bare `src/a.rs:42`. `file` turns a path as written into the
+/// project's path for it, or `None` when there's no such file, so only
+/// real files are linked. Code blocks and links stay as they are.
+pub fn link_files(markdown: &str, file: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut fenced = false;
+    for line in markdown.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if fenced || trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            out.push_str(line);
+        } else {
+            link_files_in_line(line, &file, &mut out);
+        }
+    }
+    out
+}
+
+fn link_files_in_line(line: &str, file: &impl Fn(&str) -> Option<String>, out: &mut String) {
+    let mut plain = 0;
+    let mut at = 0;
+    while at < line.len() {
+        let rest = &line[at..];
+        if rest.starts_with('[')
+            && let Some(link) = LINK.find(rest)
+        {
+            link_bare_files(&line[plain..at], file, out);
+            out.push_str(link.as_str());
+            at += link.end();
+            plain = at;
+        } else if rest.starts_with('`') {
+            let ticks = rest.len() - rest.trim_start_matches('`').len();
+            let fence = &rest[..ticks];
+            let Some(close) = rest[ticks..].find(fence) else {
+                break;
+            };
+            link_bare_files(&line[plain..at], file, out);
+            let span = &rest[..ticks + close + ticks];
+            let code = rest[ticks..ticks + close].trim();
+            match CODE_FILE
+                .captures(code)
+                .and_then(|found| Some((file(&found[1])?, found.get(2))))
+            {
+                Some((path, line)) => {
+                    out.push_str(&format!("[{span}]({path}{})", anchor(line)));
+                }
+                None => out.push_str(span),
+            }
+            at += span.len();
+            plain = at;
+        } else {
+            at += rest.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    link_bare_files(&line[plain..], file, out);
+}
+
+fn link_bare_files(text: &str, file: &impl Fn(&str) -> Option<String>, out: &mut String) {
+    let mut from = 0;
+    for found in BARE_FILE.captures_iter(text) {
+        let whole = found.get(0).expect("the whole match");
+        let path = found.get(1).expect("the path");
+        // Part of a longer word or a URL, like `x.dev/a.rs` in `https://x.dev/a.rs`.
+        let after = text[whole.end()..].chars().next();
+        if after.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '/' | ':')) {
+            continue;
+        }
+        let Some(project_path) = file(path.as_str()) else {
+            continue;
+        };
+        out.push_str(&text[from..path.start()]);
+        out.push_str(&format!(
+            "[{}]({project_path}{})",
+            &text[path.start()..whole.end()],
+            anchor(found.get(2))
+        ));
+        from = whole.end();
+    }
+    out.push_str(&text[from..]);
+}
+
+/// `#L42` for a line, if there is one.
+fn anchor(line: Option<regex::Match>) -> String {
+    line.map(|line| format!("#L{}", line.as_str()))
+        .unwrap_or_default()
 }
 
 /// `L42`, `L42C5` or `L42-L50`.
@@ -242,6 +350,39 @@ mod tests {
         };
         assert_eq!(locate(text, &file), None);
         assert!(whole_words("running run", "run") == vec![8]);
+    }
+
+    #[test]
+    fn links_the_files_an_answer_names() {
+        let file = |path: &str| {
+            let path = path.strip_prefix("/p/").unwrap_or(path);
+            ["src/a.rs", "Cargo.toml"]
+                .contains(&path)
+                .then(|| path.to_string())
+        };
+        let link = |markdown: &str| link_files(markdown, file);
+        assert_eq!(
+            link("See `src/a.rs:42` and src/a.rs:7:2."),
+            "See [`src/a.rs:42`](src/a.rs#L42) and [src/a.rs:7:2](src/a.rs#L7)."
+        );
+        assert_eq!(
+            link("In /p/src/a.rs, (Cargo.toml) and `src/a.rs#L3-L9`"),
+            "In [/p/src/a.rs](src/a.rs), ([Cargo.toml](Cargo.toml)) and [`src/a.rs#L3-L9`](src/a.rs#L3)"
+        );
+        for kept in [
+            "[`run`](src/a.rs#L1) and [src/a.rs](src/a.rs)",
+            "`src/b.rs`, e.g. `fn a()` or `x`",
+            "https://x.dev/src/a.rs and src/a.rsx",
+            "```\nsrc/a.rs:1\n```\n",
+            "an `unclosed src/a.rs",
+        ] {
+            let linked = link(kept);
+            if kept.starts_with("an ") {
+                assert_eq!(linked, "an `unclosed [src/a.rs](src/a.rs)");
+            } else {
+                assert_eq!(linked, kept);
+            }
+        }
     }
 
     #[test]

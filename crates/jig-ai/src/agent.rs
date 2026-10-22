@@ -222,8 +222,13 @@ pub fn prompt(request: &Prompt) -> String {
                 .trim_end_matches('\n')
         ));
     }
+    out.push_str(LINK_THE_CODE);
     out
 }
+
+/// Asked of every conversation, so the code the agent mentions opens with
+/// a click in Jig's transcript.
+const LINK_THE_CODE: &str = "\n\nWhen you mention code in your reply, link it, as [`name`](path#L12) with the path from the project's folder.";
 
 /// What the user wrote, without the note on where they are that
 /// [`prompt`] adds.
@@ -571,13 +576,15 @@ mod tests {
         };
         assert_eq!(
             prompt(&request),
-            "Add docs\n\nI'm in src/lib.rs, with line 2 selected:\n```rust\nfn b() {}\n```"
+            format!(
+                "Add docs\n\nI'm in src/lib.rs, with line 2 selected:\n```rust\nfn b() {{}}\n```{LINK_THE_CODE}"
+            )
         );
         let at_cursor = Prompt {
             target: 20..20,
             ..request
         };
-        assert!(prompt(&at_cursor).ends_with("cursor on line 3. New code goes there."));
+        assert!(prompt(&at_cursor).contains("cursor on line 3. New code goes there."));
         let with_problems = Prompt {
             diagnostics: vec![Diagnostic {
                 line: 3,

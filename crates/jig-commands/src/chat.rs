@@ -970,7 +970,15 @@ fn transcript_rows(
                 report,
                 ..
             } => {
-                rows.push(subagent(index, description, calls, report, window, cx));
+                rows.push(subagent(
+                    index,
+                    description,
+                    calls,
+                    report,
+                    on_link.clone(),
+                    window,
+                    cx,
+                ));
                 continue;
             }
             ChatEntry::Drawing {
@@ -1226,6 +1234,7 @@ fn subagent(
     description: String,
     calls: Vec<String>,
     report: Option<String>,
+    on_link: Option<LinkHandler>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -1291,13 +1300,20 @@ fn subagent(
                         .pt_1()
                         .gap_0p5()
                         .child(div().text_xs().text_color(muted).child("Reported"))
-                        .child(
-                            div().text_sm().child(
+                        .child(div().text_sm().child({
+                            let view =
                                 TextView::markdown(("jig-agent-subagent-report", index), report)
                                     .style(TextViewStyle::default().paragraph_gap(rems(0.4)))
-                                    .selectable(true),
-                            ),
-                        ),
+                                    .selectable(true);
+                            match on_link.clone() {
+                                Some(on_link) => view
+                                    .on_link_click(move |link, _, window, cx| {
+                                        on_link(link, window, cx)
+                                    })
+                                    .into_any_element(),
+                                None => view.into_any_element(),
+                            }
+                        })),
                 )
             })
     });

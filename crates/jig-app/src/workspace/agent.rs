@@ -34,6 +34,7 @@ use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
 use crate::map::domains::actions::{Action, only_reads};
+use crate::planner::links::link_files;
 
 /// Why a conversation can't start.
 const NO_PROJECT: &str =
@@ -1894,7 +1895,7 @@ impl Workspace {
         Some(
             Conversation::new(
                 format!("{} · {}", agent.label, agent.project),
-                agent.entries.clone(),
+                linked_entries(&agent.entries, agent.directory()),
                 status,
                 agent.input.clone(),
                 agent.scroll.clone(),
@@ -2660,6 +2661,36 @@ fn position_or_push(
         label: format!("{group} · {name}"),
     });
     choices.len() - 1
+}
+
+/// The transcript with the files the agent names but didn't link made
+/// links, so every file it mentions opens with a click.
+fn linked_entries(entries: &[ChatEntry], project: &Path) -> Vec<ChatEntry> {
+    let file = |written: &str| {
+        let path = Path::new(written);
+        let relative = path.strip_prefix(project).unwrap_or(path);
+        let relative = relative.strip_prefix("./").unwrap_or(relative);
+        (relative.is_relative() && project.join(relative).is_file())
+            .then(|| relative.to_string_lossy().replace(' ', "%20"))
+    };
+    entries
+        .iter()
+        .map(|entry| match entry {
+            ChatEntry::Agent(text) => ChatEntry::Agent(link_files(text, file)),
+            ChatEntry::Subagent {
+                id,
+                description,
+                calls,
+                report,
+            } => ChatEntry::Subagent {
+                id: id.clone(),
+                description: description.clone(),
+                calls: calls.clone(),
+                report: report.as_deref().map(|report| link_files(report, file)),
+            },
+            entry => entry.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
