@@ -60,7 +60,7 @@ Select some code, press **⌘K** and type what you want. A coding agent works on
 it in a small conversation next to the code, and each change it wants shows up
 inline. **Tab** keeps it, **Esc** throws it away.
 
-<img width="1134" height="813" alt="Jig previewing a change" src="https://github.com/user-attachments/assets/ceabdaed-93f9-4953-a564-bb4d00b9d1e5" />
+<img width="960" height="611" alt="jig1-lossy" src="https://github.com/user-attachments/assets/5c9e62be-2248-42e9-85e1-e861d12fcfea" />
 
 - **Any agent.** OpenCode, Claude Code, Codex, Gemini CLI, or any agent that
   speaks the Agent Client Protocol. Every edit it wants to make opens as a
@@ -76,6 +76,9 @@ inline. **Tab** keeps it, **Esc** throws it away.
   your own machine. Jig doesn't pick one for you.
 - **Tasks.** A small planner in the sidebar. Agents can save their plans there,
   and you can hand single steps, or the whole task, back to the agent.
+
+  <img width="720" height="458" alt="jig2-compressed" src="https://github.com/user-attachments/assets/e368f868-dee8-49f9-bc6e-83243ca14b2b" />
+
 - **The Map.** Zoom out of the code (**⌘B**, or a pinch) to see where you are:
   a function's callers and callees, then the project's parts and how they call
   each other, then its business areas, which the agent can name and describe
@@ -83,6 +86,9 @@ inline. **Tab** keeps it, **Esc** throws it away.
   highlighting, tracing and touring the code without changing it. Sketch boxes
   and arrows for what you want to build, and turn a sketch into a task or have
   the agent implement it, edit by edit.
+
+<img width="720" height="458" alt="jig3-compressed" src="https://github.com/user-attachments/assets/c65b6c30-2903-4fbe-a5ef-16ac8694870a" />
+
 - **A proper editor around it.** Language servers (go to definition, completion,
   rename, diagnostics with quick fixes and Fix with Agent, hover, formatting),
   a language library to add languages and install their servers, formatters and
