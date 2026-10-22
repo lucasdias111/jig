@@ -98,8 +98,6 @@ inline. **Tab** keeps it, **Esc** throws it away.
 
 It's macOS-first, and also builds on Linux and Windows.
 
-<img width="597" height="411" alt="Jig's agent input" src="https://github.com/user-attachments/assets/1b28e39a-5494-4138-8174-a2a59ec864ab" />
-
 ## Getting it
 
 ### Download
