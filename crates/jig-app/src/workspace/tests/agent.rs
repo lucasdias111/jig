@@ -83,7 +83,7 @@ fn clicking_anywhere_in_the_reply_box_focuses_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppContext) {
+fn the_agent_conversation_opens_right_centre_when_it_fits(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let short = "fn short() {}\n";
     let long = format!("// {}\n", "x".repeat(110));
@@ -117,16 +117,22 @@ fn the_agent_conversation_opens_beside_the_code_when_it_fits(cx: &mut TestAppCon
         anchor.x > end.left(),
         "right of the code: {anchor:?} {end:?}"
     );
-    assert!((anchor.y - end.top()).abs() < px(8.), "level with it");
     let viewport = cx
-        .update(|cx| window.update(cx, |_, window, _| window.viewport_size().width))
+        .update(|cx| window.update(cx, |_, window, _| window.viewport_size()))
         .unwrap();
     // Centred in the right half, pulled in as far as it must to fit.
     let width = px(jig_commands::chat::WIDTH);
-    let expected = (viewport * 0.75 - width / 2.).min(viewport - width - px(8.));
+    let expected = (viewport.width * 0.75 - width / 2.).min(viewport.width - width - px(8.));
     assert!(
         (anchor.x - expected).abs() < px(1.),
         "centred in the right half: {anchor:?} in {viewport:?}"
+    );
+    // And top to bottom, at the height it grows to.
+    let full = jig_commands::chat::ChatFrame::default().full_height();
+    let expected = ((viewport.height - full) / 2.).max(px(48.));
+    assert!(
+        (anchor.y - expected).abs() < px(1.),
+        "centred top to bottom: {anchor:?} in {viewport:?}"
     );
 
     let (anchor, end) = open_on(cx, short.len()..short.len() + long.len());

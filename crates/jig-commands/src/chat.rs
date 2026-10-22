@@ -161,6 +161,18 @@ pub struct ChatFrame {
     pub transcript_bounds: ChatBounds,
 }
 
+/// About how tall the header and reply box make the conversation, over its
+/// transcript.
+const CHROME_HEIGHT: f32 = 120.;
+
+impl ChatFrame {
+    /// How tall it floats once its transcript is full, for placing it before
+    /// it has grown.
+    pub fn full_height(&self) -> Pixels {
+        self.transcript_height.unwrap_or(px(TRANSCRIPT_HEIGHT)) + px(CHROME_HEIGHT)
+    }
+}
+
 impl Default for ChatFrame {
     fn default() -> Self {
         Self {
