@@ -19,6 +19,7 @@ mod export;
 mod input;
 pub mod lens;
 mod lens_draw;
+pub mod ruler;
 mod scene;
 pub mod sketch;
 mod sketch_draw;
@@ -171,6 +172,8 @@ pub struct MapView {
     lens: lens::LensState,
     /// The user's sketches, and the tool picked.
     sketches: sketch::SketchState,
+    /// Where the ruler's needle was last drawn, easing to where it goes.
+    ruler: Cell<Option<f32>>,
 }
 
 impl EventEmitter<MapEvent> for MapView {}
@@ -219,6 +222,7 @@ impl MapView {
             arriving_at: None,
             lens: lens::LensState::default(),
             sketches: sketch::SketchState::default(),
+            ruler: Cell::new(None),
         }
     }
 

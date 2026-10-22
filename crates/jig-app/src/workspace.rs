@@ -648,6 +648,7 @@ impl Workspace {
             .pb_2()
             // Line shortcuts bind here, not in every other input.
             .key_context("CodeEditor")
+            .relative()
             .on_pinch(cx.listener(Self::pinch_code))
             .child(
                 Editor::new(self.editor().state())
@@ -660,6 +661,7 @@ impl Workspace {
                     .context_menu(self.code_menu(cx))
                     .size_full(),
             )
+            .children(self.pinch_ruler(cx))
             .into_any_element()
     }
 }

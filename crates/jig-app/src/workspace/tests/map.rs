@@ -281,6 +281,38 @@ fn command_plus_and_minus_zoom_the_map_in_steps(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_ruler_shows_how_far_out_and_goes_to_a_level(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx);
+    press(cx, window, "secondary-b");
+    read_level(cx, &workspace);
+    let view = map(cx, &workspace).unwrap();
+    settle(cx, window, &view);
+    let depth = |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).depth());
+    let start = depth(cx);
+    assert!((0.5..1.5).contains(&start), "at Plan: {start}");
+    // Zooming out moves the needle towards Site, before it gets there.
+    press(cx, window, "secondary--");
+    let out = depth(cx);
+    assert!(out > start && out < 2., "{start} then {out}");
+    assert!(plan_of("save")(&level(cx, &workspace).unwrap()));
+    // Clicking a level's name goes there.
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    let site = vcx
+        .debug_bounds("map-level-Site")
+        .expect("the ruler's Site")
+        .center();
+    vcx.simulate_click(site, Modifiers::none());
+    assert_eq!(level(cx, &workspace), Some(Level::Site));
+    assert!((1.5..=2.5).contains(&depth(cx)));
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    let code = vcx.debug_bounds("map-level-Code").unwrap().center();
+    vcx.simulate_click(code, Modifiers::none());
+    assert!(matches!(level(cx, &workspace), Some(Level::Plan(_))));
+}
+
+#[gpui_kit::test]
 fn a_pinch_out_in_the_code_shows_the_map(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = open_project(cx);
     draw(cx, window);
@@ -297,6 +329,38 @@ fn a_pinch_out_in_the_code_shows_the_map(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     let level = read_level(cx, &workspace);
     assert!(plan_of("save")(&level));
+}
+
+#[gpui_kit::test]
+fn a_pinch_in_the_code_shows_the_ruler_on_its_way_out(cx: &mut TestAppContext) {
+    let (_dir, window, workspace) = open_project(cx);
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    assert!(
+        vcx.debug_bounds("map-ruler").is_none(),
+        "not while just coding"
+    );
+    let at = point(px(400.), px(250.));
+    vcx.simulate_mouse_move(at, None, Modifiers::none());
+    let pinch = |phase, delta| PinchEvent {
+        position: at,
+        delta,
+        modifiers: Modifiers::none(),
+        phase,
+    };
+    vcx.simulate_event(pinch(TouchPhase::Moved, -0.05));
+    vcx.run_until_parked();
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    assert!(vcx.debug_bounds("map-ruler").is_some(), "on its way out");
+    assert!(map(cx, &workspace).is_none(), "not there yet");
+    // Let go short of the Map: the ruler goes.
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.simulate_event(pinch(TouchPhase::Ended, 0.));
+    vcx.run_until_parked();
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    assert!(vcx.debug_bounds("map-ruler").is_none());
 }
 
 #[gpui_kit::test]

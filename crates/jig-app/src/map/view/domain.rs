@@ -208,7 +208,7 @@ impl MapView {
         // Room above for the banner, and the top row's names.
         let top = 28.
             + if self.domain_banner().is_some() {
-                56.
+                56. + super::ruler::RULER_ROOM - 12.
             } else {
                 24.
             };

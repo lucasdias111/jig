@@ -30,7 +30,7 @@ use super::{ExplainLevel, IndexDomains, ShowMap, UpdateDomains, Workspace};
 use crate::lsp;
 use crate::map::domains::actions::Action;
 use crate::map::index::{FnId, Project, Target};
-use crate::map::view::{Level, MapEvent, MapView};
+use crate::map::view::{Level, MapEvent, MapView, ruler};
 
 /// How long the language server has to answer, and how many times it's
 /// asked while it may still be indexing (jdtls takes minutes cold).
@@ -39,6 +39,9 @@ const SERVER_ATTEMPTS: usize = 6;
 const SERVER_RETRY: Duration = Duration::from_secs(5);
 /// A pinch in the code this far out shows the Map.
 const PINCH_OUT: f32 = -0.12;
+/// Where the ruler's needle is as the pinch shows the Map: halfway from
+/// Code to Plan.
+const PINCH_DEPTH: f32 = 0.5;
 
 pub(super) struct MapPane {
     pub(super) view: Entity<MapView>,
@@ -328,13 +331,34 @@ impl Workspace {
     ) {
         if event.phase == TouchPhase::Ended {
             self.pinched = 0.;
+            cx.notify();
             return;
         }
         self.pinched = (self.pinched + event.delta).min(0.);
         if self.pinched <= PINCH_OUT && !self.home && self.map_showing().is_none() {
             self.pinched = 0.;
             self.map_from_code(window, cx);
+            if let Some(view) = self.map_showing() {
+                view.read(cx).ruler_from(PINCH_DEPTH);
+            }
         }
+        cx.notify();
+    }
+
+    /// The Map's ruler over the code while a pinch is on its way out: its
+    /// needle going from Code towards Plan, halfway there as the Map shows.
+    pub(super) fn pinch_ruler(&self, cx: &App) -> Option<AnyElement> {
+        if self.pinched >= 0. || self.home {
+            return None;
+        }
+        let depth = self.pinched / PINCH_OUT * PINCH_DEPTH;
+        Some(ruler::ruler(
+            depth,
+            "Code",
+            crate::theme::editor_surface(cx),
+            None,
+            cx,
+        ))
     }
 
     /// Ask the language server what function `id` calls and is called by.

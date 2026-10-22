@@ -477,7 +477,7 @@ impl MapView {
         Some(
             div()
                 .absolute()
-                .top(px(12.))
+                .top(px(super::ruler::RULER_ROOM))
                 .left(px(0.))
                 .right(px(0.))
                 .flex()

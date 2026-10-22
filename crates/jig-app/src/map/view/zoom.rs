@@ -28,9 +28,9 @@ const PLAN_MAX: f32 = 2.;
 /// size, or a little under where a big Plan starts out.
 const PLAN_OUT: f32 = 0.5;
 /// Zoomed in past this over a function, into it.
-const PLAN_IN: f32 = 1.9;
+pub(super) const PLAN_IN: f32 = 1.9;
 /// Site's closest zoom.
-const SITE_MAX: f32 = 3.;
+pub(super) const SITE_MAX: f32 = 3.;
 /// A Site box filling this much of the canvas, zoomed into further,
 /// steps into its Plan.
 const SITE_IN: f32 = 0.7;
@@ -45,7 +45,7 @@ pub(super) const FADE_OUT: f32 = 0.25;
 /// starts opening, it's Domain again. A little apart, so a pinch that
 /// wavers doesn't flip between them.
 pub(super) const DOMAIN_TO_SITE: f32 = 1.08;
-const SITE_TO_DOMAIN: f32 = 1.03;
+pub(super) const SITE_TO_DOMAIN: f32 = 1.03;
 /// How far ⌘+ and ⌘- zoom at a time.
 const KEY_STEP: f32 = 1.25;
 /// A gesture that changed level is over once it's quiet this long.
@@ -504,7 +504,7 @@ impl MapView {
     }
 
     /// Where zooming out of this Plan goes to Site.
-    fn plan_out(&self) -> f32 {
+    pub(super) fn plan_out(&self) -> f32 {
         (self.default_camera().zoom * 0.85).clamp(PLAN_MIN + 0.02, PLAN_OUT)
     }
 

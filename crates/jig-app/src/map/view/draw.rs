@@ -116,35 +116,6 @@ impl MapView {
                 .child(label)
                 .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
         };
-        // The levels, the one showing marked: Code · Plan · Site.
-        let levels = h_flex()
-            .flex_none()
-            .h(px(22.))
-            .p(px(2.))
-            .gap(px(2.))
-            .rounded(px(6.))
-            .bg(theme.foreground.opacity(0.06))
-            .children(["Code", "Plan", "Site", "Domain"].into_iter().map(|name| {
-                let current = name == self.level.name();
-                div()
-                    .id(name)
-                    .debug_selector(move || format!("map-level-{name}"))
-                    .h_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded(px(4.))
-                    .text_xs()
-                    .when(current, |this| {
-                        this.bg(theme.background).text_color(theme.foreground)
-                    })
-                    .when(!current, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|style| style.text_color(theme.foreground))
-                    })
-                    .child(name)
-                    .on_click(cx.listener(move |this, _, _, cx| this.go_to_level(name, cx)))
-            }));
         let plan = matches!(self.level, Level::Plan(_));
         let tints = (self.has_tints() && self.level != Level::Domain).then(|| {
             h_flex()
@@ -265,7 +236,6 @@ impl MapView {
                     .children(tests)
                     .children(tints)
                     .child(export)
-                    .child(levels)
                     .when(plan, |this| {
                         this.child(
                             button("map-tidy", "Tidy", "Lay the boxes out afresh")
@@ -295,33 +265,6 @@ impl MapView {
                         )
                     }),
             )
-    }
-
-    /// The header's levels: Code goes to the code, Plan and Site step
-    /// there.
-    fn go_to_level(&mut self, name: &str, cx: &mut Context<Self>) {
-        match (name, &self.level) {
-            ("Site", Level::Plan(_)) | ("Domain", Level::Site) => self.step_out(cx),
-            ("Domain", Level::Plan(_)) => self.show(Level::Domain, cx),
-            ("Site", Level::Domain) => self.step_in(cx),
-            ("Plan", Level::Domain) | ("Code", Level::Domain) => {
-                self.step_in(cx);
-            }
-            ("Plan", Level::Site) | ("Code", Level::Site) => self.step_in(cx),
-            ("Code", Level::Plan(_)) => {
-                if let Some(focus) = self
-                    .plan
-                    .focus
-                    .or_else(|| self.selected_plan().first().copied())
-                {
-                    self.plan.focus = Some(focus);
-                    self.enter_plan_box(focus, cx);
-                } else {
-                    cx.emit(super::MapEvent::Close);
-                }
-            }
-            _ => {}
-        }
     }
 
     pub(super) fn render_canvas(
@@ -429,6 +372,7 @@ impl MapView {
             .children(self.render_hover(cx))
             .children(self.render_tool_strip(cx))
             .children(self.render_sketch_list(cx))
+            .child(self.render_ruler(window, cx))
             .when(self.tool() != super::sketch::Tool::Pointer, |this| {
                 this.cursor_crosshair()
             })

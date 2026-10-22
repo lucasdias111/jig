@@ -815,7 +815,7 @@ impl MapView {
                 .id("map-sketch-list")
                 .debug_selector(|| "map-sketch-list".into())
                 .absolute()
-                .top(px(12.))
+                .top(px(super::ruler::RULER_ROOM))
                 .right(px(12.))
                 .w(px(320.))
                 .max_h(relative(0.7))
