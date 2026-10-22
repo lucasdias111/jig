@@ -93,8 +93,13 @@ impl MapView {
     }
 
     /// The ruler's levels: Code goes to the code, the others step there.
+    /// Code with nothing picked at Site or Domain goes back to where you
+    /// were in the code, rather than into whatever's in the middle.
     pub(super) fn go_to_level(&mut self, name: &str, cx: &mut Context<Self>) {
         match (name, &self.level) {
+            ("Code", Level::Domain | Level::Site) if self.selected.is_empty() => {
+                cx.emit(MapEvent::Close)
+            }
             ("Site", Level::Plan(_)) | ("Domain", Level::Site) => self.step_out(cx),
             ("Domain", Level::Plan(_)) => self.show(Level::Domain, cx),
             ("Site", Level::Domain) => self.step_in(cx),

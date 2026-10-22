@@ -310,6 +310,18 @@ fn the_ruler_shows_how_far_out_and_goes_to_a_level(cx: &mut TestAppContext) {
     let code = vcx.debug_bounds("map-level-Code").unwrap().center();
     vcx.simulate_click(code, Modifiers::none());
     assert!(matches!(level(cx, &workspace), Some(Level::Plan(_))));
+    // At Site with nothing picked, Code goes back to where you were.
+    press(cx, window, "secondary-up");
+    assert_eq!(level(cx, &workspace), Some(Level::Site));
+    press(cx, window, "escape");
+    assert!(cx.update(|cx| view.read(cx).selected_keys().is_empty()));
+    draw(cx, window);
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    let code = vcx.debug_bounds("map-level-Code").unwrap().center();
+    vcx.simulate_click(code, Modifiers::none());
+    assert!(map(cx, &workspace).is_none(), "back in the code");
+    let cursor = cx.update(|cx| workspace.read(cx).editor().cursor(cx));
+    assert_eq!(cursor, STORE.find("check(item);").unwrap());
 }
 
 #[gpui_kit::test]
