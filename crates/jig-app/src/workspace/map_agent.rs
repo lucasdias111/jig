@@ -11,7 +11,6 @@
 use gpui_kit::*;
 use jig_ai::agent::Turn;
 use jig_commands::{Bubble, ChatEntry, DrawingAction};
-use jig_editor::EditorHandle as _;
 use serde_json::Value;
 
 use super::Workspace;
@@ -90,7 +89,6 @@ impl Workspace {
             id,
             bubble: Bubble::Message(String::new()),
             anchor,
-            target: self.editor().selection(cx),
             preview: None,
             agent: Some(agent),
             _task: None,

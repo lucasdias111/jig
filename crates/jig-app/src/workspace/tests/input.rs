@@ -107,48 +107,49 @@ fn command_k_and_the_agent_button_toggle_the_input(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_agent_input_opens_beside_the_code_when_it_fits(cx: &mut TestAppContext) {
+fn the_agent_input_opens_right_centre_whatever_the_line(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let short = "fn short() {}\n";
     let long = format!("// {}\n", "x".repeat(110));
     std::fs::write(dir.path().join("a.rs"), format!("{short}{long}")).unwrap();
     let (window, workspace) = open(cx, &dir.path().join("a.rs"));
 
-    // Open on `line`, and say where it ended up against that line's end.
     let open_on = |cx: &mut TestAppContext, line: std::ops::Range<usize>| {
-        let (ws, selected) = (workspace.clone(), line.clone());
+        let ws = workspace.clone();
         step(cx, window, move |window, cx| {
             window.render_frame(cx);
             ws.update(cx, |this, cx| {
                 this.palette = None;
-                this.editor().select(selected.clone(), cx);
+                this.editor().select(line.clone(), cx);
                 this.open_command(&super::super::OpenCommand, window, cx);
             })
         });
-        cx.update(|cx| {
-            let this = workspace.read(cx);
-            let end = this
-                .editor()
-                .state()
-                .read(cx)
-                .range_to_bounds(&(line.end - 1..line.end - 1))
-                .unwrap();
-            (this.palette.as_ref().unwrap().anchor, end)
-        })
+        cx.update(|cx| workspace.read(cx).palette.as_ref().unwrap().anchor)
     };
-
-    let (anchor, end) = open_on(cx, 0..short.len());
-    assert!(
-        anchor.x > end.left(),
-        "right of the code: {anchor:?} {end:?}"
-    );
-    assert!((anchor.y - end.top()).abs() < px(8.), "level with it");
-
-    let (anchor, end) = open_on(cx, short.len()..short.len() + long.len());
-    assert!(
-        anchor.y >= end.bottom(),
-        "no room on the right, so below it: {anchor:?} {end:?}"
-    );
+    let width = px(jig_commands::palette::WIDTH);
+    let viewport = cx
+        .update(|cx| window.update(cx, |_, window, _| window.viewport_size()))
+        .unwrap();
+    // Its top where the conversation's will be.
+    let expected = cx
+        .update(|cx| {
+            window.update(cx, |_, window, cx| {
+                let full = jig_commands::chat::ChatFrame::default().full_height();
+                workspace.read(cx).right_centre(width, full, window)
+            })
+        })
+        .unwrap();
+    for anchor in [
+        open_on(cx, 0..short.len()),
+        // Code reaching right across: it opens there all the same.
+        open_on(cx, short.len()..short.len() + long.len()),
+    ] {
+        assert_eq!(anchor, expected);
+        assert!(
+            anchor.x + width / 2. > viewport.width / 2.,
+            "in the right half: {anchor:?} in {viewport:?}"
+        );
+    }
 }
 
 #[gpui_kit::test]
@@ -194,8 +195,11 @@ fn a_typed_message_starts_a_conversation_about_the_line(cx: &mut TestAppContext)
     cx.update(|cx| {
         let this = workspace.read(cx);
         assert!(this.palette.is_none());
-        let chat = this.chat.as_ref().expect("a conversation");
-        assert_eq!(chat.target, 10..19, "the cursor's line");
+        let prompt = this.agent_prompt().expect("a conversation");
+        assert!(
+            prompt.contains("fn b() {}") && !prompt.contains("fn a() {}"),
+            "the cursor's line: {prompt}"
+        );
     });
     assert_eq!(
         cx.update(|cx| workspace.read(cx).agent_entries()).first(),

@@ -7,20 +7,20 @@
 //! conversations are listed in the ⌘K input and can be picked up again.
 
 use std::collections::VecDeque;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use futures::StreamExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{InlineToken, InputContent, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::agent::acp::SignInNeeded;
 use jig_ai::agent::harness::Session;
 use jig_ai::agent::read_only::command_only_reads;
 use jig_ai::agent::{
-    AgentEvent, AgentRequest, Asking, EditRequest, PermissionRequest, QuestionRequest, Turn,
+    AgentEvent, AgentRequest, Asking, CodeReference, EditRequest, PermissionRequest,
+    QuestionRequest, Turn,
 };
 use jig_commands::{
     AgentCommandInfo, Bubble, ChatDrag, ChatEntry, ChatFrame, ChatModels, ChatResize, ChatStatus,
@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
-use super::{EditAgents, OpenAgentConversations, OpenCommand, Workspace};
+use super::{EditAgents, OpenAgentConversations, OpenCommand, SendSelectionToAgent, Workspace};
 use crate::map::domains::actions::{Action, only_reads};
 use crate::planner::links::link_files;
 
@@ -159,6 +159,9 @@ pub(super) struct AgentRun {
     pub(super) entries: Vec<ChatEntry>,
     /// The reply box, shown between turns.
     pub(super) input: Entity<InputState>,
+    /// The code sent over from the editor, by the id of its token in the
+    /// reply box, sent with the reply that still names it.
+    references: Vec<(SharedString, CodeReference)>,
     pub(super) scroll: ScrollHandle,
     /// The conversation's size, and where it is on screen.
     frame: ChatFrame,
@@ -275,9 +278,8 @@ impl Workspace {
             .chat
             .as_mut()
             .expect("start_conversation set up the conversation");
-        let target = run.target.clone();
         run.agent = Some(agent);
-        let anchor = self.agent_anchor(target, window, cx);
+        let anchor = self.agent_anchor(window);
         if let Some(run) = self.chat.as_mut() {
             run.anchor = anchor;
         }
@@ -340,7 +342,6 @@ impl Workspace {
             id,
             bubble: Bubble::Message(String::new()),
             anchor,
-            target: self.editor().selection(cx),
             preview: None,
             agent: Some(agent),
             _task: None,
@@ -474,12 +475,11 @@ impl Workspace {
         self.close_chat(window, cx);
         self.next_run_id += 1;
         let id = self.next_run_id;
-        let target = self.editor().selection(cx);
+        let anchor = self.agent_anchor(window);
         self.chat = Some(CommandRun {
             id,
             bubble: Bubble::Message(String::new()),
-            anchor: self.floating_anchor(cx),
-            target: target.clone(),
+            anchor,
             preview: None,
             agent: None,
             _task: None,
@@ -488,10 +488,6 @@ impl Workspace {
             self.chat = None;
             self.show_note(NO_PROJECT.into(), window, cx);
             return None;
-        }
-        let anchor = self.agent_anchor(target, window, cx);
-        if let Some(run) = self.chat.as_mut() {
-            run.anchor = anchor;
         }
         Some(id)
     }
@@ -857,6 +853,7 @@ impl Workspace {
             project,
             entries: vec![ChatEntry::User(asked)],
             input,
+            references: Vec::new(),
             scroll: ScrollHandle::new(),
             frame: match self.agent.dock {
                 Some(width) => ChatFrame {
@@ -885,7 +882,7 @@ impl Workspace {
         if let Some(run) = self.chat.as_mut().filter(|run| run.id == id) {
             run.agent = Some(agent);
         }
-        let anchor = self.agent_anchor(self.editor().selection(cx), window, cx);
+        let anchor = self.agent_anchor(window);
         if let Some(run) = self.chat.as_mut() {
             run.anchor = anchor;
         }
@@ -1102,6 +1099,111 @@ impl Workspace {
         self.start_turn(id, TurnInput::Prompt(text), window, cx);
     }
 
+    /// Send to Agent (⇧⌘L, or the code's right-click menu): the selection,
+    /// or the cursor's line, goes into the conversation's reply box as a
+    /// reference to write about and send. With no conversation open, a new
+    /// one opens empty, waiting for the message.
+    pub(super) fn send_selection_to_agent(
+        &mut self,
+        _: &SendSelectionToAgent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.home || self.map_showing().is_some() {
+            return;
+        }
+        self.close_palette(window, cx);
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_none()
+        {
+            let Some(id) = self.start_agent_run(window, cx) else {
+                return;
+            };
+            let directory = self.agent_project(cx).expect("start_agent_run checked");
+            let mut agent = self.new_agent_run(None, String::new(), directory, window, cx);
+            agent.entries.clear();
+            if let Some(run) = self.chat.as_mut().filter(|run| run.id == id) {
+                run.agent = Some(agent);
+            }
+            let anchor = self.agent_anchor(window);
+            if let Some(run) = self.chat.as_mut() {
+                run.anchor = anchor;
+            }
+        }
+        let Some(directory) = self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .map(|agent| agent.directory.clone())
+        else {
+            return;
+        };
+        let reference = self.selection_reference(&directory, cx);
+        let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) else {
+            return;
+        };
+        let id = SharedString::from(format!("code-{}", agent.references.len()));
+        let name = reference.name();
+        let token = InlineToken::new(id.clone(), format!("@{name}")).with_label(name);
+        agent.references.push((id, reference));
+        let input = agent.input.clone();
+        // Its reply box shows once the agent's turn is over.
+        let waiting = agent.finished;
+        input.update(cx, |input, cx| {
+            let before = input.value()[..input.cursor()].to_string();
+            if before
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+            {
+                input.insert(" ", window, cx);
+            }
+            if input.replace_with_token(token, window, cx).is_ok() {
+                input.insert(" ", window, cx);
+            }
+        });
+        if waiting {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        } else {
+            self.show_note(
+                "It's in the reply box, for when the agent's done.".into(),
+                window,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// The selection, or the cursor's line, as code sent to the agent, its
+    /// file named from the project `directory`.
+    fn selection_reference(&self, directory: &Path, cx: &App) -> CodeReference {
+        let text = self.editor().text(cx);
+        let selection = self.editor().selection(cx);
+        let range = if selection.is_empty() {
+            super::commands::line_at(&text, selection.start)
+        } else {
+            selection
+        };
+        let line = |offset: usize| 1 + text[..offset].matches('\n').count();
+        let file = match self.document().path.as_deref() {
+            Some(path) => path
+                .strip_prefix(directory)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned(),
+            None => "untitled".into(),
+        };
+        CodeReference {
+            file,
+            language: self.editor().language(cx),
+            lines: (line(range.start), line(range.end.max(range.start + 1) - 1)),
+            code: text[range].to_string(),
+        }
+    }
+
     /// Enter in the reply box: the agent takes the reply as its next turn.
     fn reply_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(run) = self.chat.as_mut() else {
@@ -1124,6 +1226,13 @@ impl Workspace {
             return;
         }
         agent.sign_in = None;
+        let references = referred_to(&agent.input.read(cx).content(), &agent.references);
+        agent.references.clear();
+        // Opened empty by sending code over: what's asked first names it.
+        let first = agent.session.is_none() && agent.entries.is_empty();
+        if first {
+            agent.title = text.clone();
+        }
         agent
             .input
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -1132,7 +1241,9 @@ impl Workspace {
         // Back to the code, where the agent's edits are reviewed, or the
         // Map, where a Map action's answer is.
         self.focus_code(window, cx);
-        let input = self.slash_command(&text).unwrap_or(TurnInput::Prompt(text));
+        let input = self.slash_command(&text).unwrap_or_else(|| {
+            TurnInput::Prompt(jig_ai::agent::message(&text, &references, first))
+        });
         self.start_turn(id, input, window, cx);
     }
 
@@ -1711,42 +1822,15 @@ impl Workspace {
             .unwrap_or_default()
     }
 
-    /// Where the conversation opens: centred in the window's right half
-    /// (nearer the middle in a narrow window, further right when the code
-    /// it's about reaches past it, so it doesn't cover that), and centred
-    /// top to bottom at the height it grows to, when the window has room
-    /// for it there; below the cursor otherwise.
-    pub(super) fn agent_anchor(
-        &self,
-        range: Range<usize>,
-        window: &Window,
-        cx: &App,
-    ) -> Point<Pixels> {
-        const GAP: f32 = 32.;
-        const MARGIN: f32 = 8.;
+    /// Where the conversation opens: centred in the window's right half,
+    /// top to bottom at the height it grows to, whatever code it's about.
+    pub(super) fn agent_anchor(&self, window: &Window) -> Point<Pixels> {
         let frame = self
             .chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
             .map_or_else(Default::default, |agent| agent.frame.clone());
-        let width = frame.width;
-        let beside = self.beside_anchor(range.clone(), width, window, cx);
-        let Some(line) = self.editor().beside_point(range, cx) else {
-            return beside;
-        };
-        let viewport = window.viewport_size();
-        let edge = viewport.width - self.docked_chat_width();
-        // Clear of the code, as `beside_anchor` places it.
-        let clear = line.x + px(GAP);
-        if clear + width + px(MARGIN) > edge {
-            return beside;
-        }
-        // Pulled in from the edge when it would cross it, but never onto the
-        // code.
-        let x = (viewport.width * 0.75 - width / 2.).min(edge - width - px(MARGIN));
-        // Below the title bar in a short window.
-        let y = ((viewport.height - frame.full_height()) / 2.).max(px(48.));
-        gpui_kit::point(x.max(clear), y)
+        self.right_centre(frame.width, frame.full_height(), window)
     }
 
     /// Pressed on the conversation's header: a drag may follow.
@@ -2322,7 +2406,7 @@ impl Workspace {
         }
         // The bubble follows the change once it's scrolled into view.
         cx.on_next_frame(window, move |this, window, cx| {
-            let anchor = this.agent_anchor(range, window, cx);
+            let anchor = this.agent_anchor(window);
             if let Some(run) = this
                 .chat
                 .as_mut()
@@ -2707,4 +2791,27 @@ mod tests {
         assert_eq!(ago(100_000), "yesterday");
         assert_eq!(ago(5 * 86_400), "5 days ago");
     }
+}
+
+/// The code a reply's tokens name, each once, in the order they're named.
+fn referred_to(
+    content: &InputContent,
+    references: &[(SharedString, CodeReference)],
+) -> Vec<CodeReference> {
+    let mut named: Vec<&SharedString> = Vec::new();
+    content
+        .tokens()
+        .iter()
+        .map(|span| span.token().id())
+        .filter_map(|id| {
+            if named.contains(&id) {
+                return None;
+            }
+            named.push(id);
+            references
+                .iter()
+                .find(|(known, _)| known == id)
+                .map(|(_, reference)| reference.clone())
+        })
+        .collect()
 }

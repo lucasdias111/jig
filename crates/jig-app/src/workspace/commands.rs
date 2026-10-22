@@ -39,8 +39,6 @@ pub(super) struct CommandRun {
     pub(super) id: u64,
     pub(super) bubble: Bubble,
     pub(super) anchor: Point<Pixels>,
-    /// The code the conversation started from.
-    pub(super) target: Range<usize>,
     /// Set while an edit sits in the buffer awaiting accept or reject.
     pub(super) preview: Option<Preview>,
     /// `None` only until the conversation is set up.
@@ -95,26 +93,24 @@ impl Workspace {
             .unwrap_or(gpui_kit::point(px(48.), px(48.)))
     }
 
-    /// Where a floating panel `width` wide opens: just right of the code in
-    /// `range`, level with its first line, so it covers none of it, when
-    /// there's room for it before the window's edge (or a docked
-    /// conversation); below the cursor otherwise.
-    pub(super) fn beside_anchor(
+    /// Where a floating panel `width` wide, growing to `height`, opens:
+    /// centred in the window's right half and top to bottom, pulled in from
+    /// the edge (or a docked conversation) in a narrow window, and below the
+    /// title bar in a short one.
+    pub(super) fn right_centre(
         &self,
-        range: Range<usize>,
         width: Pixels,
+        height: Pixels,
         window: &Window,
-        cx: &App,
     ) -> Point<Pixels> {
-        const GAP: f32 = 32.;
         const MARGIN: f32 = 8.;
-        let edge = window.viewport_size().width - self.docked_chat_width();
-        self.editor()
-            .beside_point(range, cx)
-            // Level with the first line, give or take the panel's padding.
-            .map(|at| at + gpui_kit::point(px(GAP), px(-4.)))
-            .filter(|at| at.x + width + px(MARGIN) <= edge)
-            .unwrap_or_else(|| self.floating_anchor(cx))
+        let viewport = window.viewport_size();
+        let edge = viewport.width - self.docked_chat_width();
+        let x = (viewport.width * 0.75 - width / 2.)
+            .min(edge - width - px(MARGIN))
+            .max(px(MARGIN));
+        let y = ((viewport.height - height) / 2.).max(px(super::TITLE_BAR_HEIGHT + 8.));
+        gpui_kit::point(x, y)
     }
 
     /// A button in the title bar that opens the agent input, for those who
@@ -218,7 +214,13 @@ impl Workspace {
             }
             None => (
                 !selection.is_empty(),
-                self.beside_anchor(selection, px(jig_commands::palette::WIDTH), window, cx),
+                // Its top where the conversation's will be, so that opens
+                // where it was asked.
+                self.right_centre(
+                    px(jig_commands::palette::WIDTH),
+                    jig_commands::chat::ChatFrame::default().full_height(),
+                    window,
+                ),
             ),
         };
         let models = self.model_menu(cx);
@@ -257,7 +259,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.take().is_some() {
             self.focus_code(window, cx);
             cx.notify();
@@ -316,8 +318,7 @@ impl Workspace {
         self.chat = Some(CommandRun {
             id,
             bubble: Bubble::Message(String::new()),
-            anchor: self.floating_anchor(cx),
-            target,
+            anchor: self.agent_anchor(window),
             preview: None,
             agent: None,
             _task: None,
@@ -563,7 +564,7 @@ impl Workspace {
 }
 
 /// The line containing `offset`, without its trailing newline.
-fn line_at(text: &str, offset: usize) -> Range<usize> {
+pub(super) fn line_at(text: &str, offset: usize) -> Range<usize> {
     let offset = offset.min(text.len());
     let start = text[..offset].rfind('\n').map_or(0, |at| at + 1);
     let end = text[offset..]
