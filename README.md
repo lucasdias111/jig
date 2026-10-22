@@ -64,16 +64,31 @@ inline. **Tab** keeps it, **Esc** throws it away.
 
 - **Any agent.** OpenCode, Claude Code, Codex, Gemini CLI, or any agent that
   speaks the Agent Client Protocol. Every edit it wants to make opens as a
-  preview you accept or reject, and shell commands and web access wait for your
-  go-ahead. Its own commands and skills are a `/` away.
+  preview you accept or reject (or **⌘↩** to accept the rest of a
+  conversation's), and shell commands, web access and subagents wait for your
+  go-ahead; Settings > Agent sets each to ask, allow or never. Its own commands
+  and skills are a `/` away.
+- **Conversations that stay.** Pin one to the side of the window, or pick up
+  an earlier one with **⌥⌘K**. **⇧⌘L** sends the selection to the open
+  conversation's reply box, or starts a new one with it. Code the agent
+  mentions is a link back to it.
 - **Any model.** Anthropic, OpenAI-compatible providers, or a model running on
   your own machine. Jig doesn't pick one for you.
 - **Tasks.** A small planner in the sidebar. Agents can save their plans there,
   and you can hand single steps, or the whole task, back to the agent.
+- **The Map.** Zoom out of the code (**⌘B**, or a pinch) to see where you are:
+  a function's callers and callees, then the project's parts and how they call
+  each other, then its business areas, which the agent can name and describe
+  for you. Ask the agent about what you see and it answers on the Map,
+  highlighting, tracing and touring the code without changing it. Sketch boxes
+  and arrows for what you want to build, and turn a sketch into a task or have
+  the agent implement it, edit by edit.
 - **A proper editor around it.** Language servers (go to definition, completion,
-  rename, diagnostics, hover, formatting), Git gutter and panel, run
-  configurations, a debugger over DAP, find in files, and themes that follow
-  your system's light and dark.
+  rename, diagnostics with quick fixes and Fix with Agent, hover, formatting),
+  a language library to add languages and install their servers, formatters and
+  debuggers from Settings, Git gutter and panel, run configurations, a debugger
+  over DAP, find in files, Go Back and Forward, signed automatic updates, and
+  themes that follow your system's light and dark.
 
 It's macOS-first, and also builds on Linux and Windows.
 
