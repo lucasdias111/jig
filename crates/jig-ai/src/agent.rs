@@ -230,10 +230,63 @@ pub fn prompt(request: &Prompt) -> String {
 /// a click in Jig's transcript.
 const LINK_THE_CODE: &str = "\n\nWhen you mention code in your reply, link it, as [`name`](path#L12) with the path from the project's folder.";
 
+/// Code the user sent the agent from the editor, to write about in their
+/// next message: named in it as `@src/a.rs:10-12`, sent with its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeReference {
+    /// Relative to the project.
+    pub file: String,
+    pub language: String,
+    /// 1-based, first and last.
+    pub lines: (usize, usize),
+    pub code: String,
+}
+
+impl CodeReference {
+    /// `src/a.rs:10-12`, or `src/a.rs:10` for one line.
+    pub fn name(&self) -> String {
+        match self.lines {
+            (first, last) if first == last => format!("{}:{first}", self.file),
+            (first, last) => format!("{}:{first}-{last}", self.file),
+        }
+    }
+}
+
+/// Starts the code a message refers to, so reading the conversation back
+/// shows only what the user wrote.
+const REFERRED: &str = "\n\nThe code I refer to:";
+
+/// A message the user wrote in the conversation, with the code it refers
+/// to. The `first` of a conversation is asked to link code too, as
+/// [`prompt`]'s are.
+pub fn message(text: &str, references: &[CodeReference], first: bool) -> String {
+    let mut out = text.trim().to_string();
+    if !references.is_empty() {
+        out.push_str(REFERRED);
+        for reference in references {
+            out.push_str(&format!(
+                "\n\n@{}:\n```{}\n{}\n```",
+                reference.name(),
+                reference.language,
+                reference.code.trim_end_matches('\n')
+            ));
+        }
+    }
+    if first {
+        out.push_str(LINK_THE_CODE);
+    }
+    out
+}
+
 /// What the user wrote, without the note on where they are that
-/// [`prompt`] adds.
+/// [`prompt`] adds or the code [`message`] sends with it.
 pub fn asked(prompt: &str) -> &str {
-    prompt.split("\n\nI'm in ").next().unwrap_or(prompt).trim()
+    ["\n\nI'm in ", REFERRED, LINK_THE_CODE]
+        .iter()
+        .fold(prompt, |text, marker| {
+            text.split(marker).next().unwrap_or(text)
+        })
+        .trim()
 }
 
 /// What the agent is asked to do.
@@ -622,6 +675,31 @@ mod tests {
         assert!(replace(Some("zzz"), "y").apply(disk).is_err());
         assert!(replace(Some("\n"), "y").apply(disk).is_err(), "ambiguous");
         assert!(EditChange::Write("w".into()).written_by_jig());
+    }
+
+    #[test]
+    fn messages_carry_the_code_they_refer_to() {
+        let reference = CodeReference {
+            file: "src/a.rs".into(),
+            language: "rust".into(),
+            lines: (10, 12),
+            code: "fn a() {\n}\n".into(),
+        };
+        assert_eq!(reference.name(), "src/a.rs:10-12");
+        let sent = message(
+            "Why @src/a.rs:10-12?",
+            std::slice::from_ref(&reference),
+            true,
+        );
+        assert!(sent.contains("@src/a.rs:10-12:\n```rust\nfn a() {\n}\n```"));
+        assert!(sent.ends_with(LINK_THE_CODE));
+        assert_eq!(asked(&sent), "Why @src/a.rs:10-12?");
+        assert_eq!(message(" Hi ", &[], false), "Hi");
+        let one = CodeReference {
+            lines: (3, 3),
+            ..reference
+        };
+        assert_eq!(one.name(), "src/a.rs:3");
     }
 
     #[test]

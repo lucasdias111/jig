@@ -64,6 +64,7 @@ actions!(
         SaveAs,
         CloseWindow,
         OpenCommand,
+        SendSelectionToAgent,
         OpenAgentConversations,
         EditAgents,
         EditAgentsFile,
@@ -688,6 +689,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::open_command))
+            .on_action(cx.listener(Self::send_selection_to_agent))
             .on_action(cx.listener(Self::open_agent_conversations))
             .on_action(cx.listener(Self::edit_agents))
             .on_action(cx.listener(Self::edit_agents_file))

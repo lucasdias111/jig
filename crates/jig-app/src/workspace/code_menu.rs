@@ -13,7 +13,8 @@ use jig_editor::EditorHandle;
 
 use super::commands::SPARKLE_ICON;
 use super::{
-    FindReferences, FormatDocument, OpenCommand, RenameSymbol, ToggleLineComment, Workspace,
+    FindReferences, FormatDocument, OpenCommand, RenameSymbol, SendSelectionToAgent,
+    ToggleLineComment, Workspace,
 };
 use crate::definitions;
 use crate::languages;
@@ -46,6 +47,7 @@ impl Workspace {
                     !editable,
                     Box::new(OpenCommand),
                 )
+                .menu("Send to Agent", Box::new(SendSelectionToAgent))
                 .separator()
                 .menu_with_disabled("Cut", !editable, Box::new(Cut))
                 .menu("Copy", Box::new(Copy))

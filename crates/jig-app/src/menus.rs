@@ -11,10 +11,10 @@ use crate::workspace::{
     FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack, GoForward,
     GoToFile, GoToLine, IndexDomains, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask,
     NextProblem, NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab,
-    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine, ShowMap,
-    StepInto, StepOut, StepOver, StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel,
-    ToggleLineComment, ToggleRunPanel, ToggleSidebar, ToggleTaskPlanner, UpdateDomains, ZoomIn,
-    ZoomOut,
+    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine,
+    SendSelectionToAgent, ShowMap, StepInto, StepOut, StepOver, StopRun, SwitchBranch,
+    ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel, ToggleSidebar,
+    ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -99,6 +99,7 @@ pub fn set(cx: &mut App) {
                 MenuItem::action("Select Line", SelectLine),
                 MenuItem::separator(),
                 MenuItem::action("Ask the Agent…", OpenCommand),
+                MenuItem::action("Send to Agent", SendSelectionToAgent),
                 MenuItem::action("Agent Conversations…", OpenAgentConversations),
                 MenuItem::action("Edit Agents", EditAgents),
                 MenuItem::action("Edit AGENTS.md", EditAgentsFile),

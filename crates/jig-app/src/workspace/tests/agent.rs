@@ -1329,3 +1329,84 @@ fn a_subagents_work_has_a_row_of_its_own(cx: &mut TestAppContext) {
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-subagent-work-2").is_some(), "open");
 }
+
+#[gpui_kit::test]
+fn sending_code_opens_a_conversation_waiting_for_the_message(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
+    let (window, workspace) = open(cx, &path);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        window.render_frame(cx);
+        ws.update(cx, |this, cx| this.editor().select(10..30, cx));
+        window.press("secondary-shift-l", cx);
+    });
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert!(this.agent_entries().is_empty(), "nothing asked yet");
+        let (text, references) = this.agent_reply(cx);
+        assert_eq!(text, "@lib.rs:2-3 ");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].code, "fn b() {}\nfn c() {}\n");
+        assert_eq!(this.agent_prompt(), None, "the agent isn't asked yet");
+    });
+
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.input("why both?", cx);
+    });
+    step(cx, window, |window, cx| window.press("enter", cx));
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert_eq!(
+            this.agent_entries().first(),
+            Some(&ChatEntry::User("@lib.rs:2-3 why both?".into()))
+        );
+        let prompt = this.agent_prompt().expect("sent");
+        assert!(
+            prompt.contains("@lib.rs:2-3:\n```rust\nfn b() {}\nfn c() {}\n```"),
+            "{prompt}"
+        );
+        assert_eq!(jig_ai::agent::asked(&prompt), "@lib.rs:2-3 why both?");
+    });
+}
+
+#[gpui_kit::test]
+fn sending_code_to_an_open_conversation_adds_it_to_the_reply(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, "fn a() {}\nfn b() {}\n").unwrap();
+    let (window, workspace) = open(cx, &path);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| this.open_test_conversation(window, cx))
+    });
+    let id = cx.update(|cx| workspace.read(cx).chat.as_ref().unwrap().id);
+    let ws = workspace.clone();
+    step(cx, window, move |window, cx| {
+        ws.update(cx, |this, cx| {
+            let input = this
+                .chat
+                .as_ref()
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .input
+                .clone();
+            input.update(cx, |input, cx| input.set_value("look at", window, cx));
+            this.focus_code(window, cx);
+            // Nothing selected: the cursor's line.
+            this.editor().select(3..3, cx);
+        });
+        window.press("secondary-shift-l", cx);
+    });
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert_eq!(this.chat.as_ref().unwrap().id, id, "the same conversation");
+        let (text, references) = this.agent_reply(cx);
+        assert_eq!(text, "look at @lib.rs:1 ");
+        assert_eq!(references[0].code, "fn a() {}");
+    });
+}

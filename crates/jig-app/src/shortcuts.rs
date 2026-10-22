@@ -393,6 +393,14 @@ pub const ALL: &[Shortcut] = &[
         OpenCommand
     ),
     shortcut!(
+        "send_to_agent",
+        "Send the selection to the agent",
+        Agent,
+        ["secondary-shift-l"],
+        IN_CODE,
+        SendSelectionToAgent
+    ),
+    shortcut!(
         "pick_model",
         "Pick agent and model (in the agent input)",
         Agent,

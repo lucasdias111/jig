@@ -1813,6 +1813,19 @@ impl Workspace {
         true
     }
 
+    /// The reply box's text, and the code its tokens name.
+    #[cfg(test)]
+    pub(super) fn agent_reply(&self, cx: &App) -> (String, Vec<CodeReference>) {
+        let Some(agent) = self.chat.as_ref().and_then(|run| run.agent.as_ref()) else {
+            return Default::default();
+        };
+        let content = agent.input.read(cx).content();
+        (
+            content.text().to_string(),
+            referred_to(&content, &agent.references),
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn agent_entries(&self) -> Vec<ChatEntry> {
         self.chat
@@ -2777,22 +2790,6 @@ fn linked_entries(entries: &[ChatEntry], project: &Path) -> Vec<ChatEntry> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, SystemTime};
-
-    #[test]
-    fn says_roughly_how_long_ago() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
-        let ago = |seconds| super::ago(now, now - Duration::from_secs(seconds));
-        assert_eq!(ago(20), "just now");
-        assert_eq!(ago(300), "5 min ago");
-        assert_eq!(ago(7_200), "2 h ago");
-        assert_eq!(ago(100_000), "yesterday");
-        assert_eq!(ago(5 * 86_400), "5 days ago");
-    }
-}
-
 /// The code a reply's tokens name, each once, in the order they're named.
 fn referred_to(
     content: &InputContent,
@@ -2814,4 +2811,20 @@ fn referred_to(
                 .map(|(_, reference)| reference.clone())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn says_roughly_how_long_ago() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let ago = |seconds| super::ago(now, now - Duration::from_secs(seconds));
+        assert_eq!(ago(20), "just now");
+        assert_eq!(ago(300), "5 min ago");
+        assert_eq!(ago(7_200), "2 h ago");
+        assert_eq!(ago(100_000), "yesterday");
+        assert_eq!(ago(5 * 86_400), "5 days ago");
+    }
 }
