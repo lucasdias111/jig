@@ -87,7 +87,7 @@ inline. **Tab** keeps it, **Esc** throws it away.
   and arrows for what you want to build, and turn a sketch into a task or have
   the agent implement it, edit by edit.
 
-<img width="720" height="458" alt="jig3-compressed" src="https://github.com/user-attachments/assets/c65b6c30-2903-4fbe-a5ef-16ac8694870a" />
+https://github.com/user-attachments/assets/36c1283a-339d-4845-97e7-d0098ceef9af
 
 - **A proper editor around it.** Language servers (go to definition, completion,
   rename, diagnostics with quick fixes and Fix with Agent, hover, formatting),
