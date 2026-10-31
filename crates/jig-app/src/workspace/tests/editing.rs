@@ -58,10 +58,10 @@ fn go_to_line_moves_the_cursor(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| {
         window.dispatch_action(Box::new(crate::workspace::GoToLine), cx)
     });
-    assert!(cx.update(|cx| workspace.read(cx).go_to_line.is_some()));
+    assert!(cx.update(|cx| workspace.read(cx).go_to_line.read(cx).is_open()));
     step(cx, window, |window, cx| window.input("3:2", cx));
     step(cx, window, |window, cx| window.press("enter", cx));
-    assert!(cx.update(|cx| workspace.read(cx).go_to_line.is_none()));
+    assert!(cx.update(|cx| !workspace.read(cx).go_to_line.read(cx).is_open()));
     let editor = cx.update(|cx| workspace.read(cx).editor().clone());
     assert_eq!(cx.update(|cx| editor.selection(cx)), 9..9);
 }

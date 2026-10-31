@@ -172,8 +172,8 @@ pub struct Workspace {
     find_in_files: Option<find::OpenFindInFiles>,
     /// Rename Symbol's field, while it's open.
     rename: Option<rename::OpenRename>,
-    /// Go to Line's field, while it's open.
-    go_to_line: Option<go_to_line::OpenGoToLine>,
+    /// Go to Line's field.
+    go_to_line: Entity<go_to_line::GoToLineField>,
     last_find: find::LastFind,
     /// Find and Replace in the current file, while it's open.
     find_panel: Option<find_panel::OpenFindPanel>,
@@ -252,6 +252,9 @@ impl Workspace {
         let settings = settings::get(cx);
         let workspace = cx.entity();
         let selection_button = cx.new(|cx| selection_button::SelectionButton::new(&workspace, cx));
+        let go_to_line = cx.new(|_| go_to_line::GoToLineField::default());
+        cx.subscribe_in(&go_to_line, window, Self::on_go_to_line_event)
+            .detach();
         let mut this = Self {
             selection_button,
             tabs: Vec::new(),
@@ -268,7 +271,7 @@ impl Workspace {
             quick_open: None,
             find_in_files: None,
             rename: None,
-            go_to_line: None,
+            go_to_line,
             last_find: Default::default(),
             find_panel: None,
             last_find_query: String::new(),
@@ -869,7 +872,7 @@ impl Render for Workspace {
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
             .children(self.render_rename())
-            .children(self.render_go_to_line())
+            .children(self.render_go_to_line(cx))
             .children(self.render_run_picker(window))
             .children(self.render_branch_picker(window))
             .children(self.render_hunk_popup(cx))
