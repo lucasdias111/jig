@@ -273,13 +273,19 @@ edits tabs, opens files, switches modes and starts the Map's drawings, so
 as an entity nearly everything it does would come back as an event. Two
 pieces could still move on their own:
 
-- **The conversation catalog** (`catalog`, `catalog_loading`,
-  `catalog_error`, `catalog_generation`): earlier conversations and
-  commands for ⌘K and Agent mode's list, loaded in the background. An
-  entity holding them and loading on request, with the palette and Agent
-  mode reading it.
-- **The docked conversation's width and drag** (`dock`, `resizing_dock`):
-  layout, so better beside the sidebar's and the run panel's.
+- **The conversation catalog** moved: `ConversationCatalog` in
+  `workspace/agent/catalog.rs` holds the earlier conversations and commands
+  last loaded, whether a load is under way and why one failed, loads in the
+  background (a later load wins over an earlier one finishing late), and
+  takes the commands an ACP agent announces. It emits `CatalogLoaded`; the
+  workspace keeps the answer only if the project and agent are still the
+  ones it was for, and fills the ⌘K input that asked, as before. Agent mode
+  and ⌘K read it, and the workspace observes it to redraw Agent mode's
+  list.
+- **The docked conversation's width and drag** (`dock`, `resizing_dock`)
+  stay in `AgentState`: the sidebar keeps its width in `SidebarState` and
+  the run panel its height in `RunState`, each with its own drag, so this
+  already matches; moving it would only move two fields.
 
 Moving the conversation itself is a phase of its own, if it's worth doing:
 it would start by giving review a narrow interface (`previewing`, accept,

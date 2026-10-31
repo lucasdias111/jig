@@ -168,6 +168,8 @@ pub struct Workspace {
     palette_openings: usize,
     /// What the window keeps for the agent between conversations.
     agent: agent::AgentState,
+    /// The agent's earlier conversations and commands for the project.
+    catalog: Entity<agent::catalog::ConversationCatalog>,
     /// Go to File's panel, and the files it offers first.
     quick_open: Entity<go_to_file::GoToFilePanel>,
     /// Find in Files' panel, and the last search.
@@ -288,6 +290,10 @@ impl Workspace {
         let task_form = cx.new(|_| planner::TaskFormSheet::default());
         cx.subscribe_in(&task_form, window, Self::on_task_form_event)
             .detach();
+        let catalog = cx.new(|_| agent::catalog::ConversationCatalog::default());
+        cx.subscribe(&catalog, Self::on_catalog_loaded).detach();
+        // Agent mode lists what it holds.
+        cx.observe(&catalog, |_, _, cx| cx.notify()).detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -307,6 +313,7 @@ impl Workspace {
             palette_openings: 0,
             model_defaults: None,
             agent: agent::AgentState::default(),
+            catalog,
             quick_open,
             find_in_files,
             rename,

@@ -31,9 +31,12 @@ use jig_commands::{
 use jig_editor::EditorHandle;
 use serde_json::Value;
 
+pub(super) mod catalog;
+
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, SendSelectionToAgent, Workspace};
+use catalog::{AgentCatalog, CatalogLoaded, ConversationCatalog};
 use jig_map::{Action, only_reads};
 use jig_planner::link_files;
 
@@ -92,11 +95,6 @@ pub(super) struct AgentState {
     /// The agent and model picked in ⌘K for new conversations; `None`
     /// follows the settings.
     pub(super) pick: Option<jig_agent::agent::Pick>,
-    /// What the ⌘K input lists, from the last time it asked.
-    catalog: Option<AgentCatalog>,
-    catalog_loading: bool,
-    catalog_error: Option<String>,
-    catalog_generation: u64,
     recent_scroll: ScrollHandle,
     /// An unsent project message; opening Agent does not create a conversation.
     home_draft: Option<(PathBuf, Entity<TextareaState>)>,
@@ -105,16 +103,6 @@ pub(super) struct AgentState {
     pub(super) dock: Option<Pixels>,
     /// The docked conversation's edge is being dragged.
     resizing_dock: bool,
-}
-
-/// The earlier conversations and OpenCode's commands for one project, kept
-/// so the palette can list them at once the next time.
-pub(super) struct AgentCatalog {
-    /// The agent's key, as Settings or ⌘K picked it.
-    agent: String,
-    directory: PathBuf,
-    conversations: Vec<jig_ai::agent::Conversation>,
-    commands: Vec<AgentCommandInfo>,
 }
 
 /// The agent side of a [`CommandRun`].
@@ -410,9 +398,9 @@ impl Workspace {
             return;
         };
         let title = self
-            .agent
             .catalog
-            .as_ref()
+            .read(cx)
+            .catalog()
             .and_then(|catalog| {
                 catalog
                     .conversations
@@ -609,7 +597,6 @@ impl Workspace {
         &mut self,
         choice: ModelChoice,
         palette: Entity<CommandPalette>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(agent) = choice.agent else {
@@ -641,7 +628,7 @@ impl Workspace {
             }
         }
         // Its conversations and commands, in place of the last agent's.
-        self.load_agent_catalog(Some(palette), window, cx);
+        self.load_agent_catalog(Some(palette), cx);
         cx.notify();
     }
 
@@ -777,7 +764,6 @@ impl Workspace {
     pub(super) fn load_agent_catalog(
         &mut self,
         palette: Option<Entity<CommandPalette>>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(directory) = self.agent_project(cx) else {
@@ -785,74 +771,48 @@ impl Workspace {
         };
         let agent = self.picked_agent(cx).key.clone();
         if let Some(catalog) = self
-            .agent
             .catalog
-            .as_ref()
-            .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
+            .read(cx)
+            .for_project(&directory, &agent)
+            .cloned()
             && let Some(palette) = &palette
         {
-            show_catalog(catalog, palette, cx);
+            show_catalog(&catalog, palette, cx);
         }
-        self.agent.catalog_generation += 1;
-        let generation = self.agent.catalog_generation;
-        self.agent.catalog_loading = true;
-        self.agent.catalog_error = None;
-        cx.notify();
         let choice = jig_agent::agent::choice_for(self.agent.pick.as_ref(), cx);
-        let task = cx.background_executor().spawn({
-            let directory = directory.clone();
-            async move {
-                let choice = choice.map_err(anyhow::Error::msg)?;
-                let backend = jig_agent::agent::connect(&choice)?;
-                let conversations = backend.conversations(&directory)?;
-                let commands = backend.commands(&directory).unwrap_or_default();
-                anyhow::Ok((conversations, commands))
-            }
+        self.catalog.update(cx, |catalog, cx| {
+            catalog.load(directory, agent, choice, palette, cx)
         });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                if generation != this.agent.catalog_generation {
-                    return;
+        cx.notify();
+    }
+
+    /// A load of the catalog finished: keep it, and fill the ⌘K input that
+    /// asked, unless the project or agent has changed since.
+    pub(super) fn on_catalog_loaded(
+        &mut self,
+        catalog: Entity<ConversationCatalog>,
+        loaded: &CatalogLoaded,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_project(cx).as_ref() != Some(&loaded.directory)
+            || self.picked_agent(cx).key != loaded.agent
+        {
+            cx.notify();
+            return;
+        }
+        match &loaded.result {
+            Err(error) => {
+                catalog.update(cx, |catalog, cx| catalog.failed(error.clone(), cx));
+            }
+            Ok(found) => {
+                if let Some(palette) = &loaded.palette {
+                    show_catalog(found, palette, cx);
                 }
-                this.agent.catalog_loading = false;
-                if this.agent_project(cx).as_ref() != Some(&directory)
-                    || this.picked_agent(cx).key != agent
-                {
-                    cx.notify();
-                    return;
-                }
-                let (conversations, commands) = match result {
-                    Ok(catalog) => catalog,
-                    Err(error) => {
-                        this.agent.catalog_error =
-                            Some(format!("Couldn't load conversations: {error:#}"));
-                        cx.notify();
-                        return;
-                    }
-                };
-                let catalog = AgentCatalog {
-                    agent,
-                    directory,
-                    conversations,
-                    commands: commands
-                        .into_iter()
-                        .map(|command| AgentCommandInfo {
-                            name: command.name,
-                            description: command.description,
-                            skill: command.skill,
-                        })
-                        .collect(),
-                };
-                if let Some(palette) = &palette {
-                    show_catalog(&catalog, palette, cx);
-                }
-                this.agent.catalog = Some(catalog);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+                let found = found.clone();
+                catalog.update(cx, |catalog, cx| catalog.keep(found, cx));
+            }
+        }
+        cx.notify();
     }
 
     /// A conversation that starts with the user asking `asked`, in the
@@ -1031,8 +991,8 @@ impl Workspace {
             self.save_to(&path, window, cx);
         }
         // Learn the commands, so a reply can run one.
-        if self.agent.catalog.is_none() {
-            self.load_agent_catalog(None, window, cx);
+        if self.catalog.read(cx).catalog().is_none() {
+            self.load_agent_catalog(None, cx);
         }
         // Read on this thread: the keys and settings live in the app.
         let pick = self.agent_run(id).and_then(|agent| agent.pick.clone());
@@ -1292,7 +1252,7 @@ impl Workspace {
         // Back to the code, where the agent's edits are reviewed, or the
         // Map, where a Map action's answer is.
         self.focus_code(window, cx);
-        let input = self.slash_command(&text).unwrap_or_else(|| {
+        let input = self.slash_command(&text, cx).unwrap_or_else(|| {
             TurnInput::Prompt(jig_ai::agent::message(&text, &references, first))
         });
         self.start_turn(id, input, window, cx);
@@ -1370,12 +1330,12 @@ impl Workspace {
 
     /// A reply like "/review main" runs that OpenCode command, when there
     /// is one by that name.
-    fn slash_command(&self, text: &str) -> Option<TurnInput> {
+    fn slash_command(&self, text: &str, cx: &App) -> Option<TurnInput> {
         let typed = text.strip_prefix('/')?;
         let (name, arguments) = typed.split_once(' ').unwrap_or((typed, ""));
-        self.agent
-            .catalog
-            .as_ref()?
+        self.catalog
+            .read(cx)
+            .catalog()?
             .commands
             .iter()
             .any(|command| command.name == name)
@@ -1798,7 +1758,7 @@ impl Workspace {
                 });
                 self.agent.home_draft = Some((directory, input));
             }
-            self.load_agent_catalog(None, window, cx);
+            self.load_agent_catalog(None, cx);
         }
         self.focus_agent_mode(window, cx);
         cx.notify();
@@ -2042,13 +2002,10 @@ impl Workspace {
         let theme = cx.theme();
         let directory = self.agent_project(cx);
         let agent = self.picked_agent(cx);
-        let mut recent: Vec<_> = self
-            .agent
-            .catalog
-            .as_ref()
-            .filter(|catalog| {
-                Some(&catalog.directory) == directory.as_ref() && catalog.agent == agent.key
-            })
+        let catalog = self.catalog.read(cx);
+        let mut recent: Vec<_> = directory
+            .as_deref()
+            .and_then(|directory| catalog.for_project(directory, &agent.key))
             .into_iter()
             .flat_map(|catalog| &catalog.conversations)
             .collect();
@@ -2076,7 +2033,7 @@ impl Workspace {
                             .unwrap_or_default()
                     )),
             )
-            .when(self.agent.catalog_loading, |this| {
+            .when(catalog.loading(), |this| {
                 this.child(
                     div()
                         .text_sm()
@@ -2084,7 +2041,7 @@ impl Workspace {
                         .child("Loading conversations…"),
                 )
             })
-            .when_some(self.agent.catalog_error.as_ref(), |this, error| {
+            .when_some(catalog.error(), |this, error| {
                 this.child(
                     v_flex()
                         .gap_2()
@@ -2098,14 +2055,14 @@ impl Workspace {
                             Button::new("agent-recents-retry")
                                 .label("Try again")
                                 .small()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.load_agent_catalog(None, window, cx)
-                                })),
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.load_agent_catalog(None, cx)),
+                                ),
                         ),
                 )
             })
             .when(
-                empty && !self.agent.catalog_loading && self.agent.catalog_error.is_none(),
+                empty && !catalog.loading() && catalog.error().is_none(),
                 |this| {
                     this.child(
                         div()
@@ -2171,15 +2128,14 @@ impl Workspace {
         conversations: Vec<jig_ai::agent::Conversation>,
         cx: &mut Context<Self>,
     ) {
-        self.agent.catalog_generation += 1;
-        self.agent.catalog_loading = false;
-        self.agent.catalog_error = None;
-        self.agent.catalog = Some(AgentCatalog {
+        let catalog = AgentCatalog {
             agent: self.picked_agent(cx).key.clone(),
             directory: self.agent_project(cx).unwrap(),
             conversations,
             commands: Vec::new(),
-        });
+        };
+        self.catalog
+            .update(cx, |entity, cx| entity.set(catalog, cx));
         cx.notify();
     }
 
@@ -2668,7 +2624,7 @@ impl Workspace {
         &mut self,
         directory: PathBuf,
         commands: Vec<jig_ai::agent::AgentCommand>,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) {
         let agent = self.picked_agent(cx).key.clone();
         let commands = commands
@@ -2679,22 +2635,9 @@ impl Workspace {
                 skill: command.skill,
             })
             .collect();
-        match self
-            .agent
-            .catalog
-            .as_mut()
-            .filter(|catalog| catalog.directory == directory && catalog.agent == agent)
-        {
-            Some(catalog) => catalog.commands = commands,
-            None => {
-                self.agent.catalog = Some(AgentCatalog {
-                    agent,
-                    directory,
-                    conversations: Vec::new(),
-                    commands,
-                })
-            }
-        }
+        self.catalog.update(cx, |catalog, cx| {
+            catalog.learn_commands(directory, agent, commands, cx)
+        });
     }
 
     /// Put the next queued request on screen, unless one is already there.

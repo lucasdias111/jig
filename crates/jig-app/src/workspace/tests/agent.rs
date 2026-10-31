@@ -490,7 +490,7 @@ fn the_agent_picked_in_command_k_runs_the_next_conversation(cx: &mut TestAppCont
         window.press("secondary-k", cx);
     });
     let ws = workspace.clone();
-    step(cx, window, move |window, cx| {
+    step(cx, window, move |_, cx| {
         ws.update(cx, |this, cx| {
             let palette = this.palette.as_ref().unwrap().view.clone();
             let choice = jig_commands::ModelChoice {
@@ -500,7 +500,7 @@ fn the_agent_picked_in_command_k_runs_the_next_conversation(cx: &mut TestAppCont
                 model: Some("opus".into()),
                 label: "Claude Code · Opus".into(),
             };
-            this.pick_model(choice, palette, window, cx);
+            this.pick_model(choice, palette, cx);
         })
     });
     assert!(

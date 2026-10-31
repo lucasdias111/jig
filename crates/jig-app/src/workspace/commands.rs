@@ -230,7 +230,7 @@ impl Workspace {
             window,
             |this, palette, event: &PaletteEvent, window, cx| {
                 if let PaletteEvent::PickModel(choice) = event {
-                    return this.pick_model(choice.clone(), palette.clone(), window, cx);
+                    return this.pick_model(choice.clone(), palette.clone(), cx);
                 }
                 this.close_palette(window, cx);
                 match event {
@@ -251,7 +251,7 @@ impl Workspace {
                 }
             },
         );
-        self.load_agent_catalog(Some(view.clone()), window, cx);
+        self.load_agent_catalog(Some(view.clone()), cx);
         self.palette_openings += 1;
         self.palette = Some(OpenPalette {
             view,
