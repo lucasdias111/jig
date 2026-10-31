@@ -316,7 +316,7 @@ fn find_in_files_keeps_the_file_name_in_view(cx: &mut TestAppContext) {
         window.render_frame(cx);
         let row = window.find(("find-in-files-row", 0usize)).bounds();
         let file = window.find(("find-in-files-file", 0usize)).bounds();
-        let width = px(crate::find_in_files::WIDTH);
+        let width = px(jig_search::find_in_files::WIDTH);
         assert!(row.size.width < width, "the row {row:?} fits the panel");
         assert!(
             file.right() <= row.right() && file.size.width > px(0.),
@@ -329,7 +329,7 @@ fn start_new(
     cx: &mut TestAppContext,
     window: AnyWindowHandle,
     workspace: &Entity<Workspace>,
-    kind: crate::file_tree::NewEntry,
+    kind: jig_files::file_tree::NewEntry,
 ) {
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
@@ -341,7 +341,7 @@ fn start_new(
 
 #[gpui_kit::test]
 fn new_file_and_folder_from_the_sidebar(cx: &mut TestAppContext) {
-    use crate::file_tree::NewEntry;
+    use jig_files::file_tree::NewEntry;
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/lib.rs"), ORIGINAL).unwrap();

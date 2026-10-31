@@ -27,7 +27,7 @@ use super::definitions::with_timeout;
 use super::diagnostics::{LINGER, ProblemHover, problem_row};
 use super::quick_fix::PanelFixes;
 use super::{ShowHover, Workspace};
-use crate::hover::{self, Signature};
+use jig_editing::hover::{self, Signature};
 use jig_lsp::lsp::{self, Client};
 
 /// How long the pointer rests on a name before the server is asked.

@@ -98,7 +98,7 @@ impl RunPicker {
         self.refilter(cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn row_names(&self) -> Vec<String> {
         self.rows
             .iter()

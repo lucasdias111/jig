@@ -12,7 +12,7 @@ use jig_editor::{EditorHandle, KitEditor};
 
 use super::status_bar::CursorPosition;
 use super::{ActivateTab, CloseTab, NewFile, NextTab, PreviousTab, Workspace};
-use crate::document::Document;
+use jig_editing::document::Document;
 
 const CLOSE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
 
@@ -269,7 +269,7 @@ impl Workspace {
             let Some(path) = self.tabs[ix].document.path.as_deref() else {
                 continue;
             };
-            let Some(new) = crate::file_tree::moved_path(&canonical(path), from, to) else {
+            let Some(new) = jig_files::file_tree::moved_path(&canonical(path), from, to) else {
                 continue;
             };
             if self.tabs[ix].dirty {
@@ -616,7 +616,7 @@ impl Workspace {
                                     .path
                                     .as_deref()
                                     .and_then(|path| {
-                                        crate::file_icons::for_path(
+                                        jig_files::file_icons::for_path(
                                             path,
                                             &languages,
                                             theme.is_dark(),

@@ -8,27 +8,13 @@
 mod about_window;
 mod agent;
 mod agents;
-mod completions;
 mod dap;
 mod debug_target;
-mod document;
-mod file_icons;
-mod file_tree;
-mod find_in_files;
-mod find_panel;
-mod hover;
 mod lsp_debug;
 mod menus;
-mod project_search;
 mod providers;
-mod quick_open;
-mod run_configs;
-mod run_output;
-mod run_picker;
 mod settings_window;
 mod shortcuts;
-mod snippets;
-mod text_edits;
 mod workspace;
 
 use std::path::PathBuf;

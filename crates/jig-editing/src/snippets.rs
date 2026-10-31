@@ -89,7 +89,7 @@ pub fn user_path() -> Option<PathBuf> {
 /// asked on every keystroke.
 fn user_snippets() -> Vec<Snippet> {
     static CACHE: Mutex<Option<(SystemTime, Vec<Snippet>)>> = Mutex::new(None);
-    if cfg!(test) {
+    if cfg!(any(test, feature = "testing")) {
         return Vec::new();
     }
     let Some(path) = user_path() else {

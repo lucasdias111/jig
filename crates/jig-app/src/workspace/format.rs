@@ -23,7 +23,8 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
-use crate::{settings, text_edits};
+use crate::settings;
+use jig_editing::text_edits;
 use jig_formatters::{self as formatters, Formatter};
 use jig_kit::editorconfig::EditorConfig;
 use jig_languages as languages;

@@ -49,18 +49,18 @@ use gpui_kit::*;
 use jig_commands::CommandPalette;
 use jig_editor::EditorHandle;
 
-use crate::document::Document;
-use crate::file_tree::FileTree;
 use commands::{CommandRun, Note};
+use jig_editing::document::Document;
+use jig_files::file_tree::FileTree;
 use jig_kit::theme;
 use jig_settings::{self as settings, Settings};
 use mode::Mode;
 use tabs::Tab;
 
-pub use crate::quick_open::GoToFile;
 pub use crate::settings_window::{
     EditAgents, EditDebuggers, EditFormatters, EditLanguageServers, EditModelConfig,
 };
+pub use jig_search::quick_open::GoToFile;
 
 actions!(
     jig,
@@ -625,9 +625,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     crate::shortcuts::bindings(&Default::default())
         .into_iter()
         .chain(run::key_bindings())
-        .chain(crate::file_tree::key_bindings())
-        .chain(crate::find_in_files::key_bindings())
-        .chain(crate::find_panel::key_bindings())
+        .chain(jig_files::file_tree::key_bindings())
+        .chain(jig_search::find_in_files::key_bindings())
+        .chain(jig_editing::find_panel::key_bindings())
         .chain(jig_map::key_bindings())
         .collect()
 }

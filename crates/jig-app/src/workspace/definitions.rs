@@ -24,10 +24,10 @@ use serde_json::{Value, json};
 
 use super::Workspace;
 use super::tabs::canonical;
-use crate::project_search::{self, SearchOptions, SearchResults};
 use jig_languages::language_for;
 use jig_lsp::definitions::{self, Target};
 use jig_lsp::lsp::{self, Client};
+use jig_search::project_search::{self, SearchOptions, SearchResults};
 
 /// The URI of a "show usages of this name" target: the name, then the
 /// offset it was clicked at.

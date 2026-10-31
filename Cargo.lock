@@ -3601,7 +3601,9 @@ dependencies = [
  "jig-ai",
  "jig-commands",
  "jig-debuggers",
+ "jig-editing",
  "jig-editor",
+ "jig-files",
  "jig-formatters",
  "jig-git",
  "jig-kit",
@@ -3610,6 +3612,8 @@ dependencies = [
  "jig-map",
  "jig-planner",
  "jig-process",
+ "jig-run",
+ "jig-search",
  "jig-settings",
  "jig-tools",
  "jig-updates",
@@ -3684,10 +3688,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-editing"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-commands",
+ "jig-languages",
+ "jig-lsp",
+ "jig-settings",
+ "lsp-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "jig-editor"
 version = "0.5.0"
 dependencies = [
  "gpui-kit",
+]
+
+[[package]]
+name = "jig-files"
+version = "0.5.0"
+dependencies = [
+ "gpui-kit",
+ "ignore",
+ "jig-kit",
+ "jig-languages",
+ "jig-search",
+ "jig-settings",
+ "tempfile",
+ "trash",
 ]
 
 [[package]]
@@ -3838,6 +3873,38 @@ name = "jig-process"
 version = "0.5.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "jig-run"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui-kit",
+ "ignore",
+ "jig-commands",
+ "jig-process",
+ "jig-tools",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "jig-search"
+version = "0.5.0"
+dependencies = [
+ "gpui-kit",
+ "jig-commands",
+ "jig-editor",
+ "jig-languages",
+ "jig-settings",
+ "regex",
+ "tempfile",
 ]
 
 [[package]]

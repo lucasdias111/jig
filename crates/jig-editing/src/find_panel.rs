@@ -117,7 +117,7 @@ impl FindPanel {
         self.query.read(cx).value().to_string()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_replacing(&self) -> bool {
         self.replacing
     }

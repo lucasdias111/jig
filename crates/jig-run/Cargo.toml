@@ -1,0 +1,34 @@
+[package]
+name = "jig-run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["jig-tools/testing"]
+
+[dependencies]
+gpui-kit.workspace = true
+jig-commands.workspace = true
+jig-tools.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+toml.workspace = true
+ignore = "0.4"
+regex = "1"
+libc.workspace = true
+futures = "0.3"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+jig-tools = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

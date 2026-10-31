@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui_kit::*;
 
 use super::{GoToFile, TITLE_BAR_HEIGHT, Workspace};
-use crate::quick_open::{QuickOpen, QuickOpenEvent};
+use jig_search::quick_open::{QuickOpen, QuickOpenEvent};
 
 /// Files remembered for the empty query.
 const MAX_RECENT_FILES: usize = 30;
@@ -116,7 +116,7 @@ impl Workspace {
     /// The panel, centred near the top of the window like Spotlight.
     pub(super) fn render_quick_open(&self, window: &Window) -> Option<AnyElement> {
         let open = self.quick_open.as_ref()?;
-        let width = px(crate::quick_open::WIDTH);
+        let width = px(jig_search::quick_open::WIDTH);
         let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
         Some(
             deferred(

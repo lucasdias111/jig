@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::tabs::canonical;
 use super::{ToggleBreakpoint, Workspace};
-use crate::document::Document;
+use jig_editing::document::Document;
 
 /// A tab's breakpoints and the line the debugger is paused on.
 pub(super) struct Marks {

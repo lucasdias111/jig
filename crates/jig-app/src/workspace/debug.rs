@@ -22,9 +22,9 @@ use serde_json::{Value, json};
 use super::{DebugSelected, EditDebuggers, Resume, StepInto, StepOut, StepOver, Workspace};
 use crate::dap::{self, Message};
 use crate::debug_target::{self, Build, DebugPlan};
-use crate::run_configs::RunConfig;
-use crate::run_output::{OutputLine, Stream, Style};
 use jig_debuggers::{self as debuggers, Debugger, Vars};
+use jig_run::run_configs::RunConfig;
+use jig_run::run_output::{OutputLine, Stream, Style};
 
 const ROW_HEIGHT: f32 = 20.;
 /// Messages taken from the adapter per update.
@@ -204,7 +204,7 @@ impl DebugSession {
         self.partial.push_str(text);
         while let Some(end) = self.partial.find('\n') {
             let line: String = self.partial.drain(..=end).collect();
-            lines.push(crate::run_output::parse_line(
+            lines.push(jig_run::run_output::parse_line(
                 &line,
                 stream,
                 &mut self.style,
@@ -217,7 +217,7 @@ impl DebugSession {
     fn flush_output(&mut self) -> Option<OutputLine> {
         (!self.partial.is_empty()).then(|| {
             let line = std::mem::take(&mut self.partial);
-            crate::run_output::parse_line(&line, self.partial_stream, &mut self.style, &[])
+            jig_run::run_output::parse_line(&line, self.partial_stream, &mut self.style, &[])
         })
     }
 }

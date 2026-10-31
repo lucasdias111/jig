@@ -20,6 +20,10 @@ gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
 jig-ai.workspace = true
+jig-run.workspace = true
+jig-files.workspace = true
+jig-search.workspace = true
+jig-editing.workspace = true
 jig-lsp.workspace = true
 jig-debuggers.workspace = true
 jig-formatters.workspace = true
@@ -90,6 +94,10 @@ tree-sitter-xml = "0.7"
 snapshots = ["gpui-kit/test-support"]
 
 [dev-dependencies]
+jig-run = { workspace = true, features = ["testing"] }
+jig-files = { workspace = true, features = ["testing"] }
+jig-search = { workspace = true, features = ["testing"] }
+jig-editing = { workspace = true, features = ["testing"] }
 jig-lsp = { workspace = true, features = ["testing"] }
 jig-debuggers = { workspace = true, features = ["testing"] }
 jig-formatters = { workspace = true, features = ["testing"] }

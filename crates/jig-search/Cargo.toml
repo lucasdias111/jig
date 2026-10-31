@@ -1,0 +1,28 @@
+[package]
+name = "jig-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["jig-languages/testing"]
+
+[dependencies]
+gpui-kit.workspace = true
+jig-editor.workspace = true
+jig-commands.workspace = true
+jig-languages.workspace = true
+jig-settings.workspace = true
+regex = "1"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+jig-languages = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

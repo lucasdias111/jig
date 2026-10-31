@@ -448,13 +448,13 @@ mod tests {
                 break;
             }
         }
-        let config = crate::run_configs::RunConfig {
+        let config = jig_run::run_configs::RunConfig {
             name: "t".into(),
             command: String::new(),
             cwd: dir.path().to_path_buf(),
             env: Vec::new(),
-            source: crate::run_configs::Source::File,
-            debug: Some(crate::run_configs::DebugProgram {
+            source: jig_run::run_configs::Source::File,
+            debug: Some(jig_run::run_configs::DebugProgram {
                 program: program.clone(),
                 args: Vec::new(),
                 build: None,

@@ -21,9 +21,9 @@ use super::{
     ChooseRunConfiguration, EditRunConfigurations, RunSelected, StopRun, TITLE_BAR_HEIGHT,
     ToggleRunPanel, Workspace,
 };
-use crate::run_configs::{self, RunConfig};
-use crate::run_output::{Color, Link, OutputLine, Process, RunEvent, Stream, Style};
-use crate::run_picker::{PLAY, RunPicker, RunPickerEvent};
+use jig_run::run_configs::{self, RunConfig};
+use jig_run::run_output::{Color, Link, OutputLine, Process, RunEvent, Stream, Style};
+use jig_run::run_picker::{PLAY, RunPicker, RunPickerEvent};
 
 /// The output panel's key context, where ⌘A selects all of it.
 const OUTPUT_CONTEXT: &str = "JigRunOutput";
@@ -564,7 +564,7 @@ impl Workspace {
     /// The picker, centred near the top of the window like Go to File.
     pub(super) fn render_run_picker(&self, window: &Window) -> Option<AnyElement> {
         let open = self.runs.picker.as_ref()?;
-        let width = px(crate::run_picker::WIDTH);
+        let width = px(jig_run::run_picker::WIDTH);
         let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
         Some(
             deferred(
@@ -1220,7 +1220,7 @@ mod tests {
     use gpui_kit::{HighlightStyle, Hsla};
 
     use super::{OutputSelection, layer, word_at};
-    use crate::run_output::OutputLine;
+    use jig_run::run_output::OutputLine;
 
     #[test]
     fn links_layer_over_colours() {

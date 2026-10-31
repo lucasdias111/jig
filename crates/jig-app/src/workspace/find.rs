@@ -6,8 +6,8 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 
 use super::{FindInFiles, TITLE_BAR_HEIGHT, Workspace};
-use crate::find_in_files::{self, FindInFilesEvent};
-use crate::project_search::SearchOptions;
+use jig_search::find_in_files::{self, FindInFilesEvent};
+use jig_search::project_search::SearchOptions;
 
 /// A selection longer than this isn't taken as the query.
 const MAX_SELECTION_QUERY: usize = 200;

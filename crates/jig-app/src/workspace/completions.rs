@@ -5,7 +5,7 @@
 //! GPUI Kit's editor shows the list and asks again on each keystroke; this
 //! gives it a [`CompletionProvider`]. The file's language server answers
 //! when there is one; otherwise, or when it doesn't answer in time,
-//! [`crate::completions`] offers other words in the file. Jig's own snippets
+//! [`jig_editing::completions`] offers other words in the file. Jig's own snippets
 //! join either; taking one starts filling it in ([`super::snippets`]).
 
 use std::rc::Rc;
@@ -22,7 +22,7 @@ use lsp_types::{
 use super::definitions::with_timeout;
 use super::snippets::{Offer, Offers};
 use super::{ShowCompletions, Workspace};
-use crate::completions::{self, Completion};
+use jig_editing::completions::{self, Completion};
 use jig_lsp::lsp::{self, Client};
 
 /// Past this, the server is too slow to keep up with typing; offer words.
@@ -209,7 +209,7 @@ impl CompletionProvider for Completions {
                 &source,
                 offset,
                 info.language,
-                &crate::snippets::for_language(info.language),
+                &jig_editing::snippets::for_language(info.language),
                 &info.unit,
             )
         };

@@ -13,7 +13,7 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{RenameSymbol, Workspace};
-use crate::text_edits::{Edits, shift, splice};
+use jig_editing::text_edits::{Edits, shift, splice};
 use jig_kit::field_box::{FieldBox, FieldBoxEvent};
 use jig_lsp::definitions;
 use jig_lsp::lsp::{self, Encoding};
@@ -311,7 +311,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{word_edits, workspace_edits};
-    use crate::text_edits::{Edits, shift, splice};
+    use jig_editing::text_edits::{Edits, shift, splice};
 
     fn rename(text: &str, edits: &Edits) -> String {
         let (span, new) = splice(text, edits).unwrap();

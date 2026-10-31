@@ -22,7 +22,7 @@ pub(super) mod watch;
 
 use super::sidebar::SidebarView;
 use super::{NewBranch, SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
-use crate::document::Document;
+use jig_editing::document::Document;
 use jig_git::{self as git, Hunk, Repo};
 use jig_git::{BRANCH_ICON, GitPanel, GitPanelEvent};
 use jig_git::{BranchPicker, BranchPickerEvent, BranchPickerMode};

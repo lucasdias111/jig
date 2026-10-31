@@ -138,7 +138,7 @@ impl QuickOpen {
         this
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn row_paths(&self) -> Vec<String> {
         self.rows.iter().map(|row| row.path.to_string()).collect()
     }

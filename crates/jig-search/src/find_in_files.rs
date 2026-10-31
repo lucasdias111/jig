@@ -187,7 +187,7 @@ impl FindInFiles {
         self.options
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn result_lines(&self) -> Vec<String> {
         self.results
             .matches
@@ -196,7 +196,7 @@ impl FindInFiles {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_searching(&self) -> bool {
         self.searching
     }

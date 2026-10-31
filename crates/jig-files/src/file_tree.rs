@@ -483,12 +483,12 @@ impl FileTree {
         self.model.root()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn naming_error(&self) -> Option<Option<String>> {
         self.naming.as_ref().map(|naming| naming.error.clone())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn model(&self) -> &TreeModel {
         &self.model
     }
@@ -566,7 +566,7 @@ impl FileTree {
         self.selection().into_iter().map(|row| row.path).collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn selected_names(&self) -> Vec<String> {
         self.selection().into_iter().map(|row| row.name).collect()
     }
@@ -1232,7 +1232,7 @@ impl Render for FileTree {
             SEARCH,
             "Go to File (⌘P)",
             cx,
-            |_, window, cx| window.dispatch_action(Box::new(crate::quick_open::GoToFile), cx),
+            |_, window, cx| window.dispatch_action(Box::new(jig_search::quick_open::GoToFile), cx),
         );
         let new_file = header_button("new-file", FILE_PLUS, "New File", cx, |this, window, cx| {
             this.start_new(NewEntry::File, window, cx)

@@ -15,8 +15,8 @@ use super::{
     FocusFileTree, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, ProjectTree, TITLE_BAR_HEIGHT,
     ToggleSidebar, Workspace,
 };
-use crate::file_tree::{FileTree, FileTreeEvent};
 use crate::settings_window::OpenSettings;
+use jig_files::file_tree::{FileTree, FileTreeEvent};
 use jig_git::BRANCH_ICON;
 
 /// The activity bar's width.

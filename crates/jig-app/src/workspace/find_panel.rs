@@ -5,7 +5,7 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 
 use super::{Find, FindAndReplace, Workspace, find};
-use crate::find_panel::{FindPanel, FindPanelEvent};
+use jig_editing::find_panel::{FindPanel, FindPanelEvent};
 
 pub(super) struct OpenFindPanel {
     pub(super) view: Entity<FindPanel>,

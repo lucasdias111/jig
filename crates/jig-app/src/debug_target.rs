@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::run_configs::RunConfig;
 use jig_debuggers::{Debugger, Registry, Vars};
+use jig_run::run_configs::RunConfig;
 
 #[derive(Clone, Debug)]
 pub struct DebugPlan {
@@ -49,7 +49,7 @@ impl Build {
                 let mut command = "cargo build".to_string();
                 for arg in args {
                     command.push(' ');
-                    command.push_str(&crate::run_configs::shell_word(arg));
+                    command.push_str(&jig_run::run_configs::shell_word(arg));
                 }
                 command.push_str(" --message-format=json-render-diagnostics");
                 Some(command)
@@ -150,7 +150,7 @@ pub fn plan_for(config: &RunConfig, registry: &Registry) -> Result<DebugPlan, St
         });
     }
     let words =
-        crate::run_configs::split_command(&config.command).ok_or_else(|| no_debugger(config))?;
+        jig_run::run_configs::split_command(&config.command).ok_or_else(|| no_debugger(config))?;
     let matches = |debugger: &Debugger| {
         debugger
             .commands()
@@ -232,7 +232,7 @@ pub fn cargo_executable(line: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::run_configs::{DebugProgram, Source};
+    use jig_run::run_configs::{DebugProgram, Source};
 
     fn registry() -> Arc<Registry> {
         jig_debuggers::registry()
