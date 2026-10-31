@@ -478,7 +478,8 @@ impl Workspace {
         };
         if let Some(failure) = failure {
             debug.phase = Phase::Ended;
-            session.lines.push(OutputLine::meta(failure));
+            self.run_output
+                .update(cx, |o, cx| o.push(OutputLine::meta(failure), cx));
             session.ending = Some(failure.into());
             cx.notify();
             return;
@@ -501,9 +502,8 @@ impl Workspace {
         let debugger = debug.plan.debugger.clone();
         let started = match debugger.lsp().filter(|_| !faked()) {
             Some((server, _)) => {
-                session.lines.push(OutputLine::meta(format!(
-                    "Waiting for {server} to load the project…"
-                )));
+                let line = OutputLine::meta(format!("Waiting for {server} to load the project…"));
+                self.run_output.update(cx, |o, cx| o.push(line, cx));
                 let prefer: Vec<PathBuf> = debug
                     .plan
                     .program()
@@ -530,16 +530,16 @@ impl Workspace {
                 debug.inbox = Some(sender);
                 debug.messages = Some(receiver);
                 debug.phase = Phase::Starting;
-                session
-                    .lines
-                    .push(OutputLine::meta(format!("Debugging {what}")));
+                let line = OutputLine::meta(format!("Debugging {what}"));
+                self.run_output.update(cx, |o, cx| o.push(line, cx));
                 let arguments = initialize_arguments(debugger.adapter_id());
                 debug.request_to(0, "initialize", arguments, Pending::Initialize);
             }
             Err(error) => {
                 let message = format!("{error:#}");
                 debug.phase = Phase::Ended;
-                session.lines.push(OutputLine::meta(message.clone()));
+                let line = OutputLine::meta(message.clone());
+                self.run_output.update(cx, |o, cx| o.push(line, cx));
                 session.ending = Some(message);
             }
         }
@@ -611,7 +611,7 @@ impl Workspace {
                         self.end_debugging(&format!("The debugger couldn't start: {failure}"), cx)
                     }
                     Pending::Initialize | Pending::Launch if !success => {
-                        self.push_meta(format!("A child session couldn't start: {failure}"));
+                        self.push_meta(format!("A child session couldn't start: {failure}"), cx);
                     }
                     Pending::StackTrace if success => self.on_stack_trace(&body, window, cx),
                     Pending::Scopes(frame) if success => self.on_scopes(frame, &body),
@@ -621,7 +621,7 @@ impl Workspace {
                         }
                     }
                     Pending::Command(command) if !success => {
-                        self.push_meta(format!("{command} failed: {failure}"));
+                        self.push_meta(format!("{command} failed: {failure}"), cx);
                     }
                     _ => {}
                 }
@@ -762,11 +762,11 @@ impl Workspace {
                     return;
                 };
                 let lines = debug.output_lines(text, stream);
-                session.lines.extend(lines);
+                self.run_output.update(cx, |o, cx| o.extend(lines, cx));
             }
             "exited" => {
                 let code = body["exitCode"].as_i64().unwrap_or_default();
-                self.push_meta(format!("Process finished with exit code {code}"));
+                self.push_meta(format!("Process finished with exit code {code}"), cx);
             }
             // A child session's program ended; others may still run.
             "terminated" if id != 0 => {}
@@ -932,24 +932,24 @@ impl Workspace {
             return;
         };
         if let Some(line) = debug.flush_output() {
-            session.lines.push(line);
+            self.run_output.update(cx, |o, cx| o.push(line, cx));
         }
         debug.forget_pause();
         debug.phase = Phase::Ended;
         debug.view = View::Console;
         if session.ending.is_none() {
             let elapsed = session.started.elapsed().as_secs_f32();
-            session
-                .lines
-                .push(OutputLine::meta(format!("{ending} ({elapsed:.1}s)")));
+            let line = OutputLine::meta(format!("{ending} ({elapsed:.1}s)"));
+            self.run_output.update(cx, |o, cx| o.push(line, cx));
             session.ending = Some(ending.into());
         }
         self.clear_execution_line(cx);
     }
 
-    fn push_meta(&mut self, text: String) {
-        if let Some(session) = self.runs.session.as_mut() {
-            session.lines.push(OutputLine::meta(text));
+    fn push_meta(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.runs.session.is_some() {
+            self.run_output
+                .update(cx, |o, cx| o.push(OutputLine::meta(text), cx));
         }
     }
 

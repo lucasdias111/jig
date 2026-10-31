@@ -194,8 +194,10 @@ pub struct Workspace {
     next_run_id: u64,
     /// Run configurations, the one ⌃R runs, and the picker.
     run_configs: Entity<run::configurations::RunConfigurations>,
-    /// The configuration running, and its output.
+    /// The configuration running.
     runs: run::RunState,
+    /// What it printed, in the panel under the editor.
+    run_output: Entity<run::output::RunOutput>,
     breakpoints: breakpoints::Breakpoints,
     git: git::GitState,
     /// The project's tasks, in the sidebar's Tasks view.
@@ -263,6 +265,9 @@ impl Workspace {
             .detach();
         // The title bar names the configuration ⌃R runs.
         cx.observe(&run_configs, |_, _, cx| cx.notify()).detach();
+        let run_output = cx.new(run::output::RunOutput::new);
+        cx.subscribe_in(&run_output, window, Self::on_run_output_event)
+            .detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -296,7 +301,8 @@ impl Workspace {
             chat: None,
             next_run_id: 0,
             run_configs,
-            runs: run::RunState::new(cx),
+            runs: run::RunState::new(),
+            run_output,
             breakpoints: breakpoints::Breakpoints::load(),
             git: Default::default(),
             planner: Default::default(),
@@ -524,7 +530,9 @@ impl Workspace {
         self.when_discard_ok(None, window, cx, move |this, window, cx| {
             this.leave_tab(cx);
             this.stop_process();
-            this.runs = run::RunState::new(cx);
+            this.runs = run::RunState::new();
+            this.run_output
+                .update(cx, |output, cx| output.start(Vec::new(), cx));
             this.run_configs
                 .update(cx, |configurations, cx| configurations.reset(cx));
             this.palette = None;
@@ -643,7 +651,7 @@ impl Workspace {
 pub fn key_bindings() -> Vec<KeyBinding> {
     crate::shortcuts::bindings(&Default::default())
         .into_iter()
-        .chain(run::key_bindings())
+        .chain(run::output::key_bindings())
         .chain(jig_files::file_tree::key_bindings())
         .chain(jig_search::find_in_files::key_bindings())
         .chain(jig_editing::find_panel::key_bindings())

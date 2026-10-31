@@ -47,10 +47,10 @@ env = {{ GREETING = "there" }}
     step(cx, window, |window, cx| window.input("hel", cx));
     step(cx, window, |window, cx| window.press("enter", cx));
     wait_until(cx, |cx| {
-        cx.update(|cx| workspace.read(cx).run_output())
+        cx.update(|cx| workspace.read(cx).run_output(cx))
             .is_some_and(|(_, _, ending)| ending.is_some())
     });
-    let (first, lines, ending) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (first, lines, ending) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     assert_eq!(ending.as_deref(), Some("Process finished with exit code 2"));
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     assert!(texts[0].starts_with("$ echo hello"));
@@ -85,7 +85,7 @@ env = {{ GREETING = "there" }}
     // ⌃R runs the chosen configuration again.
     step(cx, window, |window, cx| window.press("ctrl-r", cx));
     wait_until(cx, |cx| {
-        cx.update(|cx| workspace.read(cx).run_output())
+        cx.update(|cx| workspace.read(cx).run_output(cx))
             .is_some_and(|(id, _, ending)| id != first && ending.is_some())
     });
 }
@@ -263,10 +263,10 @@ fn debugs_to_a_breakpoint_shows_variables_and_resumes(cx: &mut TestAppContext) {
 
     step(cx, window, |window, cx| window.press("f9", cx));
     wait_until(cx, |cx| {
-        cx.update(|cx| workspace.read(cx).run_output())
+        cx.update(|cx| workspace.read(cx).run_output(cx))
             .is_some_and(|(_, _, ending)| ending.is_some())
     });
-    let (_, lines, ending) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (_, lines, ending) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     assert_eq!(ending.as_deref(), Some("Debugging finished"));
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     assert!(texts.contains(&"total 6".to_string()), "{texts:?}");
@@ -375,7 +375,7 @@ fn debug_live(cx: &mut TestAppContext) {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let output = cx.update(|cx| workspace.read(cx).run_output());
+        let output = cx.update(|cx| workspace.read(cx).run_output(cx));
         panic!("timed out: {output:#?}");
     };
     wait(cx, &|this, cx| {
@@ -401,8 +401,8 @@ fn debug_live(cx: &mut TestAppContext) {
     // resume until it ends.
     for _ in 0..5 {
         step(cx, window, |window, cx| window.press("f9", cx));
-        wait(cx, &|this, _| {
-            this.run_output()
+        wait(cx, &|this, app| {
+            this.run_output(app)
                 .is_some_and(|(_, _, ending)| ending.is_some())
                 || this.debug_phase() == Some(crate::workspace::debug::Phase::Paused)
         });
@@ -412,7 +412,7 @@ fn debug_live(cx: &mut TestAppContext) {
             break;
         }
     }
-    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     eprintln!("{texts:#?}");
     assert!(texts.contains(&"total 6".to_string()));
@@ -459,7 +459,7 @@ fn resumes_past_a_big_struct_live(cx: &mut TestAppContext) {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let output = cx.update(|cx| workspace.read(cx).run_output());
+        let output = cx.update(|cx| workspace.read(cx).run_output(cx));
         panic!("timed out: {output:#?}");
     };
     use crate::workspace::debug::Phase;
@@ -485,7 +485,7 @@ fn resumes_past_a_big_struct_live(cx: &mut TestAppContext) {
             break;
         }
     }
-    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     assert!(texts.contains(&"visited true".to_string()), "{texts:#?}");
 }
@@ -550,7 +550,7 @@ fn debugging_a_language_that_is_off_starts_nothing(cx: &mut TestAppContext) {
             .is_some_and(|rows| rows.first().is_some_and(|row| row == "App"))
     });
     step(cx, window, |window, cx| window.press("enter", cx));
-    assert!(cx.update(|cx| workspace.read(cx).run_output()).is_none());
+    assert!(cx.update(|cx| workspace.read(cx).run_output(cx)).is_none());
 }
 
 /// Debugs `source` in a fresh project with a real debugger, found in
@@ -619,7 +619,7 @@ fn debug_project_live(
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let output = cx.update(|cx| workspace.read(cx).run_output());
+        let output = cx.update(|cx| workspace.read(cx).run_output(cx));
         panic!("timed out: {output:#?}");
     };
     wait(cx, &|this, cx| {
@@ -647,11 +647,11 @@ fn debug_project_live(
         );
     });
     step(cx, window, |window, cx| window.press("f9", cx));
-    wait(cx, &|this, _| {
-        this.run_output()
+    wait(cx, &|this, app| {
+        this.run_output(app)
             .is_some_and(|(_, _, ending)| ending.is_some())
     });
-    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     eprintln!("{texts:#?}");
     assert!(texts.contains(&printed.to_string()), "{texts:#?}");

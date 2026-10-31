@@ -5,13 +5,10 @@
 //! stops the one before. Unsaved files are saved first, as IntelliJ does,
 //! so what runs is what's on screen.
 
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
-use gpui_kit::component::input::{Copy, SelectAll};
-use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -22,29 +19,15 @@ use super::{
     ToggleRunPanel, Workspace,
 };
 use jig_run::run_configs::{self, RunConfig};
-use jig_run::run_output::{Color, Link, OutputLine, Process, RunEvent, Stream, Style};
+use jig_run::run_output::{Link, OutputLine, Process, RunEvent};
 use jig_run::run_picker::PLAY;
 
 pub(super) mod configurations;
+pub(super) mod output;
 
 use configurations::{RunConfigurations, RunConfigurationsEvent};
+use output::{RunOutput, RunOutputEvent};
 
-/// The output panel's key context, where ⌘A selects all of it.
-const OUTPUT_CONTEXT: &str = "JigRunOutput";
-
-/// Select All in the output; Copy is bound for the whole window already.
-pub(super) fn key_bindings() -> Vec<KeyBinding> {
-    vec![KeyBinding::new(
-        "secondary-a",
-        SelectAll,
-        Some(OUTPUT_CONTEXT),
-    )]
-}
-
-/// Older lines are dropped past this many, so a chatty process can't eat
-/// the machine's memory.
-const MAX_LINES: usize = 50_000;
-const LINE_HEIGHT: f32 = 18.;
 const HEADER_HEIGHT: f32 = 30.;
 const MIN_PANEL_HEIGHT: f32 = 90.;
 /// Room the panel leaves the editor above it, at least.
@@ -65,41 +48,32 @@ pub(super) struct RunState {
     panel_height: Pixels,
     /// Set while the panel's top edge is being dragged.
     resizing: bool,
-    /// Set while output is being selected with the mouse.
-    selecting: bool,
-    /// The output's, so ⌘C and ⌘A reach it once it's clicked.
-    output_focus: FocusHandle,
     next_id: u64,
 }
 
 impl RunState {
-    pub(super) fn new(cx: &mut App) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             session: None,
             panel_open: false,
             panel_height: px(220.),
             resizing: false,
-            selecting: false,
-            output_focus: cx.focus_handle(),
             next_id: 0,
         }
     }
 }
 
-/// One run of a configuration, and what it printed. Debugging is a run
-/// with a debugger attached.
+/// One run of a configuration. What it printed is in the window's
+/// [`RunOutput`]. Debugging is a run with a debugger attached.
 pub(super) struct RunSession {
     id: u64,
     pub(super) config: RunConfig,
     /// The program, or for a debug session, its build.
     pub(super) process: Option<Process>,
     events: UnboundedReceiver<RunEvent>,
-    pub(super) lines: Vec<OutputLine>,
     /// How it ended, once it has.
     pub(super) ending: Option<String>,
     pub(super) started: Instant,
-    scroll: UniformListScrollHandle,
-    selection: Option<OutputSelection>,
     pub(super) debug: Option<super::debug::DebugSession>,
     _poll: Task<()>,
 }
@@ -354,16 +328,15 @@ impl Workspace {
                 }
             }
         });
+        self.run_output
+            .update(cx, |output, cx| output.start(lines, cx));
         self.runs.session = Some(RunSession {
             id,
             config,
             process,
             events,
-            lines,
             ending,
             started: Instant::now(),
-            scroll: UniformListScrollHandle::new(),
-            selection: None,
             debug,
             _poll: poll,
         });
@@ -388,8 +361,8 @@ impl Workspace {
             }
         }
         let full = events.len() == MAX_BATCH;
-        let follow = scrolled_to_end(&session.scroll);
-        let before = session.lines.len();
+        let follow = self.run_output.read(cx).at_end();
+        let before = self.run_output.read(cx).len();
         for event in events {
             self.on_run_event(event, window, cx);
         }
@@ -399,19 +372,11 @@ impl Workspace {
             self.on_dap_message(id, message, window, cx);
         }
         let session = self.runs.session.as_mut().filter(|s| s.id == id)?;
-        if session.lines.len() > MAX_LINES {
-            let excess = session.lines.len() - MAX_LINES + MAX_LINES / 10;
-            session.lines.drain(..excess);
-            session.selection = session
-                .selection
-                .and_then(|selection| selection.shifted_up(excess));
-        }
-        if session.lines.len() != before || any {
+        self.run_output.update(cx, |output, cx| output.trim(cx));
+        let output = self.run_output.read(cx);
+        if output.len() != before || any {
             if follow {
-                session.scroll.scroll_to_item(
-                    session.lines.len().saturating_sub(1),
-                    ScrollStrategy::Bottom,
-                );
+                output.scroll_to_end();
             }
             cx.notify();
         }
@@ -425,24 +390,25 @@ impl Workspace {
             return;
         };
         match event {
-            RunEvent::Line(line) => session.lines.push(line),
+            RunEvent::Line(line) => self.run_output.update(cx, |o, cx| o.push(line, cx)),
             RunEvent::Data(json) => self.on_build_data(&json),
             RunEvent::Exited { message, success } => {
                 if session.debug.is_some() {
                     let stopped = message == "Process stopped";
                     if success {
-                        session.lines.push(OutputLine::meta("Build finished"));
+                        self.run_output
+                            .update(cx, |o, cx| o.push(OutputLine::meta("Build finished"), cx));
                     } else if !stopped {
-                        session.lines.push(OutputLine::meta(message));
+                        self.run_output
+                            .update(cx, |o, cx| o.push(OutputLine::meta(message), cx));
                     }
                     self.on_build_exit(success, stopped, window, cx);
                     return;
                 }
                 session.process = None;
                 let elapsed = session.started.elapsed().as_secs_f32();
-                session
-                    .lines
-                    .push(OutputLine::meta(format!("{message} ({elapsed:.1}s)")));
+                let line = OutputLine::meta(format!("{message} ({elapsed:.1}s)"));
+                self.run_output.update(cx, |o, cx| o.push(line, cx));
                 session.ending = Some(message);
             }
         }
@@ -479,6 +445,18 @@ impl Workspace {
         }
     }
 
+    /// A link in the output was clicked: open the code there.
+    pub(super) fn on_run_output_event(
+        &mut self,
+        _: &Entity<RunOutput>,
+        event: &RunOutputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let RunOutputEvent::OpenLink(link) = event;
+        self.open_link(link, window, cx);
+    }
+
     pub(super) fn open_link(&mut self, link: &Link, window: &mut Window, cx: &mut Context<Self>) {
         let line = link.line.saturating_sub(1);
         let column = link.column.unwrap_or(1).saturating_sub(1);
@@ -498,9 +476,10 @@ impl Workspace {
 
     /// The current run's id, output and ending.
     #[cfg(test)]
-    pub(super) fn run_output(&self) -> Option<(u64, Vec<OutputLine>, Option<String>)> {
+    pub(super) fn run_output(&self, cx: &App) -> Option<(u64, Vec<OutputLine>, Option<String>)> {
         let session = self.runs.session.as_ref()?;
-        Some((session.id, session.lines.clone(), session.ending.clone()))
+        let lines = self.run_output.read(cx).lines().to_vec();
+        Some((session.id, lines, session.ending.clone()))
     }
 
     /// The picker, while it's open.
@@ -697,34 +676,6 @@ impl Workspace {
                 )),
             );
 
-        let workspace = cx.entity().downgrade();
-        let list = uniform_list(
-            "run-output",
-            session.lines.len(),
-            cx.processor(move |this, range: Range<usize>, _, cx| {
-                let Some(session) = this.runs.session.as_ref() else {
-                    return Vec::new();
-                };
-                range
-                    .map(|ix| {
-                        let line = &session.lines[ix];
-                        let selected = session
-                            .selection
-                            .and_then(|selection| selection.range_in(ix, line.text.len()));
-                        render_line(line, ix, selected, workspace.clone(), cx)
-                    })
-                    .collect::<Vec<_>>()
-            }),
-        )
-        .track_scroll(&session.scroll)
-        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-        .flex_1()
-        .min_h_0()
-        .px_3()
-        .pb_1()
-        .font_family(theme.mono_font_family.clone())
-        .text_size(px(12.));
-
         Some(
             v_flex()
                 .relative()
@@ -735,7 +686,7 @@ impl Workspace {
                 .child(header)
                 .map(|this| match self.render_debugger(cx) {
                     Some(debugger) => this.child(debugger),
-                    None => this.child(self.output_area(list, cx)),
+                    None => this.child(self.run_output.clone()),
                 })
                 .child(
                     // The draggable top edge.
@@ -757,122 +708,6 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
-    }
-
-    /// The output, focusable so it takes ⌘C and ⌘A, with a menu to copy it.
-    fn output_area(&self, list: impl IntoElement, cx: &Context<Self>) -> impl IntoElement {
-        v_flex()
-            .id("run-output-area")
-            .flex_1()
-            .min_h_0()
-            .key_context(OUTPUT_CONTEXT)
-            .track_focus(&self.runs.output_focus)
-            .on_action(cx.listener(Self::copy_output))
-            .on_action(cx.listener(Self::select_all_output))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.runs.selecting = false),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.runs.output_focus, cx);
-                    let has_selection = this
-                        .runs
-                        .session
-                        .as_ref()
-                        .and_then(|session| session.selection)
-                        .is_some_and(|selection| !selection.is_empty());
-                    NativeMenu::new()
-                        .menu_with_disabled("Copy", !has_selection, Box::new(Copy))
-                        .menu("Select All", Box::new(SelectAll))
-                        .show(event.position, window, cx);
-                }),
-            )
-            .child(list)
-    }
-
-    /// Start selecting output at the press, or extend the selection there
-    /// with Shift. A double click takes the word, a triple the line.
-    fn press_output(
-        &mut self,
-        point: (usize, usize),
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.runs.output_focus, cx);
-        let Some(session) = self.runs.session.as_mut() else {
-            return;
-        };
-        let (line, at) = point;
-        let text = session.lines.get(line).map_or("", |l| l.text.as_ref());
-        session.selection = Some(match (event.click_count, session.selection) {
-            (1, Some(selection)) if event.modifiers.shift => OutputSelection {
-                head: point,
-                ..selection
-            },
-            (2, _) => {
-                let word = word_at(text, at);
-                OutputSelection {
-                    anchor: (line, word.start),
-                    head: (line, word.end),
-                }
-            }
-            (3.., _) => OutputSelection {
-                anchor: (line, 0),
-                head: (line, text.len()),
-            },
-            _ => OutputSelection {
-                anchor: point,
-                head: point,
-            },
-        });
-        self.runs.selecting = event.click_count == 1;
-        cx.notify();
-    }
-
-    fn drag_output(&mut self, point: (usize, usize), dragging: bool, cx: &mut Context<Self>) {
-        if !self.runs.selecting {
-            return;
-        }
-        if !dragging {
-            self.runs.selecting = false;
-            return;
-        }
-        if let Some(selection) = self
-            .runs
-            .session
-            .as_mut()
-            .and_then(|session| session.selection.as_mut())
-            && selection.head != point
-        {
-            selection.head = point;
-            cx.notify();
-        }
-    }
-
-    fn copy_output(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.runs.session.as_ref() else {
-            return;
-        };
-        let Some(selection) = session.selection.filter(|s| !s.is_empty()) else {
-            return;
-        };
-        cx.write_to_clipboard(ClipboardItem::new_string(selection.text(&session.lines)));
-    }
-
-    fn select_all_output(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.runs.session.as_mut() else {
-            return;
-        };
-        let last = session.lines.len().saturating_sub(1);
-        let end = session.lines.last().map_or(0, |line| line.text.len());
-        session.selection = Some(OutputSelection {
-            anchor: (0, 0),
-            head: (last, end),
-        });
-        cx.notify();
     }
 
     /// Mouse handlers for the whole window, active while the panel's top
@@ -907,307 +742,5 @@ impl Workspace {
                     }),
                 )
         })
-    }
-}
-
-/// Whether the list shows its last line, so new output should keep it in
-/// view; scrolled up to read, it stays put.
-fn scrolled_to_end(scroll: &UniformListScrollHandle) -> bool {
-    let base = scroll.0.borrow().base_handle.clone();
-    -base.offset().y >= base.max_offset().y - px(2.)
-}
-
-/// Output selected with the mouse, from where the drag began to where it
-/// is now. Points are a line and a byte offset in it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct OutputSelection {
-    anchor: (usize, usize),
-    head: (usize, usize),
-}
-
-impl OutputSelection {
-    fn ordered(self) -> ((usize, usize), (usize, usize)) {
-        (self.anchor.min(self.head), self.anchor.max(self.head))
-    }
-
-    fn is_empty(self) -> bool {
-        self.anchor == self.head
-    }
-
-    /// What's selected of line `ix`, `len` bytes long.
-    fn range_in(self, ix: usize, len: usize) -> Option<Range<usize>> {
-        let (start, end) = self.ordered();
-        if ix < start.0 || ix > end.0 {
-            return None;
-        }
-        let from = if ix == start.0 { start.1.min(len) } else { 0 };
-        let to = if ix == end.0 { end.1.min(len) } else { len };
-        (from < to).then_some(from..to)
-    }
-
-    /// The selected text, lines joined by newlines.
-    fn text(self, lines: &[OutputLine]) -> String {
-        let (start, end) = self.ordered();
-        let mut text = String::new();
-        for (ix, line) in lines.iter().enumerate().take(end.0 + 1).skip(start.0) {
-            if ix > start.0 {
-                text.push('\n');
-            }
-            if let Some(range) = self.range_in(ix, line.text.len()) {
-                text.push_str(&line.text[range]);
-            }
-        }
-        text
-    }
-
-    /// The same text after the first `count` lines were dropped, unless
-    /// it was among them.
-    fn shifted_up(self, count: usize) -> Option<Self> {
-        let shift = |(line, at): (usize, usize)| Some((line.checked_sub(count)?, at));
-        Some(Self {
-            anchor: shift(self.anchor)?,
-            head: shift(self.head)?,
-        })
-    }
-}
-
-/// The word around byte `at` of `text`: letters, digits and underscores,
-/// or the single character there when it's none of those.
-fn word_at(text: &str, at: usize) -> Range<usize> {
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    let at = at.min(text.len());
-    // Past the end of the line, the last word counts as clicked.
-    let at = match text[at..].chars().next() {
-        Some(_) => at,
-        None => text[..at].char_indices().last().map_or(at, |(i, _)| i),
-    };
-    let Some(here) = text[at..].chars().next() else {
-        return at..at;
-    };
-    if !is_word(here) {
-        return at..at + here.len_utf8();
-    }
-    let start = text[..at]
-        .char_indices()
-        .rev()
-        .take_while(|&(_, c)| is_word(c))
-        .last()
-        .map_or(at, |(i, _)| i);
-    let end = text[at..]
-        .char_indices()
-        .find(|&(_, c)| !is_word(c))
-        .map_or(text.len(), |(i, _)| at + i);
-    start..end
-}
-
-fn render_line(
-    line: &OutputLine,
-    ix: usize,
-    selected: Option<Range<usize>>,
-    workspace: WeakEntity<Workspace>,
-    cx: &App,
-) -> AnyElement {
-    let theme = cx.theme();
-    let color = match line.stream {
-        Stream::Meta => theme.muted_foreground,
-        Stream::Stdout | Stream::Stderr => theme.foreground,
-    };
-    let link = HighlightStyle {
-        color: Some(theme.link),
-        underline: Some(UnderlineStyle {
-            thickness: px(1.),
-            color: Some(theme.link.opacity(0.6)),
-            wavy: false,
-        }),
-        ..Default::default()
-    };
-    let spans: Vec<(Range<usize>, HighlightStyle)> = line
-        .spans
-        .iter()
-        .map(|(range, style)| (range.clone(), highlight(*style, cx)))
-        .collect();
-    let links: Vec<(Range<usize>, HighlightStyle)> =
-        line.links.iter().map(|l| (l.range.clone(), link)).collect();
-    let selection = HighlightStyle {
-        background_color: Some(theme.selection),
-        ..Default::default()
-    };
-    let selected: Vec<(Range<usize>, HighlightStyle)> = selected
-        .map(|range| (range, selection))
-        .into_iter()
-        .collect();
-    let text = StyledText::new(line.text.clone())
-        .with_highlights(layer(&layer(&spans, &links), &selected));
-    let layout = text.layout().clone();
-    let point_at = move |position: Point<Pixels>| {
-        let at = layout
-            .index_for_position(position)
-            .unwrap_or_else(|closest| closest);
-        (ix, at)
-    };
-    let content: AnyElement = if line.links.is_empty() {
-        text.into_any_element()
-    } else {
-        let targets = line.links.clone();
-        let workspace = workspace.clone();
-        InteractiveText::new(("run-line", ix), text)
-            .on_click(
-                targets.iter().map(|l| l.range.clone()).collect(),
-                move |clicked, window, cx| {
-                    let target = targets[clicked].clone();
-                    workspace
-                        .update(cx, |this, cx| this.open_link(&target, window, cx))
-                        .ok();
-                },
-            )
-            .into_any_element()
-    };
-    let on_press = workspace.clone();
-    let point_at_press = point_at.clone();
-    div()
-        .h(px(LINE_HEIGHT))
-        .whitespace_nowrap()
-        .text_color(color)
-        .cursor_text()
-        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-            let point = point_at_press(event.position);
-            on_press
-                .update(cx, |this, cx| this.press_output(point, event, window, cx))
-                .ok();
-        })
-        .on_mouse_move(move |event, _, cx| {
-            let point = point_at(event.position);
-            workspace
-                .update(cx, |this, cx| this.drag_output(point, event.dragging(), cx))
-                .ok();
-        })
-        .child(content)
-        .into_any_element()
-}
-
-fn highlight(style: Style, cx: &App) -> HighlightStyle {
-    let theme = cx.theme();
-    HighlightStyle {
-        color: style.fg.map(|fg| match fg {
-            Color::Indexed(n) => match n % 8 {
-                0 => theme.muted_foreground,
-                1 => theme.red,
-                2 => theme.green,
-                3 => theme.yellow,
-                4 => theme.blue,
-                5 => theme.magenta,
-                6 => theme.cyan,
-                _ => theme.foreground,
-            },
-            Color::Rgb(r, g, b) => rgb(u32::from_be_bytes([0, r, g, b])).into(),
-        }),
-        font_weight: style.bold.then_some(FontWeight::BOLD),
-        font_style: style.italic.then_some(FontStyle::Italic),
-        underline: style.underline.then_some(UnderlineStyle {
-            thickness: px(1.),
-            color: None,
-            wavy: false,
-        }),
-        fade_out: style.dim.then_some(0.4),
-        ..Default::default()
-    }
-}
-
-/// `top` over `base`, as the sorted, non-overlapping ranges text styling
-/// needs. Both are sorted and non-overlapping themselves.
-fn layer(
-    base: &[(Range<usize>, HighlightStyle)],
-    top: &[(Range<usize>, HighlightStyle)],
-) -> Vec<(Range<usize>, HighlightStyle)> {
-    if top.is_empty() {
-        return base.to_vec();
-    }
-    let mut cuts: Vec<usize> = base
-        .iter()
-        .chain(top)
-        .flat_map(|(range, _)| [range.start, range.end])
-        .collect();
-    cuts.sort_unstable();
-    cuts.dedup();
-    let style_at = |ranges: &[(Range<usize>, HighlightStyle)], at: usize| {
-        ranges
-            .iter()
-            .find(|(range, _)| range.contains(&at))
-            .map(|(_, style)| *style)
-    };
-    cuts.windows(2)
-        .filter_map(|pair| {
-            let (start, end) = (pair[0], pair[1]);
-            let style = match (style_at(base, start), style_at(top, start)) {
-                (None, None) => return None,
-                (Some(base), None) => base,
-                (None, Some(top)) => top,
-                (Some(base), Some(top)) => base.highlight(top),
-            };
-            Some((start..end, style))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use gpui_kit::{HighlightStyle, Hsla};
-
-    use super::{OutputSelection, layer, word_at};
-    use jig_run::run_output::OutputLine;
-
-    #[test]
-    fn links_layer_over_colours() {
-        let red = HighlightStyle {
-            color: Some(Hsla::red()),
-            ..Default::default()
-        };
-        let link = HighlightStyle {
-            color: Some(Hsla::blue()),
-            ..Default::default()
-        };
-        let layered = layer(&[(0..10, red)], &[(4..14, link)]);
-        assert_eq!(layered, [(0..4, red), (4..10, link), (10..14, link)]);
-    }
-
-    #[test]
-    fn selection_copies_across_lines_either_way() {
-        let lines = ["first line", "second", "third line"].map(OutputLine::meta);
-        let down = OutputSelection {
-            anchor: (0, 6),
-            head: (2, 5),
-        };
-        assert_eq!(down.text(&lines), "line\nsecond\nthird");
-        let up = OutputSelection {
-            anchor: down.head,
-            head: down.anchor,
-        };
-        assert_eq!(up.text(&lines), "line\nsecond\nthird");
-        assert_eq!(down.range_in(1, 6), Some(0..6));
-        assert_eq!(down.range_in(3, 4), None);
-    }
-
-    #[test]
-    fn selection_follows_dropped_lines() {
-        let selection = OutputSelection {
-            anchor: (5, 1),
-            head: (7, 2),
-        };
-        assert_eq!(
-            selection.shifted_up(5),
-            Some(OutputSelection {
-                anchor: (0, 1),
-                head: (2, 2),
-            })
-        );
-        assert_eq!(selection.shifted_up(6), None);
-    }
-
-    #[test]
-    fn double_click_takes_the_word() {
-        let text = "error: cannot_find foo";
-        assert_eq!(&text[word_at(text, 10)], "cannot_find");
-        assert_eq!(&text[word_at(text, 5)], ":");
-        assert_eq!(&text[word_at(text, text.len())], "foo");
     }
 }

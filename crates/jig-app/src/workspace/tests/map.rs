@@ -544,7 +544,7 @@ fn wait_live(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let output = cx.update(|cx| workspace.read(cx).run_output());
+    let output = cx.update(|cx| workspace.read(cx).run_output(cx));
     panic!("timed out: {output:#?}");
 }
 
@@ -586,7 +586,7 @@ fn fires_off_live(
         assert_ne!(this.debug_phase(), Some(Phase::Paused), "it never stops");
         this.debug_phase() == Some(Phase::Ended)
     });
-    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output()).unwrap();
+    let (_, lines, _) = cx.update(|cx| workspace.read(cx).run_output(cx)).unwrap();
     let texts: Vec<String> = lines.iter().map(|line| line.text.to_string()).collect();
     eprintln!("{texts:#?}");
     assert!(texts.iter().any(|text| text == "done"), "it ran to the end");

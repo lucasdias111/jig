@@ -202,6 +202,20 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   was chosen, places the picker, and observes it for the title bar's name.
   Opening another project resets it, as it reset `RunState` before.
 
+- **The run output** lives in `workspace/run/output.rs` as `RunOutput`:
+  the lines, their selection and scroll, the output's focus, drawing the
+  list, mouse selection, ⌘C, ⌘A and the right-click menu, trimming past
+  50,000 lines. One for the window, started afresh by each run, so the
+  output keeps its focus across runs as before; a clicked `file:line` link
+  comes out as `OpenLink`. Run and the debugger add lines through it. The
+  session itself (`RunSession`: the process, how it ended, the
+  `DebugSession`) stays on `RunState`, and the panel's height and drag stay
+  with the workspace's layout. The debugger's state machine stays too:
+  each adapter message it handles reaches the tabs (the paused line), the
+  Map, breakpoints or the hover, so as an entity it would only send all of
+  that back as events. Its call stack and variables view could become an
+  entity later, if the debugger grows.
+
 ## Not every field becomes an entity
 
 An entity earns its place when a feature has state of its own and draws or
