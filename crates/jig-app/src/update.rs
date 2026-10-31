@@ -205,7 +205,7 @@ fn announce(cx: &mut App) {
                 }
                 cx.update(|cx| match state(cx) {
                     State::Ready { .. } => {
-                        crate::settings_window::send_to_workspace(Box::new(RestartToUpdate), cx)
+                        crate::windows::send_to_editor(Box::new(RestartToUpdate), cx)
                     }
                     State::Manual { .. } => open_releases_page(cx),
                     _ => {}

@@ -53,6 +53,7 @@ mod text_edits;
 mod theme;
 mod tools;
 mod update;
+mod windows;
 mod workspace;
 
 use std::path::PathBuf;
@@ -96,7 +97,7 @@ fn main() {
 
     #[cfg(feature = "snapshots")]
     if let Some(dir) = std::env::var_os("JIG_SNAPSHOTS") {
-        settings_window::snapshots::run(&PathBuf::from(dir));
+        settings_window::render_snapshots(&PathBuf::from(dir));
         return;
     }
 
@@ -106,8 +107,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            languages::gdscript::register();
-            languages::grammars::register();
+            languages::register_grammars();
             let settings_error = settings::init(cx);
             providers::init(cx);
             recent::init(cx);
@@ -118,6 +118,7 @@ fn main() {
             theme::apply(None, cx);
             cx.bind_keys(workspace::key_bindings());
             // Before the menus: they show only shortcuts bound by then.
+            windows::init(cx, is_editor_window);
             settings_window::init(cx);
             menus::init(cx);
             // Last: it takes over the shortcuts Settings can change.
@@ -203,8 +204,8 @@ pub fn open_window(
 /// the agent hangs up.
 /// `Jig --map-mcp`: the Map's drawing tools, for an agent.
 fn serve_map(args: &[String]) {
-    let served = map::lens::mcp::project_from_args(args).and_then(|project| {
-        map::lens::mcp::serve(&project, std::io::stdin().lock(), std::io::stdout().lock())
+    let served = map::project_from_args(args).and_then(|project| {
+        map::serve_drawing_tools(&project, std::io::stdin().lock(), std::io::stdout().lock())
     });
     if let Err(error) = served {
         eprintln!("jig: {error:#}");

@@ -1,36 +1,6 @@
 # Crossings between jig-app's capabilities that architecture.toml doesn't allow,
 # kept until they're gone. Each line is `from module -> to module`.
 # Written by JIG_ARCH_BLESS=1 cargo test -p jig-app --test architecture.
-file_tree -> workspace
-main -> languages::gdscript
-main -> languages::grammars
-main -> map::lens::mcp
-main -> settings_window::snapshots
 settings -> agents
 settings -> languages
-settings_window -> main
-settings_window::agent_page -> workspace
-settings_window::languages_page -> workspace
-settings_window::models_page -> workspace
 settings_window::shortcuts_page -> shortcuts
-update -> settings_window
-workspace -> lsp::diagnostics
-workspace -> map::view
-workspace::agent -> map::domains::actions
-workspace::agent -> map::view
-workspace::agent -> planner::links
-workspace::diagnostics -> lsp::diagnostics
-workspace::live -> map::view
-workspace::map -> map::domains::actions
-workspace::map -> map::index
-workspace::map -> map::view
-workspace::map -> map::view::ruler
-workspace::map_agent -> map::lens
-workspace::map_agent -> map::sketch
-workspace::map_agent -> map::view
-workspace::map_agent -> map::view::lens
-workspace::map_agent -> planner::links
-workspace::navigation -> map::view
-workspace::planner -> map::sketch
-workspace::planner -> planner::form
-workspace::planner -> planner::links

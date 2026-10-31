@@ -11,10 +11,9 @@ use gpui_kit::*;
 use jig_ai::agent::{Access, Permissions};
 
 use super::ui::{self, Row, Section};
-use super::{Fetch, SettingsWindow, send_to_workspace};
+use super::{EditAgents, Fetch, SettingsWindow, send_to_workspace};
 use crate::agents::{self, Agent};
 use crate::settings;
-use crate::workspace::EditAgents;
 
 impl SettingsWindow {
     pub(super) fn agent_sections(&self, cx: &Context<Self>) -> Vec<Section> {

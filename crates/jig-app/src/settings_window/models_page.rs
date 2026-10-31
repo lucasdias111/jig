@@ -10,9 +10,8 @@ use gpui_kit::*;
 use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named};
 
 use super::ui::{self, Row, Section};
-use super::{SettingsWindow, send_to_workspace};
+use super::{EditModelConfig, SettingsWindow, send_to_workspace};
 use crate::providers::{self, ModelList};
-use crate::workspace::EditModelConfig;
 
 /// Marks an agent model OpenCode knows by itself, from an older file's
 /// `agent_model`.

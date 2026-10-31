@@ -1232,7 +1232,7 @@ impl Render for FileTree {
             SEARCH,
             "Go to File (⌘P)",
             cx,
-            |_, window, cx| window.dispatch_action(Box::new(crate::workspace::GoToFile), cx),
+            |_, window, cx| window.dispatch_action(Box::new(crate::quick_open::GoToFile), cx),
         );
         let new_file = header_button("new-file", FILE_PLUS, "New File", cx, |this, window, cx| {
             this.start_new(NewEntry::File, window, cx)

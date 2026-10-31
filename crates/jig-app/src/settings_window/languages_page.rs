@@ -15,13 +15,15 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::ui::{self, Row, Section};
-use super::{Detail, Fetch, Nav, Page, SettingsWindow, language, send_to_workspace};
+use super::{
+    Detail, EditDebuggers, EditFormatters, EditLanguageServers, Fetch, Nav, Page, SettingsWindow,
+    language, send_to_workspace,
+};
 use crate::debuggers::{self, Debugger};
 use crate::formatters::{self, Formatter};
 use crate::languages::{self, Language, bundled};
 use crate::lsp::{self, Server};
 use crate::settings;
-use crate::workspace::{EditDebuggers, EditFormatters, EditLanguageServers};
 
 /// A language's extensions as Settings shows and takes them: the user's,
 /// or the built-in ones.

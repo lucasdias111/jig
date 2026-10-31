@@ -18,6 +18,9 @@ use ignore::WalkBuilder;
 
 use crate::fuzzy;
 
+// Asked of the workspace from elsewhere, such as the file tree's menu.
+actions!(jig, [GoToFile]);
+
 pub const WIDTH: f32 = 560.;
 const ROW_HEIGHT: f32 = 34.;
 const MAX_VISIBLE_ROWS: usize = 10;

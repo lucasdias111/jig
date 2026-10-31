@@ -11,6 +11,8 @@ mod models_page;
 mod shortcuts_page;
 #[cfg(feature = "snapshots")]
 pub mod snapshots;
+#[cfg(feature = "snapshots")]
+pub use snapshots::run as render_snapshots;
 mod ui;
 mod updates_page;
 
@@ -34,6 +36,18 @@ use crate::theme::EDITABLE;
 use ui::Section;
 
 actions!(jig, [OpenSettings]);
+
+// Asked of the editor window from Settings: each opens a file there.
+actions!(
+    jig,
+    [
+        EditAgents,
+        EditModelConfig,
+        EditDebuggers,
+        EditFormatters,
+        EditLanguageServers
+    ]
+);
 
 const PALETTE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="black"/><circle cx="17.5" cy="10.5" r=".5" fill="black"/><circle cx="6.5" cy="12.5" r=".5" fill="black"/><circle cx="8.5" cy="7.5" r=".5" fill="black"/></svg>"#;
 const TEXT_CURSOR: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 22h-1a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4h1"/><path d="M7 22h1a4 4 0 0 0 4-4v-1"/><path d="M7 2h1a4 4 0 0 1 4 4v1"/></svg>"#;
@@ -213,22 +227,7 @@ pub fn is_settings_window(window: AnyWindowHandle, cx: &App) -> bool {
 
 /// Run `action` in the frontmost editor window, bringing it forward.
 pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
-    cx.defer(move |cx| {
-        let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-        let Some(target) = windows
-            .into_iter()
-            .find(|window| crate::is_editor_window(*window, cx))
-        else {
-            return;
-        };
-        target
-            .update(cx, |_, window, cx| {
-                window.activate_window();
-                window.dispatch_action(action, cx);
-            })
-            .ok();
-        cx.activate(true);
-    });
+    crate::windows::send_to_editor(action, cx);
 }
 
 /// Work Settings started, such as installing something.

@@ -16,9 +16,9 @@ use serde_json::Value;
 use super::Workspace;
 use super::agent::TurnInput;
 use super::commands::CommandRun;
-use crate::map::lens::{self, Call, Drawing, Kind};
-use crate::map::view::lens::Source;
-use crate::map::view::{MapView, ProposalChoice};
+use crate::map::{
+    Call, Drawing, DrawingKind, DrawingSource, MapView, ProposalChoice, drawing_call,
+};
 
 /// A drawing of the conversation's, and whether it shows on the Map.
 #[derive(Clone, Debug)]
@@ -145,7 +145,7 @@ impl Workspace {
             "{}\n\n{}\n\nThe task was made from my sketch on Jig's Map ({}): build what it shows, naming new code as its boxes are labelled, and check each todo off with update_task as it's done.",
             ask.instruction,
             task.context(),
-            crate::map::sketch::link(sketch)
+            crate::map::sketch_link(sketch)
         );
         self.start_map_run(ask.name, ask.instruction, prompt, None, window, cx);
     }
@@ -191,7 +191,7 @@ impl Workspace {
         input: &Value,
         cx: &mut Context<Self>,
     ) {
-        let call = match lens::call(tool, input) {
+        let call = match drawing_call(tool, input) {
             Ok(call) => call,
             Err(_) => return,
         };
@@ -311,7 +311,7 @@ impl Workspace {
             DrawingAction::Tour => {
                 self.set_drawing_shown(at, true, cx);
                 let start = move |view: &mut MapView, cx: &mut Context<MapView>| {
-                    view.start_tour(Source::Conversation(at), cx)
+                    view.start_tour(DrawingSource::Conversation(at), cx)
                 };
                 match self.map_showing().cloned() {
                     Some(view) => view.update(cx, start),
@@ -423,8 +423,7 @@ impl Workspace {
         else {
             return;
         };
-        if let Some(crate::planner::links::Target::Code(code)) =
-            crate::planner::links::target(link, "")
+        if let Some(crate::planner::LinkTarget::Code(code)) = crate::planner::link_target(link, "")
         {
             let path = project.join(&code.path);
             self.open_code_link(&path, &code, window, cx);
@@ -466,7 +465,7 @@ pub(super) fn transcript(turns: Vec<Turn>) -> (Vec<ChatEntry>, Vec<Drawn>) {
     let mut drawings: Vec<Drawn> = Vec::new();
     for turn in turns {
         match turn {
-            Turn::Drew { tool, input } => match lens::call(&tool, &input) {
+            Turn::Drew { tool, input } => match drawing_call(&tool, &input) {
                 Ok(Call::Clear) => {
                     for drawn in &mut drawings {
                         drawn.shown = false;
@@ -479,7 +478,8 @@ pub(super) fn transcript(turns: Vec<Turn>) -> (Vec<ChatEntry>, Vec<Drawn>) {
                 }
                 Ok(Call::Draw(drawing)) => {
                     // Descriptions and proposals were settled then.
-                    let shown = !matches!(drawing.kind, Kind::Describe | Kind::Propose);
+                    let shown =
+                        !matches!(drawing.kind, DrawingKind::Describe | DrawingKind::Propose);
                     entries.push(drawing_entry(drawings.len(), &drawing, shown, false));
                     drawings.push(Drawn {
                         drawing,

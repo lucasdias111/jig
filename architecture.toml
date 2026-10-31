@@ -43,6 +43,7 @@ modules = [
     "lines",
     "indentation",
     "brackets",
+    "windows",
 ]
 contract = [
     "fuzzy",
@@ -54,6 +55,7 @@ contract = [
     "lines",
     "indentation",
     "brackets",
+    "windows",
 ]
 uses = ["settings"]
 
@@ -61,7 +63,15 @@ uses = ["settings"]
 # debuggers as data, and installing them.
 [capability.toolchain]
 modules = ["languages", "lsp", "tools", "formatters", "debuggers", "definitions"]
-contract = ["languages", "lsp", "tools", "formatters", "debuggers", "definitions"]
+contract = [
+    "languages",
+    "lsp",
+    "lsp::diagnostics",
+    "tools",
+    "formatters",
+    "debuggers",
+    "definitions",
+]
 uses = ["settings", "kit"]
 
 # Editing help in a buffer: documents, edits, snippets, completions, hover,
@@ -81,7 +91,7 @@ uses = ["settings", "kit", "toolchain"]
 [capability.files]
 modules = ["file_tree", "file_icons"]
 contract = ["file_tree", "file_icons"]
-uses = ["settings", "kit", "toolchain"]
+uses = ["settings", "kit", "toolchain", "search"]
 
 # The git command line, the Git view and the branch picker.
 [capability.git]

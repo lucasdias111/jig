@@ -21,7 +21,14 @@ use gpui_kit::*;
 use jig_ai::tasks::{self, Task, Todo};
 
 use crate::git_panel::PLUS;
-use links::{CodeLink, Target};
+use links::Target;
+
+// The planner's contract: what the rest of Jig uses of it (`architecture.toml`).
+pub use form::{TaskForm, TaskFormEvent, WIDTH as FORM_WIDTH};
+pub use links::{
+    CodeLink, Target as LinkTarget, first_code_link, link_files, locate as locate_link,
+    target as link_target,
+};
 
 /// Lucide "list-todo", for Planner navigation.
 pub const TASKS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>"#;

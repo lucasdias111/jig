@@ -57,6 +57,11 @@ use commands::{CommandRun, Note};
 use mode::Mode;
 use tabs::Tab;
 
+pub use crate::quick_open::GoToFile;
+pub use crate::settings_window::{
+    EditAgents, EditDebuggers, EditFormatters, EditLanguageServers, EditModelConfig,
+};
+
 actions!(
     jig,
     [
@@ -68,12 +73,9 @@ actions!(
         OpenCommand,
         SendSelectionToAgent,
         OpenAgentConversations,
-        EditAgents,
         EditAgentsFile,
-        EditModelConfig,
         ToggleSidebar,
         FocusFileTree,
-        GoToFile,
         Find,
         FindAndReplace,
         FindInFiles,
@@ -86,7 +88,6 @@ actions!(
         StopRun,
         ToggleRunPanel,
         EditRunConfigurations,
-        EditDebuggers,
         DebugSelected,
         ToggleBreakpoint,
         Resume,
@@ -104,8 +105,6 @@ actions!(
         ShowCompletions,
         ToggleLineComment,
         FormatDocument,
-        EditFormatters,
-        EditLanguageServers,
         MoveLineUp,
         MoveLineDown,
         DuplicateLine,
@@ -629,7 +628,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
         .chain(crate::find_panel::key_bindings())
-        .chain(crate::map::view::key_bindings())
+        .chain(crate::map::key_bindings())
         .collect()
 }
 

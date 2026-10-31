@@ -14,8 +14,7 @@ use notify::Watcher as _;
 use super::commands::Ask;
 use super::mode::Mode;
 use super::{NewTask, ToggleTaskPlanner, Workspace};
-use crate::planner::form::{TaskForm, TaskFormEvent};
-use crate::planner::links::{self, CodeLink};
+use crate::planner::{CodeLink, TaskForm, TaskFormEvent, first_code_link, locate_link};
 use crate::planner::{TaskPlanner, TaskPlannerEvent};
 
 /// An agent writes a task in one go, but saves come as several events.
@@ -331,7 +330,7 @@ impl Workspace {
     /// The task form, centred near the top like New Jig.
     pub(super) fn render_task_form(&self, window: &Window) -> Option<AnyElement> {
         let form = self.planner.form.as_ref()?;
-        let width = px(crate::planner::form::WIDTH);
+        let width = px(crate::planner::FORM_WIDTH);
         let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
         Some(
             deferred(
@@ -392,7 +391,7 @@ impl Workspace {
             .view
             .as_ref()
             .map(|view| view.read(cx).project().to_path_buf());
-        if let Some((link, path)) = links::first_code_link(&step.text)
+        if let Some((link, path)) = first_code_link(&step.text)
             .zip(project)
             .map(|(link, project)| {
                 let path = project.join(&link.path);
@@ -424,7 +423,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // A sketch on the Map, not its file.
-        if let Some(sketch) = crate::map::sketch::of_link(&link.path) {
+        if let Some(sketch) = crate::map::sketch_of_link(&link.path) {
             return self.show_sketch(&sketch, window, cx);
         }
         if !path.is_file() {
@@ -441,7 +440,7 @@ impl Workspace {
             return;
         }
         let text = self.editor().text(cx);
-        if let Some(range) = links::locate(&text, link) {
+        if let Some(range) = locate_link(&text, link) {
             self.editor().select(range, cx);
         }
         self.focus_editor(window, cx);

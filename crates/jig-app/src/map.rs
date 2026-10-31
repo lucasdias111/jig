@@ -20,3 +20,14 @@ pub mod plan;
 pub mod site;
 pub mod sketch;
 pub mod view;
+
+// The Map's contract: what the rest of Jig uses of it. Everything else in
+// here is the Map's own (`architecture.toml`).
+pub use domains::actions::{Action, only_reads};
+pub use index::{FnId, Project, Target, root_of};
+pub use lens::mcp::{project_from_args, serve as serve_drawing_tools};
+pub use lens::{Call, Drawing, Kind as DrawingKind, call as drawing_call};
+pub use sketch::{link as sketch_link, of_link as sketch_of_link};
+pub use view::lens::Source as DrawingSource;
+pub use view::ruler::ruler;
+pub use view::{Level, MapEvent, MapView, ProposalChoice, key_bindings};

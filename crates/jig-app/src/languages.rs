@@ -143,6 +143,12 @@ fn load(user: Option<&str>) -> Table {
     }
 }
 
+/// Registers the grammars GPUI Kit has no feature for, before any file opens.
+pub fn register_grammars() {
+    gdscript::register();
+    grammars::register();
+}
+
 /// The user's `language-servers.toml`; `None` in tests.
 pub fn user_path() -> Option<std::path::PathBuf> {
     if cfg!(test) {

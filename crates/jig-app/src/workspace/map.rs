@@ -26,9 +26,7 @@ use super::mode::Mode;
 use super::tabs::canonical;
 use super::{ExplainLevel, IndexDomains, ShowMap, UpdateDomains, Workspace};
 use crate::lsp;
-use crate::map::domains::actions::Action;
-use crate::map::index::{FnId, Project, Target};
-use crate::map::view::{Level, MapEvent, MapView, ruler};
+use crate::map::{Action, FnId, Level, MapEvent, MapView, Project, Target, ruler};
 
 /// How long the language server has to answer, and how many times it's
 /// asked while it may still be indexing (jdtls takes minutes cold).
@@ -94,7 +92,7 @@ impl Workspace {
         // open in the sidebar.
         let root = match file {
             Some(file) => {
-                let project = crate::map::index::root_of(&file);
+                let project = crate::map::root_of(&file);
                 match open {
                     Some(open) if file.starts_with(&open) && !open.starts_with(&project) => {
                         Some(open)
@@ -344,7 +342,7 @@ impl Workspace {
             return None;
         }
         let depth = self.pinched / PINCH_OUT * PINCH_DEPTH;
-        Some(ruler::ruler(
+        Some(ruler(
             depth,
             "Code",
             crate::theme::editor_surface(cx),
@@ -552,7 +550,7 @@ mod tests {
 
     use super::{Texts, package_of, targets};
     use crate::lsp;
-    use crate::map::index::{Project, Target};
+    use crate::map::{Project, Target};
 
     #[test]
     fn a_call_hierarchy_answer_maps_onto_the_project() {
