@@ -43,6 +43,8 @@ impl Place {
     }
 }
 
+/// Where Go Back and Go Forward lead. It only keeps places; going to one
+/// is the workspace's, which knows the code, the Map and the modes.
 #[derive(Default)]
 pub(super) struct History {
     back: Vec<Place>,
@@ -50,6 +52,28 @@ pub(super) struct History {
 }
 
 impl History {
+    /// A jump away from `place`: Go Back returns to it, and what was ahead
+    /// is forgotten.
+    fn remember(&mut self, place: Place) {
+        Self::push(&mut self.back, place);
+        self.forward.clear();
+    }
+
+    /// The place to go to, back or forward, leaving `here` to come back
+    /// to. Places in files since deleted are skipped.
+    fn step(&mut self, back: bool, here: Option<Place>) -> Option<Place> {
+        let (from, to) = if back {
+            (&mut self.back, &mut self.forward)
+        } else {
+            (&mut self.forward, &mut self.back)
+        };
+        let place = std::iter::from_fn(|| from.pop()).find(Place::exists)?;
+        if let Some(here) = here {
+            Self::push(to, here);
+        }
+        Some(place)
+    }
+
     fn push(stack: &mut Vec<Place>, place: Place) {
         if stack.last() != Some(&place) {
             stack.push(place);
@@ -57,6 +81,11 @@ impl History {
         if stack.len() > MAX_PLACES {
             stack.remove(0);
         }
+    }
+
+    #[cfg(test)]
+    fn lengths(&self) -> (usize, usize) {
+        (self.back.len(), self.forward.len())
     }
 }
 
@@ -118,8 +147,7 @@ impl Workspace {
     }
 
     fn remember(&mut self, place: Place) {
-        History::push(&mut self.history.back, place);
-        self.history.forward.clear();
+        self.history.remember(place);
     }
 
     pub(super) fn go_back(&mut self, _: &GoBack, window: &mut Window, cx: &mut Context<Self>) {
@@ -151,18 +179,9 @@ impl Workspace {
 
     fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let here = self.here(cx);
-        let (from, to) = if back {
-            (&mut self.history.back, &mut self.history.forward)
-        } else {
-            (&mut self.history.forward, &mut self.history.back)
-        };
-        // Places in files since deleted are skipped.
-        let Some(place) = std::iter::from_fn(|| from.pop()).find(Place::exists) else {
+        let Some(place) = self.history.step(back, here) else {
             return;
         };
-        if let Some(here) = here {
-            History::push(to, here);
-        }
         let (path, offset) = match place {
             Place::Map(level) => return self.map_at(level, window, cx),
             Place::Planner => return self.planner_at(window, cx),
@@ -190,6 +209,54 @@ impl Workspace {
 
     #[cfg(test)]
     pub(super) fn history_lengths(&self) -> (usize, usize) {
-        (self.history.back.len(), self.history.forward.len())
+        self.history.lengths()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{History, Place};
+
+    fn agent() -> Place {
+        Place::Agent
+    }
+
+    #[test]
+    fn going_back_leaves_here_to_go_forward_to() {
+        let mut history = History::default();
+        history.remember(Place::Planner);
+        assert_eq!(history.step(true, Some(agent())), Some(Place::Planner));
+        assert_eq!(history.lengths(), (0, 1));
+        assert_eq!(history.step(false, Some(Place::Planner)), Some(agent()));
+        assert_eq!(history.lengths(), (1, 0));
+    }
+
+    #[test]
+    fn a_new_jump_forgets_what_was_ahead() {
+        let mut history = History::default();
+        history.remember(Place::Planner);
+        history.step(true, Some(agent()));
+        history.remember(Place::Planner);
+        assert_eq!(history.lengths(), (1, 0));
+    }
+
+    #[test]
+    fn places_in_deleted_files_are_skipped() {
+        let mut history = History::default();
+        history.remember(Place::Planner);
+        history.remember(Place::Code {
+            path: "/no/such/file.rs".into(),
+            offset: 0,
+        });
+        assert_eq!(history.step(true, None), Some(Place::Planner));
+        assert_eq!(history.step(true, None), None);
+    }
+
+    #[test]
+    fn the_same_place_twice_is_one_step() {
+        let mut history = History::default();
+        history.remember(Place::Planner);
+        history.remember(Place::Planner);
+        assert_eq!(history.lengths(), (1, 0));
     }
 }

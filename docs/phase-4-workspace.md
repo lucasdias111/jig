@@ -95,8 +95,9 @@ where a mistake is cheap and obvious:
 4. **The status bar's message** (`status_note`), shown by formatting and
    the language servers. `pending_save` stays: it only holds the task that
    finishes the workspace's own save, and has nothing to draw or decide.
-5. **Go Back and Go Forward** (`history`). One file owns it; ten call
-   `remember_location`, which becomes a method on the entity taking `here`.
+5. **Go Back and Go Forward** (`history`). Nothing to draw, so not an
+   entity: `History` takes over its own stacks (`remember`, `step`), and
+   the workspace keeps working out where "here" is and going there.
 6. **Breakpoints** (`breakpoints`) and **live points** (`live`), then
    **Run and Debug** (`runs`, `next_run_id` stays shared): big, but their state
    already sits in `RunState`, `Breakpoints` and `LivePoints`, so it's mostly
@@ -176,9 +177,16 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   observes it, since whether there's a message decides what the status bar
   holds. `pending_save` stayed on the workspace, as above.
 
+- **Go Back and Go Forward**: `History` in `workspace/navigation.rs` now
+  keeps its own stacks behind `remember` and `step` (skipping deleted
+  files, capping its length), with unit tests that need no window. The
+  workspace works out where it is and goes to the place `step` gives.
+
 ## Not every field becomes an entity
 
 An entity earns its place when a feature has state of its own and draws or
 decides something with it. A field that only holds a task driving the
 workspace's own work (`pending_save`), or a counter, stays where it is:
-wrapping it would add a hop without taking anything off `Workspace`.
+wrapping it would add a hop without taking anything off `Workspace`. Plain
+state with rules of its own (`History`) becomes a struct with methods, so
+the workspace stops reaching into it.
