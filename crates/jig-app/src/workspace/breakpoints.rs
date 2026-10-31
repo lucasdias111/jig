@@ -362,7 +362,7 @@ fn takes(
     registry: &crate::debuggers::Registry,
     key: &str,
     path: &Path,
-    languages: &crate::settings::LanguageSettings,
+    languages: &jig_settings::LanguageSettings,
 ) -> bool {
     let language = crate::languages::language_for(path, languages);
     registry

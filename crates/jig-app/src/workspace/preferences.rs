@@ -8,7 +8,7 @@ use gpui_kit::*;
 use jig_editor::EditorHandle as _;
 
 use super::{EditModelConfig, Workspace};
-use crate::settings::{self, EditorSettings};
+use jig_settings::{self as settings, EditorSettings};
 
 fn apply_editor(
     state: &Entity<EditorState>,

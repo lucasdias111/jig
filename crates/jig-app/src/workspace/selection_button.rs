@@ -27,8 +27,7 @@ impl SelectionButton {
         Self {
             workspace: workspace.downgrade(),
             _workspace_changed: cx.observe(workspace, |_, _, cx| cx.notify()),
-            _settings_changed: cx
-                .observe_global::<crate::settings::AppSettings>(|_, cx| cx.notify()),
+            _settings_changed: cx.observe_global::<jig_settings::AppSettings>(|_, cx| cx.notify()),
             following: None,
         }
     }
@@ -38,7 +37,7 @@ impl SelectionButton {
     /// off screen, or a note, an edit under review or a panel already on
     /// screen.
     fn position(workspace: &Workspace, window: &Window, cx: &App) -> Option<Point<Pixels>> {
-        if !crate::settings::get(cx).editor.selection_button
+        if !jig_settings::get(cx).editor.selection_button
             || workspace.home
             || workspace.modal_open()
             || workspace.note.is_some()

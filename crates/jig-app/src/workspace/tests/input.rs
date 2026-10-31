@@ -48,7 +48,7 @@ fn a_button_beside_the_selection_opens_the_agent_input(cx: &mut TestAppContext) 
 
     // Settings can turn it off, and back on.
     vcx.update(|window, cx| {
-        crate::settings::update(cx, |s| s.editor.selection_button = false);
+        jig_settings::update(cx, |s| s.editor.selection_button = false);
         window.render_frame(cx);
     });
     vcx.run_until_parked();
@@ -58,7 +58,7 @@ fn a_button_beside_the_selection_opens_the_agent_input(cx: &mut TestAppContext) 
         "turned off in Settings"
     );
     vcx.update(|window, cx| {
-        crate::settings::update(cx, |s| s.editor.selection_button = true);
+        jig_settings::update(cx, |s| s.editor.selection_button = true);
         window.render_frame(cx);
     });
     vcx.run_until_parked();

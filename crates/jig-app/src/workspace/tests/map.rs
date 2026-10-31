@@ -498,7 +498,7 @@ fn open_live(
     let (window, workspace) = open(cx, &root);
     let key = debugger.to_string();
     step(cx, window, move |_, cx| {
-        crate::settings::update(cx, |s| {
+        jig_settings::update(cx, |s| {
             s.debugging.set_enabled(&key, true);
             // C and Swift aren't in everyone's list from the start.
             for language in ["c", "swift"] {

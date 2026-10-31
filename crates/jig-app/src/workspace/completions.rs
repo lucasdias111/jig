@@ -84,7 +84,7 @@ impl Completions {
 }
 
 fn enabled(cx: &App) -> bool {
-    crate::settings::get(cx).editor.autocomplete
+    jig_settings::get(cx).editor.autocomplete
 }
 
 /// Typed in a struct literal, before a field: worth asking the server

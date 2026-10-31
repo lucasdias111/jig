@@ -10,6 +10,8 @@ use gpui_kit::{App, Global};
 use serde::{Deserialize, Serialize};
 
 mod keyboard;
+pub mod recent;
+pub mod session;
 
 pub use keyboard::{
     Group as ShortcutGroup, Shortcut, clashes as clashing_shortcuts, display as display_keys,

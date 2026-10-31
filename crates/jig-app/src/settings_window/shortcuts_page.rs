@@ -10,8 +10,8 @@ use gpui_kit::*;
 use super::SettingsWindow;
 use super::shortcut_list;
 use super::ui::{self, Row, Section};
-use crate::settings;
-use crate::settings::{Shortcut, ShortcutGroup as Group, clashing_shortcuts, display_keys};
+use jig_settings as settings;
+use jig_settings::{Shortcut, ShortcutGroup as Group, clashing_shortcuts, display_keys};
 
 /// Keys that only modify another; recording waits past them.
 const MODIFIERS: &[&str] = &[

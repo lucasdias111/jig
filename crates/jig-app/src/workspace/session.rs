@@ -1,5 +1,5 @@
 //! Each project's open files, remembered as tabs change and brought back
-//! when its folder opens on an empty window (see [`crate::session`]).
+//! when its folder opens on an empty window (see [`jig_settings::session`]).
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use super::Workspace;
 use super::tabs::canonical;
-use crate::session::{self, Session};
+use jig_settings::session::{self, Session};
 
 impl Workspace {
     /// Remember this window's tabs for its project. Untitled tabs aren't

@@ -23,7 +23,7 @@ pub fn status(server: &Server) -> (String, bool) {
     }
     match program_for(server) {
         Some((program, _)) => (
-            format!("Using {}", crate::tools::home_relative(&program)),
+            format!("Using {}", jig_tools::home_relative(&program)),
             true,
         ),
         None if server.installable() => (
@@ -52,7 +52,7 @@ pub fn install(server: &Server) -> Result<()> {
 
 fn install_into(server: &Server, dir: &Path) -> Result<()> {
     let script = server.install.as_deref().context("Nothing to install")?;
-    crate::tools::install_own_folder(script, dir)
+    jig_tools::install_own_folder(script, dir)
 }
 
 /// Move the folder Jig installed `server` into to the Trash.
@@ -167,9 +167,9 @@ mod tests {
                     .iter()
                     .filter_map(|argv| argv.first())
                     .find_map(|name| {
-                        crate::tools::bin_dirs(&own)
+                        jig_tools::bin_dirs(&own)
                             .iter()
-                            .find_map(|dir| crate::tools::executable_in(dir, name))
+                            .find_map(|dir| jig_tools::executable_in(dir, name))
                     })
                     .context("installed, but no program where Jig looks")
             });

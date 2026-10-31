@@ -23,7 +23,7 @@ use crate::debuggers::{self, Debugger};
 use crate::formatters::{self, Formatter};
 use crate::languages::{self, Language, Server, bundled};
 use crate::lsp;
-use crate::settings;
+use jig_settings as settings;
 
 /// A language's extensions as Settings shows and takes them: the user's,
 /// or the built-in ones.

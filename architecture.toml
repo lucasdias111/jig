@@ -29,6 +29,8 @@ jig-ai = ["jig-process"]
 jig-git = ["jig-commands", "jig-process"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
+jig-settings = ["jig-ai"]
+jig-tools = ["jig-process"]
 jig-updates = ["jig-commands", "jig-process"]
 jig-app = [
     "jig-ai",
@@ -38,13 +40,14 @@ jig-app = [
     "jig-map",
     "jig-planner",
     "jig-process",
+    "jig-settings",
+    "jig-tools",
     "jig-updates",
 ]
 
-# Settings files and what's remembered between launches.
+# Settings files and what's remembered between launches, in their own crate.
 [capability.settings]
-modules = ["settings", "recent", "session"]
-contract = ["settings", "recent", "session"]
+crate = "jig-settings"
 uses = []
 
 # Small shared pieces with no feature of their own.
@@ -72,10 +75,10 @@ contract = [
 uses = ["settings"]
 
 # Where Jig's tools live and installing them: the PATH programs are found
-# on, Jig's data and config folders, and running installers.
+# on, Jig's data and config folders, and running installers, in their own
+# crate.
 [capability.tools]
-modules = ["tools"]
-contract = ["tools"]
+crate = "jig-tools"
 uses = []
 
 # The languages and the language servers serving them, as data, and finding

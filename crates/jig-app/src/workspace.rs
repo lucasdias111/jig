@@ -51,9 +51,9 @@ use jig_editor::EditorHandle;
 
 use crate::document::Document;
 use crate::file_tree::FileTree;
-use crate::settings::{self, Settings};
 use crate::theme;
 use commands::{CommandRun, Note};
+use jig_settings::{self as settings, Settings};
 use mode::Mode;
 use tabs::Tab;
 

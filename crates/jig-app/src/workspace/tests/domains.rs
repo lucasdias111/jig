@@ -644,7 +644,7 @@ fn index_domains_live(cx: &mut TestAppContext) {
     jig_ai::tasks::mcp::set_command(jig.canonicalize().unwrap());
     let (window, workspace) = open(cx, &root);
     cx.update(|cx| {
-        crate::settings::init(cx);
+        jig_settings::init(cx);
         crate::providers::init(cx);
     });
     press(cx, window, "secondary-b");

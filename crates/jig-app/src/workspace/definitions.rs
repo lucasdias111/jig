@@ -72,7 +72,7 @@ struct TabInfo {
     language: &'static str,
     root: Option<PathBuf>,
     files: Option<Arc<Vec<String>>>,
-    languages: crate::settings::LanguageSettings,
+    languages: jig_settings::LanguageSettings,
     lsp: Option<(Arc<Client>, String)>,
 }
 
@@ -236,7 +236,7 @@ fn search_files(
     name: &str,
     language: &str,
     member: bool,
-    languages: &crate::settings::LanguageSettings,
+    languages: &jig_settings::LanguageSettings,
 ) -> Option<(PathBuf, lsp_types::Range)> {
     let current = current.map(canonical);
     files.iter().find_map(|file| {

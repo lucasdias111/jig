@@ -11,11 +11,11 @@ fn language_settings_rehighlight_open_tabs(cx: &mut TestAppContext) {
 
     step(cx, window, |_, cx| {
         assert_eq!(workspace.read(cx).editor().language(cx), "typescript");
-        crate::settings::update(cx, |s| s.languages.set_off("typescript", true));
+        jig_settings::update(cx, |s| s.languages.set_off("typescript", true));
     });
     step(cx, window, |_, cx| {
         assert_eq!(workspace.read(cx).editor().language(cx), "text");
-        crate::settings::update(cx, |s| s.languages.set_off("typescript", false));
+        jig_settings::update(cx, |s| s.languages.set_off("typescript", false));
     });
     step(cx, window, |_, cx| {
         assert_eq!(workspace.read(cx).editor().language(cx), "typescript");
@@ -292,7 +292,7 @@ fn same_named_files_show_their_folder(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn settings_changes_reach_open_tabs(cx: &mut TestAppContext) {
     let (dir, window, workspace) = three_files(cx);
-    cx.update(|cx| crate::settings::update(cx, |s| s.editor.soft_wrap = false));
+    cx.update(|cx| jig_settings::update(cx, |s| s.editor.soft_wrap = false));
     cx.run_until_parked();
     // Tabs opened later start with the new settings too.
     open_file(cx, window, &workspace, &dir.path().join("b.rs"));

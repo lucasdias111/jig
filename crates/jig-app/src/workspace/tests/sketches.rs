@@ -702,7 +702,7 @@ fn sketch_agent_live(cx: &mut TestAppContext) {
         .collect();
     let (window, workspace) = open(cx, &root);
     cx.update(|cx| {
-        crate::settings::init(cx);
+        jig_settings::init(cx);
         crate::providers::init(cx);
     });
     open_file(cx, window, &workspace, &file);

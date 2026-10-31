@@ -34,24 +34,21 @@ mod project;
 mod project_search;
 mod providers;
 mod quick_open;
-mod recent;
 mod run_configs;
 mod run_output;
 mod run_picker;
-mod session;
-mod settings;
 mod settings_window;
 mod shortcuts;
 mod snippets;
 mod text_edits;
 mod theme;
-mod tools;
 mod workspace;
 
 use std::path::PathBuf;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
+use jig_settings::{self as settings, recent, session};
 use workspace::{Quit, Workspace};
 
 fn main() {

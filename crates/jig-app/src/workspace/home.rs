@@ -108,7 +108,7 @@ impl Workspace {
         if project.is_dir() {
             self.open_project(&project, window, cx);
         } else {
-            crate::recent::update(cx, |recent| recent.remove(&project));
+            jig_settings::recent::update(cx, |recent| recent.remove(&project));
             self.show_error(
                 &format!("{} no longer exists.", display_path(&project)),
                 window,
@@ -137,7 +137,7 @@ impl Workspace {
                 .child(shortcut_text(keys))
         };
 
-        let recent = crate::recent::get(cx);
+        let recent = jig_settings::recent::get(cx);
         let recent_rows: Vec<AnyElement> = if recent.is_empty() {
             vec![
                 div()

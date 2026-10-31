@@ -193,9 +193,10 @@ pub fn servers_dir() -> Option<PathBuf> {
 }
 
 /// `name` in the user's Jig config folder (`~/.config/jig`); `None` in
-/// tests, so they never read the user's own files.
+/// tests, here and the app's (the `testing` feature), so they never read the
+/// user's own files.
 pub fn user_file(name: &str) -> Option<PathBuf> {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "testing")) {
         return None;
     }
     let config = std::env::var_os("XDG_CONFIG_HOME")

@@ -92,7 +92,7 @@ fn opened_folders_become_recent_projects(cx: &mut TestAppContext) {
         "on the project's page: no file is open yet"
     );
     assert_eq!(
-        cx.update(|cx| crate::recent::get(cx)),
+        cx.update(|cx| jig_settings::recent::get(cx)),
         [
             second.path().canonicalize().unwrap(),
             first.path().canonicalize().unwrap()

@@ -1046,7 +1046,7 @@ impl Workspace {
         let map_action = agent.map_action.clone();
         agent.proposed = None;
         agent.last_input = Some(input.clone());
-        let permissions = crate::settings::get(cx).agent.permissions;
+        let permissions = jig_settings::get(cx).agent.permissions;
         agent.step = LiveStep::default();
         agent.step.set(if session.is_some() {
             "Thinking".into()

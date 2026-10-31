@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::settings::LanguageSettings;
+use jig_settings::LanguageSettings;
 
 const BUILT_IN: &str = include_str!("../../../assets/default-languages.toml");
 
@@ -148,7 +148,7 @@ pub fn register_grammars() {
 
 /// The user's `language-servers.toml`; `None` in tests.
 pub fn user_path() -> Option<std::path::PathBuf> {
-    crate::tools::user_file("language-servers.toml")
+    jig_tools::user_file("language-servers.toml")
 }
 
 /// Every bundled language: the starters, then the ones to add from
@@ -257,7 +257,7 @@ pub struct Server {
     pub outermost: bool,
     /// A shell command installing it into `${dir}`, its own folder.
     pub(crate) install: Option<String>,
-    help: Option<crate::tools::Help>,
+    help: Option<jig_tools::Help>,
 }
 
 impl Server {
@@ -269,7 +269,7 @@ impl Server {
     pub fn help(&self) -> String {
         self.help.as_ref().map_or_else(
             || format!("Install {} and put it on the PATH.", self.name),
-            crate::tools::Help::text,
+            jig_tools::Help::text,
         )
     }
 
@@ -297,25 +297,25 @@ pub fn server_named(name: &str) -> Option<&'static Server> {
 
 /// `server`'s own folder in the servers folder, whether or not it's there.
 pub fn server_dir(server: &Server) -> Option<PathBuf> {
-    crate::tools::servers_dir().map(|dir| dir.join(&server.name))
+    jig_tools::servers_dir().map(|dir| dir.join(&server.name))
 }
 
 /// The first of `server`'s commands that's installed, as its program and
 /// arguments.
 pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
-    let path = crate::tools::search_path();
+    let path = jig_tools::search_path();
     let own = server_dir(server);
     server.commands.iter().find_map(|argv| {
         let (name, args) = argv.split_first()?;
-        let program = crate::tools::find_program(name, path)
+        let program = jig_tools::find_program(name, path)
             .or_else(|| {
-                crate::tools::bin_dirs(own.as_ref()?)
+                jig_tools::bin_dirs(own.as_ref()?)
                     .iter()
-                    .find_map(|dir| crate::tools::executable_in(dir, name))
+                    .find_map(|dir| jig_tools::executable_in(dir, name))
             })
             // Debuggers' installers may have put it with them.
             .or_else(|| {
-                crate::tools::debuggers_dir()
+                jig_tools::debuggers_dir()
                     .map(|dir| dir.join("bin").join(name))
                     .filter(|program| program.is_file())
             })?;
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn settings_start_with_bundled_languages() {
-        let starters = crate::settings::LanguageSettings::default().added;
+        let starters = jig_settings::LanguageSettings::default().added;
         assert!(starters.contains(&"rust".to_string()));
         for name in &starters {
             assert!(

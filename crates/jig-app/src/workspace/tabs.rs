@@ -528,7 +528,7 @@ impl Workspace {
             return None;
         }
         let theme = cx.theme();
-        let languages = crate::settings::get(cx).languages;
+        let languages = jig_settings::get(cx).languages;
         let workspace = cx.entity().downgrade();
         let count = self.tabs.len();
         let tabs = self

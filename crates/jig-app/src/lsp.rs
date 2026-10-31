@@ -17,9 +17,9 @@ use std::process::Command;
 use std::sync::Arc;
 
 use crate::languages::{Server, program_for};
-use crate::tools::search_path;
 use gpui_kit::{App, Global};
 use jig_process::NoWindow as _;
+use jig_tools::search_path;
 
 pub use client::{Client, Response};
 

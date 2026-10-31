@@ -38,11 +38,7 @@ impl Pick {
             Kind::OpenCode => crate::providers::config(cx)
                 .ok()
                 .and_then(|config| config.agent.clone().filter(|id| !id.is_empty())),
-            Kind::Acp => crate::settings::get(cx)
-                .agent
-                .models
-                .get(&agent.key)
-                .cloned(),
+            Kind::Acp => jig_settings::get(cx).agent.models.get(&agent.key).cloned(),
         };
         Self {
             agent: agent.key.clone(),

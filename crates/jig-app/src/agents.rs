@@ -17,7 +17,7 @@ use serde::Deserialize;
 const BUILT_IN: &str = include_str!("../../../assets/default-agents.toml");
 
 /// The agent used when the settings name none, or one that's gone.
-pub const DEFAULT: &str = crate::settings::DEFAULT_AGENT;
+pub const DEFAULT: &str = jig_settings::DEFAULT_AGENT;
 
 /// A starter for the user's `agents.toml`.
 pub const USER_TEMPLATE: &str = r#"# Your agents for Jig. Any agent that speaks the Agent Client
@@ -113,7 +113,7 @@ impl Agent {
 /// The `PATH` agents are looked for on and started with: the login shell's,
 /// with Jig's agents folder.
 fn search_path() -> std::ffi::OsString {
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(crate::tools::search_path()).collect();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(jig_tools::search_path()).collect();
     if let Some(dir) = agents_dir() {
         dirs.push(dir.join("node_modules/.bin"));
         dirs.push(dir.join("bin"));
@@ -197,7 +197,7 @@ pub fn user_path() -> Option<PathBuf> {
 
 /// The agent Settings picked, or OpenCode.
 pub fn chosen(cx: &App) -> Arc<Agent> {
-    named(&crate::settings::get(cx).agent.using)
+    named(&jig_settings::get(cx).agent.using)
 }
 
 /// The agent with `key`, or OpenCode when there's none.
@@ -313,7 +313,7 @@ pub fn agents_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("JIG_AGENTS_DIR") {
         return Some(PathBuf::from(dir));
     }
-    crate::tools::data_dir().map(|dir| {
+    jig_tools::data_dir().map(|dir| {
         dir.join(if cfg!(target_os = "macos") {
             "Jig"
         } else {

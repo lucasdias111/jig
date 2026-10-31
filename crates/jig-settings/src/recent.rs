@@ -21,11 +21,7 @@ pub struct RecentProjects {
 impl RecentProjects {
     /// Next to `settings.toml`.
     pub fn user_path() -> Option<PathBuf> {
-        Some(
-            crate::settings::Settings::user_path()?
-                .parent()?
-                .join("recent.toml"),
-        )
+        Some(crate::Settings::user_path()?.parent()?.join("recent.toml"))
     }
 
     /// The saved list without folders that no longer exist; empty when

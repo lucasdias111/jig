@@ -70,7 +70,7 @@ impl Sessions {
     /// Next to `settings.toml`.
     pub fn user_path() -> Option<PathBuf> {
         Some(
-            crate::settings::Settings::user_path()?
+            crate::Settings::user_path()?
                 .parent()?
                 .join("sessions.toml"),
         )

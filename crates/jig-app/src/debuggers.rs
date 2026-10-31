@@ -16,7 +16,7 @@ use jig_process::NoWindow as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::tools::{data_dir, debuggers_dir};
+use jig_tools::{data_dir, debuggers_dir};
 
 const BUILT_IN: &str = include_str!("../../../assets/default-debuggers.toml");
 
@@ -78,7 +78,7 @@ pub struct Debugger {
     /// Uninstall to move to the Trash.
     #[serde(default)]
     uninstall: Vec<String>,
-    help: Option<crate::tools::Help>,
+    help: Option<jig_tools::Help>,
     /// How the commands it debugs start, as words.
     #[serde(default)]
     commands: Vec<String>,
@@ -228,7 +228,7 @@ impl Debugger {
                 .no_window()
                 .args(&words[1..])
                 .envs(env)
-                .env("PATH", crate::tools::search_path())
+                .env("PATH", jig_tools::search_path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -522,7 +522,7 @@ pub fn status(debugger: &Debugger) -> (String, bool) {
         let plugin = lsp_bundles(server)
             .into_iter()
             .next()
-            .map(|path| crate::tools::home_relative(&path))
+            .map(|path| jig_tools::home_relative(&path))
             .unwrap_or_default();
         return (format!("Using {server} with {plugin}"), true);
     }
@@ -530,7 +530,7 @@ pub fn status(debugger: &Debugger) -> (String, bool) {
     vars.set("port", json!("0"));
     let shown = debugger
         .adapter_command(&vars)
-        .map(|adapter| crate::tools::home_relative(&adapter.shown))
+        .map(|adapter| jig_tools::home_relative(&adapter.shown))
         .unwrap_or_default();
     (format!("Using {shown}"), true)
 }
@@ -545,9 +545,9 @@ fn install_into(debugger: &Debugger, dir: &Path) -> Result<()> {
     let script = debugger.install.as_deref().context("Nothing to install")?;
     let mut vars = Vars::new(dir);
     vars.set("debuggers", json!(dir));
-    let script = crate::tools::expand_platform(script);
+    let script = jig_tools::expand_platform(script);
     let script = vars.expand_str(&script).map_err(anyhow::Error::msg)?;
-    let result = crate::tools::run_installer(&script, dir);
+    let result = jig_tools::run_installer(&script, dir);
     *CHECKS.lock().unwrap() = None;
     result
 }
@@ -643,7 +643,7 @@ pub fn lldb_dap() -> Option<PathBuf> {
 /// The newest `lldb-dap-18`-style program on the `PATH`, as Debian and
 /// Ubuntu name LLVM's tools.
 fn versioned_lldb_dap() -> Option<PathBuf> {
-    std::env::split_paths(crate::tools::search_path())
+    std::env::split_paths(jig_tools::search_path())
         .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
         .filter_map(|entry| {
@@ -692,7 +692,7 @@ fn rust_init_commands(cwd: &Path) -> Vec<String> {
         .no_window()
         .args(["--print", "sysroot"])
         .current_dir(cwd)
-        .env("PATH", crate::tools::search_path())
+        .env("PATH", jig_tools::search_path())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -726,7 +726,7 @@ fn rust_init_commands(cwd: &Path) -> Vec<String> {
 pub const WITHOUT_STRUCT_SUMMARIES: &str = "script _ = lldb.debugger.GetCategory(\"Rust\").DeleteTypeSummary(lldb.SBTypeNameSpecifier(\"lldb_lookup.is_udt\", lldb.eFormatterMatchCallback))";
 
 fn program_on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(crate::tools::search_path())
+    std::env::split_paths(jig_tools::search_path())
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
 }

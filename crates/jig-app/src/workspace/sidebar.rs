@@ -111,7 +111,7 @@ impl Workspace {
     }
 
     fn set_tree_root(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        crate::recent::update(cx, |recent| recent.push(&canonical(root)));
+        jig_settings::recent::update(cx, |recent| recent.push(&canonical(root)));
         let view = cx.new(|cx| FileTree::new(root, cx));
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             FileTreeEvent::Open(path) => this.open_file(path, window, cx),

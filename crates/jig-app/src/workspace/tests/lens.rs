@@ -442,7 +442,7 @@ fn map_agent_live(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx, &root);
     // The user's own agent and providers.
     cx.update(|cx| {
-        crate::settings::init(cx);
+        jig_settings::init(cx);
         crate::providers::init(cx);
     });
     open_file(cx, window, &workspace, &file);

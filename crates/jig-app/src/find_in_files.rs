@@ -24,7 +24,7 @@ use jig_editor::{EditorHandle as _, KitEditor};
 use crate::languages::language_for;
 use crate::project_search::{self, LineMatch, MAX_RESULTS, SearchOptions, SearchResults};
 use crate::quick_open::group_digits;
-use crate::settings::LanguageSettings;
+use jig_settings::LanguageSettings;
 
 pub const WIDTH: f32 = 760.;
 const ROW_HEIGHT: f32 = 26.;

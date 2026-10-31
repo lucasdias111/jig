@@ -1251,7 +1251,7 @@ impl Render for FileTree {
                 "file-tree-rows",
                 rows,
                 cx.processor(move |this, range: Range<usize>, _, cx| {
-                    let languages = crate::settings::get(cx).languages;
+                    let languages = jig_settings::get(cx).languages;
                     let theme = cx.theme();
                     range
                         .map(|list_ix| {

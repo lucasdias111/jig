@@ -514,18 +514,18 @@ fn breakpoints_follow_the_debugging_setting(cx: &mut TestAppContext) {
     assert!(lines(cx).is_empty());
 
     step(cx, window, |_, cx| {
-        crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+        jig_settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
     });
     toggle(cx);
     assert_eq!(lines(cx), [0].into());
 
     // Off again hides it, and on again brings it back.
     step(cx, window, |_, cx| {
-        crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", false))
+        jig_settings::update(cx, |s| s.debugging.set_enabled("typescript", false))
     });
     assert!(lines(cx).is_empty());
     step(cx, window, |_, cx| {
-        crate::settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
+        jig_settings::update(cx, |s| s.debugging.set_enabled("typescript", true))
     });
     assert_eq!(lines(cx), [0].into());
 }
@@ -589,7 +589,7 @@ fn debug_project_live(
     .unwrap();
     let (window, workspace) = open(cx, &root);
     step(cx, window, move |_, cx| {
-        crate::settings::update(cx, |s| s.debugging.set_enabled(debugger, true))
+        jig_settings::update(cx, |s| s.debugging.set_enabled(debugger, true))
     });
     open_file(cx, window, &workspace, &source);
     let ws = workspace.clone();

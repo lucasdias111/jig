@@ -3605,6 +3605,8 @@ dependencies = [
  "jig-map",
  "jig-planner",
  "jig-process",
+ "jig-settings",
+ "jig-tools",
  "jig-updates",
  "libc",
  "lsp-types",
@@ -3726,6 +3728,28 @@ name = "jig-process"
 version = "0.5.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "jig-settings"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-ai",
+ "serde",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "jig-tools"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "jig-process",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]

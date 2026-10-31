@@ -13,7 +13,7 @@ use jig_ai::agent::{Access, Permissions};
 use super::ui::{self, Row, Section};
 use super::{EditAgents, Fetch, SettingsWindow, send_to_workspace};
 use crate::agents::{self, Agent};
-use crate::settings;
+use jig_settings as settings;
 
 impl SettingsWindow {
     pub(super) fn agent_sections(&self, cx: &Context<Self>) -> Vec<Section> {

@@ -112,7 +112,7 @@ fn saving_gives_up_on_a_slow_formatter(cx: &mut TestAppContext) {
             }
             serde_json::Value::Null
         });
-    cx.update(|cx| crate::settings::update(cx, |s| s.formatting.set_on_save("rust", true)));
+    cx.update(|cx| jig_settings::update(cx, |s| s.formatting.set_on_save("rust", true)));
     let editor = cx.update(|cx| workspace.read(cx).editor().clone());
     step(cx, window, |window, cx| {
         editor.apply_edit(0..0, "// hi\n", window, cx);
@@ -150,7 +150,7 @@ fn trims_and_ends_with_a_newline_on_save_when_asked(cx: &mut TestAppContext) {
     press(cx, window, "secondary-s");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "a  \nb\t", "off");
     cx.update(|cx| {
-        crate::settings::update(cx, |s| {
+        jig_settings::update(cx, |s| {
             s.formatting.trim_trailing_whitespace = true;
             s.formatting.final_newline = true;
         })
@@ -206,7 +206,7 @@ command = ["/bin/sh", "-c", "tr a-z A-Z"]
     std::fs::write(&path, "let x = 1;  \nlet y = 2;").unwrap();
     let (window, workspace) = open(cx, &path);
     cx.update(|cx| {
-        crate::settings::update(cx, |s| {
+        jig_settings::update(cx, |s| {
             s.formatting.set_on_save("rust", true);
             s.formatting.trim_trailing_whitespace = true;
             s.formatting.final_newline = true;
@@ -250,7 +250,7 @@ languages = ["rust"]
 command = ["/bin/sh", "-c", "tr a-z A-Z"]
 "#,
     );
-    cx.update(|cx| crate::settings::update(cx, |s| s.formatting.choose("rust", Some("upper"))));
+    cx.update(|cx| jig_settings::update(cx, |s| s.formatting.choose("rust", Some("upper"))));
     let editor = cx.update(|cx| workspace.read(cx).editor().clone());
     press(cx, window, "alt-shift-f");
     wait_until(cx, |cx| cx.update(|cx| editor.text(cx)) == "FN A() {}\n");

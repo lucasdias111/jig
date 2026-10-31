@@ -11,7 +11,7 @@ use gpui_kit::{App, Global, Hsla, Rgba, SharedString, Window};
 use jig_commands::surface::EditorOpacity;
 use serde_json::Value;
 
-use crate::settings::{self, ColorSettings, ThemeChoice};
+use jig_settings::{self as settings, ColorSettings, ThemeChoice};
 
 const EMBER: &str = include_str!("../../../assets/themes/ember.json");
 
@@ -362,7 +362,7 @@ mod tests {
         EDITABLE, EMBER, SeeThrough, apply, default_color, ember_with, init, parse_hex,
         see_through_editor, to_hex,
     };
-    use crate::settings::{self, ColorSettings, ThemeChoice};
+    use jig_settings::{self as settings, ColorSettings, ThemeChoice};
 
     #[gpui_kit::test]
     fn ember_applies_in_both_modes(cx: &mut TestAppContext) {

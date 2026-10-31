@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 
 use super::{Detail, Nav, Page, START, SettingsWindow};
-use crate::settings::{self, ThemeChoice};
+use jig_settings::{self as settings, ThemeChoice};
 
 pub fn run(dir: &Path) {
     std::fs::create_dir_all(dir).expect("making the snapshots folder");

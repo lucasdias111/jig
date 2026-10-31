@@ -9,7 +9,7 @@ use super::{
     ResetZoom, SelectLine, Workspace, ZoomIn, ZoomOut,
 };
 use crate::lines::{self, LineEdit};
-use crate::settings::{self, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use jig_settings::{self as settings, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
 
 impl Workspace {
     /// Make `edit` as one undo step, if the buffer can be changed now.

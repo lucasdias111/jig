@@ -1,0 +1,23 @@
+[package]
+name = "jig-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# jig-app's tests turn this on, so they never read the user's own config
+# files.
+testing = []
+
+[dependencies]
+jig-process.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -5,8 +5,8 @@ use std::path::Path;
 use gpui_kit::Hsla;
 
 use crate::languages;
-use crate::settings::LanguageSettings;
 use crate::theme;
+use jig_settings::LanguageSettings;
 
 const RUST: &[u8] = include_bytes!("../../../assets/icons/rust.svg");
 const TYPESCRIPT: &[u8] = include_bytes!("../../../assets/icons/typescript.svg");
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn every_starter_language_has_a_logo() {
-        for name in crate::settings::LanguageSettings::default().added {
+        for name in jig_settings::LanguageSettings::default().added {
             let logo = logo(&name).unwrap_or_else(|| panic!("{name} has no logo"));
             assert!(std::str::from_utf8(logo.svg).unwrap().starts_with("<svg"));
             assert!(

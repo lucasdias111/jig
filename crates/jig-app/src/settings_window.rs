@@ -31,8 +31,8 @@ use jig_ai::{ProviderTemplate, TEMPLATES};
 
 use crate::languages::{self, Language};
 use crate::providers;
-use crate::settings::{self, Shortcut};
 use crate::theme::EDITABLE;
+use jig_settings::{self as settings, Shortcut};
 use ui::Section;
 
 actions!(jig, [OpenSettings]);
@@ -632,7 +632,7 @@ mod tests {
         is_settings_window, open,
     };
     use crate::providers;
-    use crate::settings::{self, ThemeChoice};
+    use jig_settings::{self as settings, ThemeChoice};
 
     fn open_on(nav: Nav, cx: &mut TestAppContext) -> AnyWindowHandle {
         START.set(nav);

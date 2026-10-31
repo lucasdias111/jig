@@ -6,7 +6,7 @@ use gpui_kit::*;
 
 use super::SettingsWindow;
 use super::ui::{self, Row, Section};
-use crate::settings;
+use jig_settings as settings;
 use jig_updates::{self as update, RestartToUpdate, State};
 
 impl SettingsWindow {

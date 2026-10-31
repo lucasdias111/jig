@@ -766,7 +766,7 @@ fn chat_bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option
 /// Claude Code chosen in Settings, with the models it said it offers.
 fn with_claude_code(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        crate::settings::update(cx, |s| s.agent.using = "claude-code".into());
+        jig_settings::update(cx, |s| s.agent.using = "claude-code".into());
         crate::agents::remember_models(
             "claude-code",
             jig_ai::agent::acp::AgentModels {

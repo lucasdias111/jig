@@ -10,11 +10,11 @@ use gpui_kit::*;
 
 use super::ui::{self, Row, Section};
 use super::{Detail, Nav, Page, SettingsWindow};
-use crate::settings::{
-    self, DEFAULT_TRANSLUCENCY, EditorSettings, FormatSettings, MAX_FONT_SIZE, MAX_TRANSLUCENCY,
-    MIN_FONT_SIZE, ThemeChoice,
-};
 use crate::theme::{self, EDITABLE, Section as ColorSection};
+use jig_settings::{
+    self as settings, DEFAULT_TRANSLUCENCY, EditorSettings, FormatSettings, MAX_FONT_SIZE,
+    MAX_TRANSLUCENCY, MIN_FONT_SIZE, ThemeChoice,
+};
 
 /// A color as the theme shows it now: the user's, or Ember's own.
 fn color_in_use(key: &str, cx: &App) -> Option<Hsla> {

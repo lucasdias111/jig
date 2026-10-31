@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use gpui_kit::component::input::{GoToDefinition, Replace, Search, ToggleCodeActions};
 use gpui_kit::*;
 
-use crate::settings::{self, Shortcut, ShortcutGroup as Group};
 use crate::settings_window::OpenSettings;
 use crate::workspace::*;
+use jig_settings::{self as settings, Shortcut, ShortcutGroup as Group};
 
 /// The code editor, and not the other fields that are inputs too.
 pub const CODE: &str = "CodeEditor > Input";
@@ -650,7 +650,7 @@ mod tests {
     use std::collections::{BTreeMap, HashSet};
 
     use super::{ALL, bindings};
-    use crate::settings::clashing_shortcuts as clashes;
+    use jig_settings::clashing_shortcuts as clashes;
 
     #[test]
     fn every_default_parses_and_ids_are_unique() {
