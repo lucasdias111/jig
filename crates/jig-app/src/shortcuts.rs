@@ -7,59 +7,14 @@
 use std::collections::BTreeMap;
 
 use gpui_kit::component::input::{GoToDefinition, Replace, Search, ToggleCodeActions};
-use gpui_kit::component::kbd::Kbd;
 use gpui_kit::*;
 
-use crate::settings;
+use crate::settings::{self, Shortcut, ShortcutGroup as Group};
 use crate::settings_window::OpenSettings;
 use crate::workspace::*;
 
 /// The code editor, and not the other fields that are inputs too.
 pub const CODE: &str = "CodeEditor > Input";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Group {
-    File,
-    Editing,
-    Navigation,
-    Agent,
-    View,
-    Run,
-}
-
-impl Group {
-    pub const ALL: [Group; 6] = [
-        Group::Editing,
-        Group::Navigation,
-        Group::File,
-        Group::Agent,
-        Group::View,
-        Group::Run,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Group::File => "Files and tabs",
-            Group::Editing => "Editing",
-            Group::Navigation => "Navigation",
-            Group::Agent => "Agent",
-            Group::View => "View",
-            Group::Run => "Run and debug",
-        }
-    }
-}
-
-pub struct Shortcut {
-    /// Its name in `settings.toml`.
-    pub id: &'static str,
-    pub label: &'static str,
-    pub group: Group,
-    /// The default keystrokes; the first is the one shown.
-    pub keys: &'static [&'static str],
-    /// Where it's bound: `None` for anywhere in the window.
-    contexts: &'static [Option<&'static str>],
-    action: fn() -> Box<dyn Action>,
-}
 
 fn boxed<A: Action + Default>() -> Box<dyn Action> {
     Box::new(A::default())
@@ -605,84 +560,38 @@ pub const ALL: &[Shortcut] = &[
     shortcut!("step_out", "Step out", Run, ["shift-f8"], ANYWHERE, StepOut),
 ];
 
-impl Shortcut {
-    pub fn action(&self) -> Box<dyn Action> {
-        (self.action)()
-    }
-
-    /// The keystrokes it's bound to, with `changed` (from `settings.toml`)
-    /// applied: one, or none.
-    pub fn keys_in(&self, changed: &BTreeMap<String, String>) -> Vec<String> {
-        match changed.get(self.id) {
-            Some(keys) if keys.trim().is_empty() => Vec::new(),
-            Some(keys) => vec![keys.trim().to_string()],
-            None => self.keys.iter().map(|keys| keys.to_string()).collect(),
-        }
-    }
-
-    fn bindings(&self, changed: &BTreeMap<String, String>) -> Vec<KeyBinding> {
-        let mut bindings = Vec::new();
-        for keys in self.keys_in(changed) {
-            for context in self.contexts {
-                let context = context.map(|context| {
-                    KeyBindingContextPredicate::parse(context)
-                        .expect("contexts are valid")
-                        .into()
-                });
-                match KeyBinding::load(
-                    &keys,
-                    self.action(),
-                    context,
-                    false,
-                    None,
-                    &DummyKeyboardMapper,
-                ) {
-                    Ok(binding) => bindings.push(binding),
-                    Err(error) => eprintln!("jig: shortcut {} ({keys}): {error}", self.id),
-                }
-            }
-        }
-        bindings
-    }
-}
-
 /// Every listed shortcut, bound with `changed` applied.
 pub fn bindings(changed: &BTreeMap<String, String>) -> Vec<KeyBinding> {
     ALL.iter()
-        .flat_map(|shortcut| shortcut.bindings(changed))
+        .flat_map(|shortcut| bindings_of(shortcut, changed))
         .collect()
 }
 
-/// How `keys` look on this platform: `⇧⌘D` and `⌘⏎` on a Mac,
-/// `Ctrl+Shift+D` elsewhere. Text that isn't a keystroke is shown as it is.
-pub fn display(keys: &str) -> String {
-    keys.split_whitespace()
-        .map(|keys| {
-            Keystroke::parse(keys).map_or_else(|_| keys.to_string(), |keys| Kbd::format(&keys))
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The other shortcuts sharing a keystroke with `shortcut`, by label.
-pub fn clashes(shortcut: &Shortcut, changed: &BTreeMap<String, String>) -> Vec<&'static str> {
-    let normal = |keys: &str| Keystroke::parse(keys).map(|keys| keys.unparse()).ok();
-    let mine: Vec<_> = shortcut
-        .keys_in(changed)
-        .iter()
-        .filter_map(|keys| normal(keys))
-        .collect();
-    ALL.iter()
-        .filter(|other| other.id != shortcut.id)
-        .filter(|other| {
-            other
-                .keys_in(changed)
-                .iter()
-                .filter_map(|keys| normal(keys))
-                .any(|keys| mine.contains(&keys))
-        })
-        .map(|other| other.label)
-        .collect()
+/// The key bindings `shortcut` makes, with `changed` (from `settings.toml`)
+/// applied.
+fn bindings_of(shortcut: &Shortcut, changed: &BTreeMap<String, String>) -> Vec<KeyBinding> {
+    let mut bindings = Vec::new();
+    for keys in shortcut.keys_in(changed) {
+        for context in shortcut.contexts {
+            let context = context.map(|context| {
+                KeyBindingContextPredicate::parse(context)
+                    .expect("contexts are valid")
+                    .into()
+            });
+            match KeyBinding::load(
+                &keys,
+                shortcut.action(),
+                context,
+                false,
+                None,
+                &DummyKeyboardMapper,
+            ) {
+                Ok(binding) => bindings.push(binding),
+                Err(error) => eprintln!("jig: shortcut {} ({keys}): {error}", shortcut.id),
+            }
+        }
+    }
+    bindings
 }
 
 /// The keymap without the listed shortcuts, and the changes last bound.
@@ -740,7 +649,8 @@ fn bind(changed: &BTreeMap<String, String>, cx: &mut App) {
 mod tests {
     use std::collections::{BTreeMap, HashSet};
 
-    use super::{ALL, bindings, clashes};
+    use super::{ALL, bindings};
+    use crate::settings::clashing_shortcuts as clashes;
 
     #[test]
     fn every_default_parses_and_ids_are_unique() {
@@ -757,7 +667,7 @@ mod tests {
     fn defaults_dont_clash() {
         for shortcut in ALL {
             assert_eq!(
-                clashes(shortcut, &BTreeMap::new()),
+                clashes(shortcut, ALL, &BTreeMap::new()),
                 Vec::<&str>::new(),
                 "{}",
                 shortcut.id
@@ -771,7 +681,7 @@ mod tests {
         let mut changed = BTreeMap::new();
         changed.insert("save".to_string(), "secondary-shift-d".to_string());
         assert_eq!(save.keys_in(&changed), ["secondary-shift-d"]);
-        assert_eq!(clashes(save, &changed), ["Duplicate line"]);
+        assert_eq!(clashes(save, ALL, &changed), ["Duplicate line"]);
         changed.insert("save".to_string(), String::new());
         assert!(save.keys_in(&changed).is_empty());
     }

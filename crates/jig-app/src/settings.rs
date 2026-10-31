@@ -9,6 +9,12 @@ use anyhow::{Context as _, Result};
 use gpui_kit::{App, Global};
 use serde::{Deserialize, Serialize};
 
+mod keyboard;
+
+pub use keyboard::{
+    Group as ShortcutGroup, Shortcut, clashes as clashing_shortcuts, display as display_keys,
+};
+
 pub const DEFAULT_FONT_SIZE: f32 = 13.5;
 pub const MIN_FONT_SIZE: f32 = 9.;
 pub const MAX_FONT_SIZE: f32 = 28.;

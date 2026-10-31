@@ -1,4 +1,3 @@
 # Crossings between jig-app's capabilities that architecture.toml doesn't allow,
 # kept until they're gone. Each line is `from module -> to module`.
 # Written by JIG_ARCH_BLESS=1 cargo test -p jig-app --test architecture.
-settings_window::shortcuts_page -> shortcuts

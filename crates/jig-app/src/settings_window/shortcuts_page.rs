@@ -8,9 +8,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::SettingsWindow;
+use super::shortcut_list;
 use super::ui::{self, Row, Section};
 use crate::settings;
-use crate::shortcuts::{self, ALL, Group, Shortcut};
+use crate::settings::{Shortcut, ShortcutGroup as Group, clashing_shortcuts, display_keys};
 
 /// Keys that only modify another; recording waits past them.
 const MODIFIERS: &[&str] = &[
@@ -30,15 +31,16 @@ impl SettingsWindow {
         let any_changed = !changed.is_empty();
         let recording = self.recording.as_ref().map(|recording| recording.id);
         let this = cx.entity().downgrade();
+        let all = shortcut_list(cx);
         Group::ALL
             .into_iter()
             .enumerate()
             .map(|(ix, group)| {
-                let rows = ALL
+                let rows = all
                     .iter()
                     .filter(|shortcut| shortcut.group == group)
                     .map(|shortcut| {
-                        let clashes = shortcuts::clashes(shortcut, &changed);
+                        let clashes = clashing_shortcuts(shortcut, all, &changed);
                         let this = this.clone();
                         Row::new(shortcut.id, shortcut.label)
                             .description_opt(
@@ -116,7 +118,10 @@ impl SettingsWindow {
             "backspace" | "delete" if plain => String::new(),
             _ => keystroke.unparse(),
         };
-        let Some(shortcut) = ALL.iter().find(|shortcut| shortcut.id == recording.id) else {
+        let Some(shortcut) = shortcut_list(cx)
+            .iter()
+            .find(|shortcut| shortcut.id == recording.id)
+        else {
             return;
         };
         let is_default = shortcut.keys.len() == 1
@@ -147,7 +152,7 @@ fn keys_field(
         "None".to_string()
     } else {
         keys.iter()
-            .map(|keys| shortcuts::display(keys))
+            .map(|keys| display_keys(keys))
             .collect::<Vec<_>>()
             .join("  or  ")
     };

@@ -111,7 +111,7 @@ fn main() {
             cx.bind_keys(workspace::key_bindings());
             // Before the menus: they show only shortcuts bound by then.
             jig_commands::windows::init(cx, is_editor_window);
-            settings_window::init(cx);
+            settings_window::init(cx, shortcuts::ALL);
             menus::init(cx);
             // Last: it takes over the shortcuts Settings can change.
             shortcuts::init(cx);

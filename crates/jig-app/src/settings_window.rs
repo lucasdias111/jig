@@ -31,7 +31,7 @@ use jig_ai::{ProviderTemplate, TEMPLATES};
 
 use crate::languages::{self, Language};
 use crate::providers;
-use crate::settings;
+use crate::settings::{self, Shortcut};
 use crate::theme::EDITABLE;
 use ui::Section;
 
@@ -187,7 +187,19 @@ struct OpenWindow(AnyWindowHandle);
 
 impl Global for OpenWindow {}
 
-pub fn init(cx: &mut App) {
+/// The shortcuts the Keyboard page lists, as the app hands them over.
+struct ShortcutList(&'static [Shortcut]);
+
+impl Global for ShortcutList {}
+
+fn shortcut_list(cx: &App) -> &'static [Shortcut] {
+    cx.try_global::<ShortcutList>().map_or(&[], |list| list.0)
+}
+
+/// Bind ⌘, and say which shortcuts the Keyboard page lists: the app's
+/// own, which name actions from all over it.
+pub fn init(cx: &mut App, shortcuts: &'static [Shortcut]) {
+    cx.set_global(ShortcutList(shortcuts));
     cx.bind_keys([KeyBinding::new("secondary-,", OpenSettings, None)]);
     cx.on_action(|_: &OpenSettings, cx| open(cx));
 }
@@ -627,7 +639,7 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::init(cx);
             crate::theme::init(cx);
-            init(cx);
+            init(cx, crate::shortcuts::ALL);
             open(cx);
         });
         cx.run_until_parked();
@@ -661,7 +673,7 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::init(cx);
             crate::theme::init(cx);
-            init(cx);
+            init(cx, crate::shortcuts::ALL);
             open(cx);
             open(cx);
         });
