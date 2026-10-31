@@ -59,7 +59,7 @@ impl Workspace {
     pub(super) fn reload_provider(&mut self, cx: &App) {
         // A new default model in Settings takes over from ⌘K's pick; the
         // providers also change as their model lists load, which doesn't.
-        let defaults = crate::providers::config(cx)
+        let defaults = jig_agent::providers::config(cx)
             .ok()
             .map(|config| config.agent.clone());
         if self.model_defaults.as_ref() != Some(&defaults) {

@@ -297,13 +297,13 @@ fn read_messages(id: usize, reader: impl Read, replies: mpsc::Sender<Vec<u8>>, i
     let _ = inbox.unbounded_send((id, Message::Closed));
 }
 
-pub(crate) fn frame(message: &Value) -> Vec<u8> {
+pub fn frame(message: &Value) -> Vec<u8> {
     let body = message.to_string();
     format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
 }
 
 /// The next message, or `None` once the stream ends or breaks.
-pub(crate) fn read_message(reader: &mut impl BufRead) -> Option<Value> {
+pub fn read_message(reader: &mut impl BufRead) -> Option<Value> {
     let mut length = None;
     loop {
         let mut header = String::new();
@@ -327,7 +327,7 @@ pub(crate) fn read_message(reader: &mut impl BufRead) -> Option<Value> {
 
 /// Two connected sockets, standing in for a client and its adapter in
 /// tests. Loopback TCP, since Unix socket pairs don't exist on Windows.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn socket_pair() -> (std::net::TcpStream, std::net::TcpStream) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let ours = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();

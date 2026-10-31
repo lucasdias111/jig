@@ -91,7 +91,7 @@ enum Request {
 pub(super) struct AgentState {
     /// The agent and model picked in ⌘K for new conversations; `None`
     /// follows the settings.
-    pub(super) pick: Option<crate::agent::Pick>,
+    pub(super) pick: Option<jig_agent::agent::Pick>,
     /// What the ⌘K input lists, from the last time it asked.
     catalog: Option<AgentCatalog>,
     catalog_loading: bool,
@@ -132,7 +132,7 @@ pub(super) struct AgentRun {
     /// The agent and model it runs on: ⌘K's pick when it started, else the
     /// settings'. The conversation keeps its agent; its header changes the
     /// model.
-    pub(super) pick: Option<crate::agent::Pick>,
+    pub(super) pick: Option<jig_agent::agent::Pick>,
     /// The header's list of models is open.
     models_open: bool,
     /// The agent wants the user to sign in first.
@@ -426,7 +426,7 @@ impl Workspace {
         agent.entries.clear();
         agent.loading = true;
         let directory = agent.directory.clone();
-        let choice = crate::agent::choice_for(agent.pick.as_ref(), cx);
+        let choice = jig_agent::agent::choice_for(agent.pick.as_ref(), cx);
         if let Some(run) = self.chat.as_mut() {
             run.agent = Some(agent);
         }
@@ -438,7 +438,7 @@ impl Workspace {
             };
             let result = (|| {
                 let choice = choice.map_err(anyhow::Error::msg)?;
-                let backend = crate::agent::connect(&choice)?;
+                let backend = jig_agent::agent::connect(&choice)?;
                 let session = backend.open(&directory, &session_id)?;
                 let turns = session.history()?;
                 if let Some(model) = choice.acp_model() {
@@ -543,25 +543,25 @@ impl Workspace {
     /// What ⌘K's model chip offers: each installed agent with its models
     /// (OpenCode's from the providers, the others' as they last said).
     pub(super) fn model_menu(&self, cx: &App) -> ModelMenu {
-        let offered = crate::providers::offered_by_provider(cx);
+        let offered = jig_agent::providers::offered_by_provider(cx);
         let picked = self.picked_agent(cx);
         let pick = self
             .agent
             .pick
             .clone()
-            .unwrap_or_else(|| crate::agent::Pick::from_settings(cx));
+            .unwrap_or_else(|| jig_agent::agent::Pick::from_settings(cx));
         let mut agent = ModelMenu::default();
-        for listed in crate::agents::registry().agents.iter() {
+        for listed in jig_agent::agents::registry().agents.iter() {
             // Agents not installed would only fail; the chosen one shows anyway.
-            if listed.key != picked.key && !crate::agents::status(listed).1 {
+            if listed.key != picked.key && !jig_agent::agents::status(listed).1 {
                 continue;
             }
             let own: Vec<(String, String)> = match listed.kind {
-                crate::agents::Kind::OpenCode => offered
+                jig_agent::agents::Kind::OpenCode => offered
                     .iter()
                     .map(|(id, provider, model)| (id.clone(), format!("{provider} · {model}")))
                     .collect(),
-                crate::agents::Kind::Acp => crate::agents::known_models(&listed.key)
+                jig_agent::agents::Kind::Acp => jig_agent::agents::known_models(&listed.key)
                     .map(|models| models.options)
                     .unwrap_or_default(),
             };
@@ -615,18 +615,18 @@ impl Workspace {
         let Some(agent) = choice.agent else {
             return;
         };
-        let pick = crate::agent::Pick {
+        let pick = jig_agent::agent::Pick {
             agent,
             model: choice.model,
         };
         // The settings' own choice needs no pick.
-        self.agent.pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
+        self.agent.pick = (pick != jig_agent::agent::Pick::from_settings(cx)).then_some(pick);
         if self.mode == super::mode::Mode::Agent {
             let pick = self
                 .agent
                 .pick
                 .clone()
-                .unwrap_or_else(|| crate::agent::Pick::from_settings(cx));
+                .unwrap_or_else(|| jig_agent::agent::Pick::from_settings(cx));
             let label = self.picked_agent(cx).name.clone();
             if let Some(agent) = self
                 .chat
@@ -661,10 +661,10 @@ impl Workspace {
             .as_ref()
             .and_then(|chat| chat.agent.as_ref())
             .is_some_and(|agent| agent.models_open);
-        let agent = crate::agents::named(&pick.agent);
+        let agent = jig_agent::agents::named(&pick.agent);
         let listed: Vec<(String, String)> = match agent.kind {
-            crate::agents::Kind::OpenCode => crate::providers::offered(cx),
-            crate::agents::Kind::Acp => crate::agents::known_models(&agent.key)
+            jig_agent::agents::Kind::OpenCode => jig_agent::providers::offered(cx),
+            jig_agent::agents::Kind::Acp => jig_agent::agents::known_models(&agent.key)
                 .map(|models| models.options)
                 .unwrap_or_default(),
         };
@@ -677,7 +677,7 @@ impl Workspace {
         let in_use = pick
             .model
             .clone()
-            .or_else(|| crate::agents::known_models(&agent.key).map(|models| models.current));
+            .or_else(|| jig_agent::agents::known_models(&agent.key).map(|models| models.current));
         let current = match values.iter().position(|value| *value == in_use) {
             Some(at) => at,
             None => {
@@ -737,10 +737,10 @@ impl Workspace {
     }
 
     /// The agent new conversations run: picked in ⌘K, else in Settings.
-    pub(super) fn picked_agent(&self, cx: &App) -> std::sync::Arc<crate::agents::Agent> {
+    pub(super) fn picked_agent(&self, cx: &App) -> std::sync::Arc<jig_agent::agents::Agent> {
         match &self.agent.pick {
-            Some(pick) => crate::agents::named(&pick.agent),
-            None => crate::agents::chosen(cx),
+            Some(pick) => jig_agent::agents::named(&pick.agent),
+            None => jig_agent::agents::chosen(cx),
         }
     }
 
@@ -751,14 +751,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = crate::agents::user_path() else {
+        let Some(path) = jig_agent::agents::user_path() else {
             return;
         };
         if !path.exists() {
             let created = path
                 .parent()
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, crate::agents::USER_TEMPLATE));
+                .and_then(|()| std::fs::write(&path, jig_agent::agents::USER_TEMPLATE));
             if let Err(error) = created {
                 self.show_error(
                     &format!("Couldn't create {}: {error}", path.display()),
@@ -798,12 +798,12 @@ impl Workspace {
         self.agent.catalog_loading = true;
         self.agent.catalog_error = None;
         cx.notify();
-        let choice = crate::agent::choice_for(self.agent.pick.as_ref(), cx);
+        let choice = jig_agent::agent::choice_for(self.agent.pick.as_ref(), cx);
         let task = cx.background_executor().spawn({
             let directory = directory.clone();
             async move {
                 let choice = choice.map_err(anyhow::Error::msg)?;
-                let backend = crate::agent::connect(&choice)?;
+                let backend = jig_agent::agent::connect(&choice)?;
                 let conversations = backend.conversations(&directory)?;
                 let commands = backend.commands(&directory).unwrap_or_default();
                 anyhow::Ok((conversations, commands))
@@ -886,7 +886,7 @@ impl Workspace {
                 self.agent
                     .pick
                     .clone()
-                    .unwrap_or_else(|| crate::agent::Pick::from_settings(cx)),
+                    .unwrap_or_else(|| jig_agent::agent::Pick::from_settings(cx)),
             ),
             models_open: false,
             sign_in: None,
@@ -1036,7 +1036,7 @@ impl Workspace {
         }
         // Read on this thread: the keys and settings live in the app.
         let pick = self.agent_run(id).and_then(|agent| agent.pick.clone());
-        let choice = crate::agent::choice_for(pick.as_ref(), cx);
+        let choice = jig_agent::agent::choice_for(pick.as_ref(), cx);
         let Some(agent) = self.agent_run(id) else {
             return;
         };
@@ -1072,7 +1072,7 @@ impl Workspace {
                 let session = match session {
                     Some(session) => session,
                     None => {
-                        let backend = crate::agent::connect(&choice)?;
+                        let backend = jig_agent::agent::connect(&choice)?;
                         let session =
                             backend.create(&directory, &title, &permissions, choice.acp_model())?;
                         if let Some(models) = backend.models() {
@@ -1315,7 +1315,7 @@ impl Workspace {
             return;
         };
         match &method.terminal {
-            Some(command) => match crate::agent::open_in_terminal(command) {
+            Some(command) => match jig_agent::agent::open_in_terminal(command) {
                 Ok(()) => {
                     pending.opened = true;
                     let input = agent.input.clone();
@@ -1347,9 +1347,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let pick = self.agent_run(id).and_then(|agent| agent.pick.clone());
-        let choice = crate::agent::choice_for(pick.as_ref(), cx);
+        let choice = jig_agent::agent::choice_for(pick.as_ref(), cx);
         let task = cx.background_executor().spawn(async move {
-            let backend = crate::agent::connect(&choice.map_err(anyhow::Error::msg)?)?;
+            let backend = jig_agent::agent::connect(&choice.map_err(anyhow::Error::msg)?)?;
             if let jig_ai::agent::harness::Backend::Acp(connection) = backend {
                 connection.authenticate(&method)?;
             }
@@ -2545,7 +2545,7 @@ impl Workspace {
         };
         match message {
             Message::Started(session) => agent.session = Some(session),
-            Message::Models(key, models) => crate::agents::remember_models(&key, models),
+            Message::Models(key, models) => jig_agent::agents::remember_models(&key, models),
             Message::Resumed(session, turns) => {
                 agent.session = Some(session);
                 agent.loading = false;

@@ -3576,6 +3576,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jig-agent"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-ai",
+ "jig-process",
+ "jig-settings",
+ "jig-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "jig-ai"
 version = "0.5.0"
 dependencies = [
@@ -3598,8 +3614,10 @@ dependencies = [
  "futures",
  "gpui-kit",
  "ignore",
+ "jig-agent",
  "jig-ai",
  "jig-commands",
+ "jig-debug",
  "jig-debuggers",
  "jig-editing",
  "jig-editor",
@@ -3611,6 +3629,7 @@ dependencies = [
  "jig-lsp",
  "jig-map",
  "jig-planner",
+ "jig-preferences",
  "jig-process",
  "jig-run",
  "jig-search",
@@ -3670,6 +3689,21 @@ dependencies = [
  "serde",
  "tempfile",
  "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "jig-debug"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "jig-debuggers",
+ "jig-lsp",
+ "jig-process",
+ "jig-run",
+ "jig-tools",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3866,6 +3900,25 @@ dependencies = [
  "regex",
  "tempfile",
  "trash",
+]
+
+[[package]]
+name = "jig-preferences"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-agent",
+ "jig-ai",
+ "jig-commands",
+ "jig-debuggers",
+ "jig-formatters",
+ "jig-kit",
+ "jig-languages",
+ "jig-lsp",
+ "jig-settings",
+ "jig-updates",
+ "tempfile",
 ]
 
 [[package]]

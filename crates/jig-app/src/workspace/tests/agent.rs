@@ -517,7 +517,7 @@ fn the_agent_picked_in_command_k_runs_the_next_conversation(cx: &mut TestAppCont
         let agent = this.chat.as_ref().unwrap().agent.as_ref().unwrap();
         assert_eq!(
             agent.pick,
-            Some(crate::agent::Pick {
+            Some(jig_agent::agent::Pick {
                 agent: "claude-code".into(),
                 model: Some("opus".into()),
             }),
@@ -749,7 +749,7 @@ fn agent_live_edit_is_reviewed_then_written(cx: &mut TestAppContext) {
         "{entries:?}"
     );
     eprintln!("agent answered: {answer:?}");
-    crate::agent::stop();
+    jig_agent::agent::stop();
 }
 
 /// The agent conversation's status, which it keeps apart from ⌘K's bubble.
@@ -767,7 +767,7 @@ fn chat_bubble(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option
 fn with_claude_code(cx: &mut TestAppContext) {
     cx.update(|cx| {
         jig_settings::update(cx, |s| s.agent.using = "claude-code".into());
-        crate::agents::remember_models(
+        jig_agent::agents::remember_models(
             "claude-code",
             jig_ai::agent::acp::AgentModels {
                 config_id: "model".into(),

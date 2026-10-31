@@ -12,7 +12,7 @@ use jig_ai::agent::{Access, Permissions};
 
 use super::ui::{self, Row, Section};
 use super::{EditAgents, Fetch, SettingsWindow, send_to_workspace};
-use crate::agents::{self, Agent};
+use jig_agent::agents::{self, Agent};
 use jig_settings as settings;
 
 impl SettingsWindow {
@@ -48,7 +48,7 @@ impl SettingsWindow {
         );
         // OpenCode runs on a model from Jig's providers; the others offer
         // their own, as they said the last time Jig talked to them.
-        section = match (chosen.kind, crate::providers::config(cx)) {
+        section = match (chosen.kind, jig_agent::providers::config(cx)) {
             (agents::Kind::OpenCode, Ok(config)) => {
                 section.row(self.opencode_model_row(&config, cx))
             }
@@ -247,23 +247,23 @@ impl SettingsWindow {
         {
             return;
         }
-        let pick = crate::agent::Pick {
+        let pick = jig_agent::agent::Pick {
             agent: agent.key.clone(),
             model: None,
         };
-        let choice = crate::agent::choice_for(Some(&pick), cx);
+        let choice = jig_agent::agent::choice_for(Some(&pick), cx);
         let key = agent.key.clone();
         self.model_lookups.insert(
             key.clone(),
             Fetch::Running(format!("Asking {} which models it offers…", agent.name).into()),
         );
         cx.spawn(async move |this, cx| {
-            let result =
-                cx.background_executor()
-                    .spawn(async move {
-                        crate::agent::look_up_models(&choice.map_err(anyhow::Error::msg)?)
-                    })
-                    .await;
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    jig_agent::agent::look_up_models(&choice.map_err(anyhow::Error::msg)?)
+                })
+                .await;
             this.update(cx, |this, cx| {
                 let fetch = match result {
                     Ok(Some(models)) => {

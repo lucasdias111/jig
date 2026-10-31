@@ -57,7 +57,7 @@ use jig_settings::{self as settings, Settings};
 use mode::Mode;
 use tabs::Tab;
 
-pub use crate::settings_window::{
+pub use jig_preferences::settings_window::{
     EditAgents, EditDebuggers, EditFormatters, EditLanguageServers, EditModelConfig,
 };
 pub use jig_search::quick_open::GoToFile;
@@ -314,7 +314,7 @@ impl Workspace {
             this.reopen_in_servers(false, cx)
         })
         .detach();
-        cx.observe_global::<crate::providers::Providers>(|this, cx| {
+        cx.observe_global::<jig_agent::providers::Providers>(|this, cx| {
             this.reload_provider(cx);
             // Model lists arriving fill in an open palette's chip.
             this.refresh_palette_models(cx);
@@ -582,7 +582,7 @@ impl Workspace {
         self.lsp_saved(cx);
         self.update_title(window);
         if self.is_config_file() {
-            crate::providers::reload(cx);
+            jig_agent::providers::reload(cx);
         }
         self.run_file_saved(path, window, cx);
         self.refresh_git_panel(window, cx);

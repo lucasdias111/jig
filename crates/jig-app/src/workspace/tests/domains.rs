@@ -645,7 +645,7 @@ fn index_domains_live(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx, &root);
     cx.update(|cx| {
         jig_settings::init(cx);
-        crate::providers::init(cx);
+        jig_agent::providers::init(cx);
     });
     press(cx, window, "secondary-b");
     wait_until(cx, |cx| {

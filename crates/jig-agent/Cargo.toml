@@ -1,0 +1,36 @@
+[package]
+name = "jig-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["dep:tempfile", "gpui-kit/test-support", "jig-tools/testing"]
+# Providers kept in a folder of their own, for pictures of Settings.
+snapshots = []
+
+[dependencies]
+gpui-kit.workspace = true
+jig-ai.workspace = true
+jig-settings.workspace = true
+jig-tools.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+# A temporary providers folder (`providers::init_temp`), for the testing feature.
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+jig-tools = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

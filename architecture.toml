@@ -26,6 +26,8 @@ jig-process = []
 jig-editor = []
 jig-commands = []
 jig-ai = ["jig-process"]
+jig-agent = ["jig-ai", "jig-process", "jig-settings", "jig-tools"]
+jig-debug = ["jig-debuggers", "jig-lsp", "jig-process", "jig-run", "jig-tools"]
 jig-debuggers = ["jig-languages", "jig-process", "jig-tools"]
 jig-editing = ["jig-commands", "jig-languages", "jig-lsp", "jig-settings"]
 jig-files = ["jig-kit", "jig-languages", "jig-search", "jig-settings"]
@@ -36,14 +38,17 @@ jig-languages = ["jig-settings", "jig-tools"]
 jig-lsp = ["jig-debuggers", "jig-kit", "jig-languages", "jig-process", "jig-tools"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
+jig-preferences = ["jig-agent", "jig-ai", "jig-commands", "jig-debuggers", "jig-formatters", "jig-kit", "jig-languages", "jig-lsp", "jig-settings", "jig-updates"]
 jig-run = ["jig-commands", "jig-process", "jig-tools"]
 jig-search = ["jig-commands", "jig-editor", "jig-languages", "jig-settings"]
 jig-settings = ["jig-ai"]
 jig-tools = ["jig-process"]
 jig-updates = ["jig-commands", "jig-process"]
 jig-app = [
+    "jig-agent",
     "jig-ai",
     "jig-commands",
+    "jig-debug",
     "jig-debuggers",
     "jig-editing",
     "jig-editor",
@@ -55,6 +60,7 @@ jig-app = [
     "jig-lsp",
     "jig-map",
     "jig-planner",
+    "jig-preferences",
     "jig-process",
     "jig-run",
     "jig-search",
@@ -126,10 +132,9 @@ uses = []
 crate = "jig-run"
 uses = ["kit", "tools"]
 
-# Debug sessions over the Debug Adapter Protocol.
+# Debug sessions over the Debug Adapter Protocol, in its own crate.
 [capability.debug]
-modules = ["dap", "debug_target", "lsp_debug"]
-contract = ["dap", "debug_target", "lsp_debug"]
+crate = "jig-debug"
 uses = [
     "kit",
     "debuggers",
@@ -138,10 +143,9 @@ uses = [
     "run",
 ]
 
-# The coding agent: agents as data, providers and the shared OpenCode server.
+# The coding agent: agents as data, providers and the shared OpenCode server, in its own crate.
 [capability.agent]
-modules = ["agent", "agents", "providers"]
-contract = ["agent", "agents", "providers"]
+crate = "jig-agent"
 uses = ["settings", "kit", "tools"]
 
 # The task planner, in its own crate.
@@ -159,10 +163,9 @@ uses = []
 crate = "jig-updates"
 uses = []
 
-# The Settings and About windows.
+# The Settings and About windows, in its own crate.
 [capability.preferences]
-modules = ["settings_window", "about_window"]
-contract = ["settings_window", "about_window"]
+crate = "jig-preferences"
 uses = [
     "settings",
     "kit",

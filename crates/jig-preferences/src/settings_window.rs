@@ -29,7 +29,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::{ProviderTemplate, TEMPLATES};
 
-use crate::providers;
+use jig_agent::providers;
 use jig_kit::theme::EDITABLE;
 use jig_languages::{self as languages, Language};
 use jig_settings::{self as settings, Shortcut};
@@ -238,7 +238,7 @@ pub fn is_settings_window(window: AnyWindowHandle, cx: &App) -> bool {
 }
 
 /// Run `action` in the frontmost editor window, bringing it forward.
-pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
+pub fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
     jig_commands::windows::send_to_editor(action, cx);
 }
 
@@ -631,15 +631,31 @@ mod tests {
         Detail, Nav, OpenWindow, Page, START, SettingsWindow, appearance_page, init,
         is_settings_window, open,
     };
-    use crate::providers;
-    use jig_settings::{self as settings, ThemeChoice};
+    use jig_agent::providers;
+    use jig_settings::{self as settings, Shortcut, ShortcutGroup, ThemeChoice};
+
+    gpui_kit::actions!(settings_tests, [TestSave]);
+
+    fn test_save() -> Box<dyn gpui_kit::Action> {
+        Box::new(TestSave)
+    }
+
+    /// What the Keyboard page lists in these tests: Save, as the app has it.
+    const SHORTCUTS: &[Shortcut] = &[Shortcut {
+        id: "save",
+        label: "Save",
+        group: ShortcutGroup::File,
+        keys: &["secondary-s"],
+        contexts: &[None],
+        action: test_save,
+    }];
 
     fn open_on(nav: Nav, cx: &mut TestAppContext) -> AnyWindowHandle {
         START.set(nav);
         cx.update(|cx| {
             gpui_kit::init(cx);
             jig_kit::theme::init(cx);
-            init(cx, crate::shortcuts::ALL);
+            init(cx, SHORTCUTS);
             open(cx);
         });
         cx.run_until_parked();
@@ -673,7 +689,7 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::init(cx);
             jig_kit::theme::init(cx);
-            init(cx, crate::shortcuts::ALL);
+            init(cx, SHORTCUTS);
             open(cx);
             open(cx);
         });

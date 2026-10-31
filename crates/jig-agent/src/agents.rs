@@ -189,7 +189,7 @@ fn parse(text: &str) -> Result<Vec<Agent>> {
 
 /// The user's `agents.toml`; `None` in tests.
 pub fn user_path() -> Option<PathBuf> {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "testing")) {
         return None;
     }
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/jig/agents.toml"))
@@ -216,7 +216,7 @@ static KNOWN_MODELS: Mutex<Option<std::collections::BTreeMap<String, AgentModels
     Mutex::new(None);
 
 fn models_file() -> Option<PathBuf> {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "testing")) {
         return None;
     }
     agents_dir().map(|dir| dir.join("models.json"))

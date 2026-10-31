@@ -1,0 +1,42 @@
+[package]
+name = "jig-preferences"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["jig-agent/testing", "jig-lsp/testing", "jig-debuggers/testing", "jig-formatters/testing", "jig-languages/testing", "jig-kit/testing", "jig-updates/testing"]
+# Pictures of every Settings page (`settings_window::render_snapshots`).
+snapshots = ["gpui-kit/test-support", "jig-agent/snapshots"]
+
+[dependencies]
+gpui-kit.workspace = true
+jig-commands.workspace = true
+jig-ai.workspace = true
+jig-agent.workspace = true
+jig-lsp.workspace = true
+jig-debuggers.workspace = true
+jig-formatters.workspace = true
+jig-languages.workspace = true
+jig-kit.workspace = true
+jig-settings.workspace = true
+jig-updates.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+jig-agent = { workspace = true, features = ["testing"] }
+jig-lsp = { workspace = true, features = ["testing"] }
+jig-debuggers = { workspace = true, features = ["testing"] }
+jig-formatters = { workspace = true, features = ["testing"] }
+jig-languages = { workspace = true, features = ["testing"] }
+jig-kit = { workspace = true, features = ["testing"] }
+jig-updates = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

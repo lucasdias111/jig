@@ -1,0 +1,32 @@
+[package]
+name = "jig-debug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["jig-run/testing", "jig-lsp/testing", "jig-debuggers/testing", "jig-tools/testing"]
+
+[dependencies]
+jig-run.workspace = true
+jig-lsp.workspace = true
+jig-debuggers.workspace = true
+jig-tools.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+futures = "0.3"
+
+[dev-dependencies]
+jig-run = { workspace = true, features = ["testing"] }
+jig-lsp = { workspace = true, features = ["testing"] }
+jig-debuggers = { workspace = true, features = ["testing"] }
+jig-tools = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

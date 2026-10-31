@@ -20,8 +20,8 @@ use gpui_kit::*;
 use serde_json::{Value, json};
 
 use super::{DebugSelected, EditDebuggers, Resume, StepInto, StepOut, StepOver, Workspace};
-use crate::dap::{self, Message};
-use crate::debug_target::{self, Build, DebugPlan};
+use jig_debug::dap::{self, Message};
+use jig_debug::debug_target::{self, Build, DebugPlan};
 use jig_debuggers::{self as debuggers, Debugger, Vars};
 use jig_run::run_configs::RunConfig;
 use jig_run::run_output::{OutputLine, Stream, Style};
@@ -301,7 +301,7 @@ fn start_lsp_adapter(
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     let (server, start, root) = (server.to_string(), start.to_string(), root.to_path_buf());
     std::thread::spawn(move || {
-        let started = crate::lsp_debug::start(&client, &server, &start, &root, &prefer);
+        let started = jig_debug::lsp_debug::start(&client, &server, &start, &root, &prefer);
         let _ = port_tx.send(started.map(|started| {
             *values.lock().unwrap() = started.values;
             started.port

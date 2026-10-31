@@ -313,7 +313,7 @@ pub fn init_at(dir: &std::path::Path, cx: &mut App) {
 }
 
 /// Providers in a temporary folder, with keys in a file there.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn init_temp(cx: &mut gpui_kit::TestAppContext) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

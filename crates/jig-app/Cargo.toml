@@ -20,6 +20,9 @@ gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
 jig-ai.workspace = true
+jig-preferences.workspace = true
+jig-agent.workspace = true
+jig-debug.workspace = true
 jig-run.workspace = true
 jig-files.workspace = true
 jig-search.workspace = true
@@ -91,9 +94,12 @@ tree-sitter-xml = "0.7"
 [features]
 # Pictures of the Settings window: `JIG_SNAPSHOTS=<folder> cargo run -p jig-app
 # --features snapshots` (macOS; needs GPUI's Metal renderer).
-snapshots = ["gpui-kit/test-support"]
+snapshots = ["gpui-kit/test-support", "jig-agent/snapshots", "jig-preferences/snapshots"]
 
 [dev-dependencies]
+jig-preferences = { workspace = true, features = ["testing"] }
+jig-agent = { workspace = true, features = ["testing"] }
+jig-debug = { workspace = true, features = ["testing"] }
 jig-run = { workspace = true, features = ["testing"] }
 jig-files = { workspace = true, features = ["testing"] }
 jig-search = { workspace = true, features = ["testing"] }

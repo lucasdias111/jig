@@ -97,7 +97,7 @@ pub(super) fn fake_adapter(
     source: std::path::PathBuf,
     breakpoints: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
 ) {
-    use crate::dap::{Client, frame, read_message, socket_pair};
+    use jig_debug::dap::{Client, frame, read_message, socket_pair};
     use serde_json::json;
     crate::workspace::debug::FAKE_ADAPTER.with(|fake| {
             *fake.borrow_mut() = Some(Box::new(move |messages| {

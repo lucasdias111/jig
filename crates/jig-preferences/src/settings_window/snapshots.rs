@@ -44,7 +44,7 @@ pub fn run(dir: &Path) {
             );
             cx.update(|cx| {
                 gpui_kit::init(cx);
-                crate::providers::init_at(&config, cx);
+                jig_agent::providers::init_at(&config, cx);
                 settings::update(cx, |s| {
                     s.appearance.theme = if dark {
                         ThemeChoice::Dark

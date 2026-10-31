@@ -703,7 +703,7 @@ fn sketch_agent_live(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx, &root);
     cx.update(|cx| {
         jig_settings::init(cx);
-        crate::providers::init(cx);
+        jig_agent::providers::init(cx);
     });
     open_file(cx, window, &workspace, &file);
     cx.simulate_window_resize(window, gpui_kit::size(px(1600.), px(1000.)));

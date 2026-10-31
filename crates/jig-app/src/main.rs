@@ -5,15 +5,7 @@
 // `Jig --tasks-mcp` still reach it either way.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod about_window;
-mod agent;
-mod agents;
-mod dap;
-mod debug_target;
-mod lsp_debug;
 mod menus;
-mod providers;
-mod settings_window;
 mod shortcuts;
 mod workspace;
 
@@ -21,8 +13,12 @@ use std::path::PathBuf;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
+use jig_agent::agent;
+use jig_agent::providers;
 use jig_kit::theme;
 use jig_languages as languages;
+use jig_preferences::about_window;
+use jig_preferences::settings_window;
 use jig_settings::{self as settings, recent, session};
 use workspace::{Quit, Workspace};
 

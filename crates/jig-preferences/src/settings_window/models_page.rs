@@ -11,7 +11,7 @@ use jig_ai::{Config, ProviderConfig, ProviderTemplate, TEMPLATES, template_named
 
 use super::ui::{self, Row, Section};
 use super::{EditModelConfig, SettingsWindow, send_to_workspace};
-use crate::providers::{self, ModelList};
+use jig_agent::providers::{self, ModelList};
 
 /// Marks an agent model OpenCode knows by itself, from an older file's
 /// `agent_model`.

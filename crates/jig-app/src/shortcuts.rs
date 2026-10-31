@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use gpui_kit::component::input::{GoToDefinition, Replace, Search, ToggleCodeActions};
 use gpui_kit::*;
 
-use crate::settings_window::OpenSettings;
 use crate::workspace::*;
+use jig_preferences::settings_window::OpenSettings;
 use jig_settings::{self as settings, Shortcut, ShortcutGroup as Group};
 
 /// The code editor, and not the other fields that are inputs too.

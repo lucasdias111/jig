@@ -57,12 +57,12 @@ pub fn is_about_window(window: AnyWindowHandle, cx: &App) -> bool {
         .is_some_and(|OpenWindow(handle)| *handle == window)
 }
 
-pub(crate) struct AboutWindow {
+pub struct AboutWindow {
     _appearance: Subscription,
 }
 
 impl AboutWindow {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         jig_kit::theme::sync(window, cx);
         window.set_window_title("About Jig");
         Self {

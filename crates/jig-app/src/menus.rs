@@ -3,7 +3,6 @@
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, ToggleCodeActions, Undo};
 use gpui_kit::*;
 
-use crate::settings_window::OpenSettings;
 use crate::workspace::{
     ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine, DuplicateLine,
     EditAgents, EditAgentsFile, EditDebuggers, EditRunConfigurations, ExplainLevel, Find,
@@ -15,6 +14,7 @@ use crate::workspace::{
     StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
     ToggleSidebar, ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
 };
+use jig_preferences::settings_window::OpenSettings;
 use jig_updates::CheckForUpdates;
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -27,7 +27,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-    cx.on_action(|_: &About, cx| crate::about_window::open(cx));
+    cx.on_action(|_: &About, cx| jig_preferences::about_window::open(cx));
     set(cx);
 }
 
