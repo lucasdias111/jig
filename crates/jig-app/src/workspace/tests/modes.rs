@@ -372,10 +372,13 @@ fn agent_home_lists_recent_conversations_and_opens_the_selected_one(cx: &mut Tes
             );
         })
     });
+    step(cx, window, |window, cx| {
+        window.input("Unsent new conversation", cx)
+    });
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-recents").is_some());
-    assert!(vcx.debug_bounds("agent-reply-box").is_none());
+    assert!(vcx.debug_bounds("agent-reply-box").is_some());
     let row = vcx
         .debug_bounds("agent-recent-0")
         .expect("recent conversation");
@@ -394,6 +397,10 @@ fn agent_home_lists_recent_conversations_and_opens_the_selected_one(cx: &mut Tes
             .clone()),
         "Newest conversation"
     );
+    assert!(
+        cx.update(|cx| workspace.read(cx).agent_prompt().is_none()),
+        "choosing history does not send the home draft"
+    );
     assert_eq!(mode(cx, &workspace), Mode::Agent);
 }
 
@@ -410,12 +417,35 @@ fn agent_home_with_no_history_can_start_a_new_conversation(cx: &mut TestAppConte
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-recents").is_some());
     assert!(vcx.debug_bounds("agent-recent-0").is_none());
+    assert!(vcx.debug_bounds("agent-reply-box").is_some());
+    press(cx, window, "enter");
+    assert!(
+        cx.update(|cx| workspace.read(cx).chat.is_none()),
+        "empty Enter starts nothing"
+    );
     step(cx, window, |window, cx| {
-        workspace.update(cx, |this, cx| this.new_agent_conversation(window, cx))
+        window.input("Explain this project", cx)
     });
+    press(cx, window, "shift-enter");
+    step(cx, window, |window, cx| {
+        window.input("Start with its structure", cx)
+    });
+    assert!(
+        cx.update(|cx| workspace.read(cx).chat.is_none()),
+        "typing doesn't select a conversation"
+    );
+    press(cx, window, "secondary-1");
+    press(cx, window, "secondary-4");
+    press(cx, window, "enter");
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.debug_bounds("agent-recents").is_none());
     assert!(vcx.debug_bounds("agent-reply-box").is_some());
-    assert!(cx.update(|cx| workspace.read(cx).agent_prompt().is_none()));
+    let prompt = cx
+        .update(|cx| workspace.read(cx).agent_prompt())
+        .expect("sent a new message");
+    assert_eq!(
+        jig_ai::agent::asked(&prompt),
+        "Explain this project\nStart with its structure"
+    );
 }

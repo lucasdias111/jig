@@ -98,6 +98,8 @@ pub(super) struct AgentState {
     catalog_error: Option<String>,
     catalog_generation: u64,
     recent_scroll: ScrollHandle,
+    /// An unsent project message; opening Agent does not create a conversation.
+    home_draft: Option<(PathBuf, Entity<TextareaState>)>,
     /// The docked conversation's width, when the last one was left docked:
     /// the next opens the same way.
     pub(super) dock: Option<Pixels>,
@@ -1781,6 +1783,21 @@ impl Workspace {
             .and_then(|run| run.agent.as_ref())
             .is_none()
         {
+            if let Some(directory) = self.agent_project(cx)
+                && self
+                    .agent
+                    .home_draft
+                    .as_ref()
+                    .is_none_or(|(project, _)| *project != directory)
+            {
+                let input = cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .placeholder("Ask the agent about your project…")
+                        .auto_grow(1, 8)
+                        .soft_wrap(true)
+                });
+                self.agent.home_draft = Some((directory, input));
+            }
             self.load_agent_catalog(None, window, cx);
         }
         self.focus_agent_mode(window, cx);
@@ -1824,6 +1841,8 @@ impl Workspace {
                 return;
             }
             agent.input.update(cx, |input, cx| input.focus(window, cx));
+        } else if let Some(input) = self.agent_home_input(cx) {
+            input.update(cx, |input, cx| input.focus(window, cx));
         } else {
             self.home_focus.focus(window, cx);
         }
@@ -1843,6 +1862,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if text.trim().is_empty() {
+            return;
+        }
         if self.agent_busy() {
             return self.show_note(
                 "Wait for the agent, or stop its turn first.".into(),
@@ -1857,6 +1879,34 @@ impl Workspace {
                 .update(cx, |input, cx| input.set_value(text, window, cx));
         }
         self.reply_to_agent(window, cx);
+    }
+
+    fn agent_home_input(&self, cx: &App) -> Option<&Entity<TextareaState>> {
+        let directory = self.agent_project(cx)?;
+        self.agent
+            .home_draft
+            .as_ref()
+            .filter(|(project, _)| *project == directory)
+            .map(|(_, input)| input)
+    }
+
+    fn submit_agent_home_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.agent_home_input(cx).cloned() else {
+            return;
+        };
+        let text = input.read(cx).value().to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.submit_agent_mode_prompt(text, window, cx);
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| agent.last_input.is_some())
+        {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
     }
 
     fn agent_busy(&self) -> bool {
@@ -1942,15 +1992,23 @@ impl Workspace {
                                 this.open_agent_conversations(&OpenAgentConversations, window, cx)
                             })),
                     )
-                    .child(
-                        Button::new("agent-mode-new")
-                            .label("New conversation")
-                            .small()
-                            .ghost()
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.new_agent_conversation(window, cx)
-                            })),
+                    .when(
+                        self.chat
+                            .as_ref()
+                            .and_then(|run| run.agent.as_ref())
+                            .is_some(),
+                        |this| {
+                            this.child(
+                                Button::new("agent-mode-new")
+                                    .label("New conversation")
+                                    .small()
+                                    .ghost()
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_agent_conversation(window, cx)
+                                    })),
+                            )
+                        },
                     )
                     .when(busy, |this| {
                         this.child(
@@ -2049,9 +2107,12 @@ impl Workspace {
             .when(
                 empty && !self.agent.catalog_loading && self.agent.catalog_error.is_none(),
                 |this| {
-                    this.child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "No conversations yet. Start a new conversation to work on this project.",
-                    ))
+                    this.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("No conversations yet. Type a message below to start one."),
+                    )
                 },
             )
             .child(
@@ -2083,6 +2144,24 @@ impl Workspace {
                         },
                     )),
             )
+            .when_some(self.agent_home_input(cx), |this, input| {
+                this.child(
+                    v_flex()
+                        .flex_none()
+                        .gap_2()
+                        .child(jig_commands::chat::message_input(
+                            input,
+                            cx.listener(|this, _, window, cx| {
+                                this.submit_agent_home_message(window, cx)
+                            }),
+                            cx,
+                        ))
+                        .child(jig_commands::surface::hint(
+                            "enter to send · shift-enter for a new line",
+                            cx,
+                        )),
+                )
+            })
             .into_any_element()
     }
 

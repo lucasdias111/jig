@@ -978,6 +978,20 @@ fn more_below_button(scroll: &ScrollHandle, accent: Hsla, cx: &App) -> impl Into
         )
 }
 
+/// The shared message composer, also used before a conversation is selected.
+pub fn message_input(
+    input: &Entity<TextareaState>,
+    on_submit: impl Fn(&Enter, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Stateful<Div> {
+    reply_box(
+        input,
+        Some(Rc::new(on_submit)),
+        crate::surface::agent_accent(cx),
+        cx,
+    )
+}
+
 /// The box the user replies or answers in. The whole box takes the click,
 /// not just the text.
 fn reply_box(
