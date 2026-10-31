@@ -192,7 +192,9 @@ pub struct Workspace {
     /// The button beside the selection that opens the agent input.
     selection_button: Entity<selection_button::SelectionButton>,
     next_run_id: u64,
-    /// Run configurations, and the one running.
+    /// Run configurations, the one ⌃R runs, and the picker.
+    run_configs: Entity<run::configurations::RunConfigurations>,
+    /// The configuration running, and its output.
     runs: run::RunState,
     breakpoints: breakpoints::Breakpoints,
     git: git::GitState,
@@ -256,6 +258,11 @@ impl Workspace {
         let rename = cx.new(|_| rename::RenameField::default());
         cx.subscribe_in(&rename, window, Self::on_rename_event)
             .detach();
+        let run_configs = cx.new(|_| run::configurations::RunConfigurations::default());
+        cx.subscribe_in(&run_configs, window, Self::on_run_configurations_event)
+            .detach();
+        // The title bar names the configuration ⌃R runs.
+        cx.observe(&run_configs, |_, _, cx| cx.notify()).detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -288,6 +295,7 @@ impl Workspace {
             note: None,
             chat: None,
             next_run_id: 0,
+            run_configs,
             runs: run::RunState::new(cx),
             breakpoints: breakpoints::Breakpoints::load(),
             git: Default::default(),
@@ -517,6 +525,8 @@ impl Workspace {
             this.leave_tab(cx);
             this.stop_process();
             this.runs = run::RunState::new(cx);
+            this.run_configs
+                .update(cx, |configurations, cx| configurations.reset(cx));
             this.palette = None;
             this.quick_open = None;
             this.find_in_files = None;
@@ -593,7 +603,7 @@ impl Workspace {
         if self.is_config_file() {
             jig_agent::providers::reload(cx);
         }
-        self.run_file_saved(path, window, cx);
+        self.run_file_saved(path, cx);
         self.refresh_git_panel(window, cx);
         self.remember_breakpoints(self.active, cx);
         // Save As may have added a file.
@@ -879,7 +889,7 @@ impl Render for Workspace {
             .children(self.render_find_in_files(window))
             .children(self.render_rename(cx))
             .children(self.render_go_to_line(cx))
-            .children(self.render_run_picker(window))
+            .children(self.render_run_picker(cx))
             .children(self.render_branch_picker(window))
             .children(self.render_hunk_popup(cx))
             .when(self.mode == Mode::Code && !self.home, |this| {

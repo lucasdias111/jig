@@ -342,7 +342,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.runs.selected.clone() {
+        match self.run_configs.read(cx).selected().cloned() {
             Some(config) => self.start_debug(config, window, cx),
             None => self.open_run_picker_for(true, window, cx),
         }

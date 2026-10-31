@@ -98,18 +98,25 @@ where a mistake is cheap and obvious:
 5. **Go Back and Go Forward** (`history`). Nothing to draw, so not an
    entity: `History` takes over its own stacks (`remember`, `step`), and
    the workspace keeps working out where "here" is and going there.
-6. **Breakpoints** (`breakpoints`) and **live points** (`live`), then
-   **Run and Debug** (`runs`, `next_run_id` stays shared): big, but their state
-   already sits in `RunState`, `Breakpoints` and `LivePoints`, so it's mostly
-   moving those behind entities and turning `debug.rs`'s calls into events.
-7. **Git** (`git`, with `workspace/git/watch.rs`) and the **sidebar**
+6. **Breakpoints** (`breakpoints`) and **live points** (`live`): plain
+   structs that keep their own rules. Then **run configurations and the run
+   picker**: an entity, since it loads in the background and has a picker
+   to draw.
+7. **The run session, its output panel and the debugger** (`runs`, with
+   `run.rs` and `debug.rs` together): one `RunSession` holds the program,
+   its output and the `DebugSession`, and its poll loop takes in the
+   debugger's messages, so they move as one. The output panel (lines,
+   selection, scroll, height, focus) is the natural entity; the debugger's
+   pauses still reach the tabs (the paused line), the Map and the hover
+   through the workspace, so they come out as events.
+8. **Git** (`git`, with `workspace/git/watch.rs`) and the **sidebar**
    (`sidebar`, `tree`): the gutter bars need the tabs, so the entity is told
    about tab changes.
-8. **Find in Files** and **Go to File** (`find_in_files`, `last_find`,
+9. **Find in Files** and **Go to File** (`find_in_files`, `last_find`,
    `quick_open`, `file_index`, `recent_files`): these are modals, so this is
    when `modal_open` becomes a question asked of each modal entity instead
    of a list of fields.
-9. **Planner** (`planner`), then **the Map** (`map`, `pinched`) and the
+10. **Planner** (`planner`), then **the Map** (`map`, `pinched`) and the
    **Map's agent**, then **the agent** (`agent`, `chat`), the largest
    (3,300 lines) and the one most tangled with the Esc chain and review.
 
@@ -181,6 +188,19 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   keeps its own stacks behind `remember` and `step` (skipping deleted
   files, capping its length), with unit tests that need no window. The
   workspace works out where it is and goes to the place `step` gives.
+
+- **Breakpoints and live points**: `Breakpoints::all` hands out every
+  file's lines, and `LivePoints` works out which files changed (`listen`)
+  and lights the Map up (`fire`), so the workspace stops reaching into
+  either. Plain structs, with a unit test for `listen`.
+- **Run configurations and the run picker** live in
+  `workspace/run/configurations.rs` as `RunConfigurations`: the
+  configurations last loaded and for which project, the one ⌃R runs, the
+  background load and the picker. It emits `Chosen { config, debug }`,
+  `Edit`, `Closed { refocus }` and `LoadFailed`; the workspace opens the
+  picker (closing the other modals first, as before), runs or debugs what
+  was chosen, places the picker, and observes it for the title bar's name.
+  Opening another project resets it, as it reset `RunState` before.
 
 ## Not every field becomes an entity
 

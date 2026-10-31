@@ -23,7 +23,11 @@ use super::{
 };
 use jig_run::run_configs::{self, RunConfig};
 use jig_run::run_output::{Color, Link, OutputLine, Process, RunEvent, Stream, Style};
-use jig_run::run_picker::{PLAY, RunPicker, RunPickerEvent};
+use jig_run::run_picker::PLAY;
+
+pub(super) mod configurations;
+
+use configurations::{RunConfigurations, RunConfigurationsEvent};
 
 /// The output panel's key context, where ⌘A selects all of it.
 const OUTPUT_CONTEXT: &str = "JigRunOutput";
@@ -56,16 +60,7 @@ const CLOSE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 const CHEVRON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
 pub(super) struct RunState {
-    /// The configurations last loaded, and the project they're for.
-    configs: Vec<RunConfig>,
-    configs_root: Option<PathBuf>,
-    _loading: Option<Task<()>>,
-    /// What ⌃R runs.
-    pub(super) selected: Option<RunConfig>,
     pub(super) session: Option<RunSession>,
-    picker: Option<OpenRunPicker>,
-    /// The picker was opened to debug what's chosen, not run it.
-    picker_debug: bool,
     pub(super) panel_open: bool,
     panel_height: Pixels,
     /// Set while the panel's top edge is being dragged.
@@ -80,13 +75,7 @@ pub(super) struct RunState {
 impl RunState {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
-            configs: Vec::new(),
-            configs_root: None,
-            _loading: None,
-            selected: None,
             session: None,
-            picker: None,
-            picker_debug: false,
             panel_open: false,
             panel_height: px(220.),
             resizing: false,
@@ -123,11 +112,6 @@ impl RunSession {
     }
 }
 
-struct OpenRunPicker {
-    view: Entity<RunPicker>,
-    _events: Subscription,
-}
-
 impl Workspace {
     /// The project configurations belong to: the sidebar's, or the open
     /// file's.
@@ -146,7 +130,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.runs.selected.clone() {
+        match self.run_configs.read(cx).selected().cloned() {
             Some(config) => self.start_run(config, window, cx),
             None => self.open_run_picker(window, cx),
         }
@@ -233,17 +217,13 @@ impl Workspace {
     }
 
     /// After a save: a changed `run.toml` takes effect at once.
-    pub(super) fn run_file_saved(
-        &mut self,
-        path: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn run_file_saved(&mut self, path: &Path, cx: &mut Context<Self>) {
         let Some(root) = self.run_root(cx) else {
             return;
         };
         if super::tabs::canonical(path) == super::tabs::canonical(&root.join(run_configs::FILE)) {
-            self.load_run_configs(root, window, cx);
+            self.run_configs
+                .update(cx, |configurations, cx| configurations.load(root, cx));
         }
     }
 
@@ -258,7 +238,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.runs.picker.is_some() {
+        if self.run_configs.read(cx).picker_open() {
             return;
         }
         let Some(root) = self.run_root(cx) else {
@@ -272,80 +252,43 @@ impl Workspace {
         self.palette = None;
         self.quick_open = None;
         self.find_in_files = None;
-        let cached = if self.runs.configs_root.as_ref() == Some(&root) {
-            self.runs.configs.clone()
-        } else {
-            Vec::new()
-        };
-        let current = self.runs.selected.as_ref().map(|c| c.name.clone());
-        let view = cx.new(|cx| RunPicker::new(cached, true, current, window, cx));
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            RunPickerEvent::Run(index) => {
-                let config = this.runs.configs.get(*index).cloned();
-                this.close_run_picker(window, cx, true);
-                if let Some(config) = config {
-                    this.runs.selected = Some(config.clone());
-                    if this.runs.picker_debug {
-                        this.start_debug(config, window, cx);
-                    } else {
-                        this.start_run(config, window, cx);
-                    }
-                }
-            }
-            RunPickerEvent::Edit => {
-                this.close_run_picker(window, cx, false);
-                this.open_run_file(window, cx);
-            }
-            RunPickerEvent::Dismissed => this.close_run_picker(window, cx, true),
-            RunPickerEvent::Blurred => this.close_run_picker(window, cx, false),
+        self.run_configs.update(cx, |configurations, cx| {
+            configurations.open_picker(root, debug, window, cx)
         });
-        self.runs.picker = Some(OpenRunPicker {
-            view,
-            _events: events,
-        });
-        self.runs.picker_debug = debug;
-        self.load_run_configs(root, window, cx);
         cx.notify();
     }
 
-    fn close_run_picker(&mut self, window: &mut Window, cx: &mut Context<Self>, refocus: bool) {
-        if self.runs.picker.take().is_some() {
-            if refocus {
+    /// Act on what the configurations say: run or debug what was chosen,
+    /// edit `run.toml`, or back to where the keyboard was.
+    pub(super) fn on_run_configurations_event(
+        &mut self,
+        _: &Entity<RunConfigurations>,
+        event: &RunConfigurationsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            RunConfigurationsEvent::Chosen { config, debug } => {
                 self.focus_main(window, cx);
+                cx.notify();
+                if *debug {
+                    self.start_debug(config.clone(), window, cx);
+                } else {
+                    self.start_run(config.clone(), window, cx);
+                }
             }
-            cx.notify();
+            RunConfigurationsEvent::Edit => {
+                cx.notify();
+                self.open_run_file(window, cx);
+            }
+            RunConfigurationsEvent::Closed { refocus } => {
+                if *refocus {
+                    self.focus_main(window, cx);
+                }
+                cx.notify();
+            }
+            RunConfigurationsEvent::LoadFailed(error) => self.show_error(error, window, cx),
         }
-    }
-
-    /// Ask the project what it can run, in the background, and pass the
-    /// answer to the picker if it's open.
-    fn load_run_configs(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.runs._loading = Some(cx.spawn_in(window, async move |this, cx| {
-            let load_root = root.clone();
-            let (configs, error) = cx
-                .background_executor()
-                .spawn(async move { run_configs::load(&load_root) })
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                // The selection follows edits to its configuration.
-                if let Some(selected) = &this.runs.selected
-                    && let Some(fresh) = configs.iter().find(|c| c.name == selected.name)
-                {
-                    this.runs.selected = Some(fresh.clone());
-                }
-                this.runs.configs = configs.clone();
-                this.runs.configs_root = Some(root);
-                if let Some(picker) = &this.runs.picker {
-                    picker
-                        .view
-                        .update(cx, |picker, cx| picker.set_configs(configs, cx));
-                }
-                if let Some(error) = error {
-                    this.show_error(&format!("{error:#}"), window, cx);
-                }
-            })
-            .ok();
-        }));
     }
 
     pub(super) fn start_run(
@@ -550,8 +493,7 @@ impl Workspace {
 
     #[cfg(test)]
     pub(super) fn run_picker_rows(&self, cx: &App) -> Option<Vec<String>> {
-        let picker = self.runs.picker.as_ref()?;
-        Some(picker.view.read(cx).row_names())
+        self.run_configs.read(cx).picker_rows(cx)
     }
 
     /// The current run's id, output and ending.
@@ -561,20 +503,12 @@ impl Workspace {
         Some((session.id, session.lines.clone(), session.ending.clone()))
     }
 
-    /// The picker, centred near the top of the window like Go to File.
-    pub(super) fn render_run_picker(&self, window: &Window) -> Option<AnyElement> {
-        let open = self.runs.picker.as_ref()?;
-        let width = px(jig_run::run_picker::WIDTH);
-        let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
-        Some(
-            deferred(
-                anchored()
-                    .position(point(left, px(TITLE_BAR_HEIGHT + 24.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(open.view.clone()),
-            )
-            .into_any_element(),
-        )
+    /// The picker, while it's open.
+    pub(super) fn render_run_picker(&self, cx: &App) -> Option<AnyElement> {
+        self.run_configs
+            .read(cx)
+            .picker_open()
+            .then(|| self.run_configs.clone().into_any_element())
     }
 
     /// The configuration ⌃R runs, and buttons to run and stop it, at the
@@ -588,9 +522,9 @@ impl Workspace {
             .as_ref()
             .is_some_and(RunSession::is_running);
         let name = self
-            .runs
-            .selected
-            .as_ref()
+            .run_configs
+            .read(cx)
+            .selected()
             .map_or("Run…".to_string(), |config| config.name.clone());
         let button = |id: &'static str, icon: &'static [u8], color: Hsla| {
             div()
