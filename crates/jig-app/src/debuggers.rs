@@ -16,6 +16,8 @@ use jig_process::NoWindow as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::tools::{data_dir, debuggers_dir};
+
 const BUILT_IN: &str = include_str!("../../../assets/default-debuggers.toml");
 
 /// A starter for the user's `debuggers.toml`.
@@ -226,7 +228,7 @@ impl Debugger {
                 .no_window()
                 .args(&words[1..])
                 .envs(env)
-                .env("PATH", crate::lsp::search_path())
+                .env("PATH", crate::tools::search_path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -472,7 +474,7 @@ fn glob(pattern: &str) -> Vec<PathBuf> {
 
 /// What's missing for a debugger that lives in a language server.
 fn lsp_missing(debugger: &Debugger, server: &str) -> Option<String> {
-    if !crate::lsp::is_installed(server) {
+    if !crate::languages::is_installed(server) {
         return Some(format!("{server} isn't installed."));
     }
     let vars = Vars::new(&std::env::temp_dir());
@@ -641,7 +643,7 @@ pub fn lldb_dap() -> Option<PathBuf> {
 /// The newest `lldb-dap-18`-style program on the `PATH`, as Debian and
 /// Ubuntu name LLVM's tools.
 fn versioned_lldb_dap() -> Option<PathBuf> {
-    std::env::split_paths(crate::lsp::search_path())
+    std::env::split_paths(crate::tools::search_path())
         .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
         .filter_map(|entry| {
@@ -656,28 +658,6 @@ fn versioned_lldb_dap() -> Option<PathBuf> {
         })
         .max_by_key(|(version, _)| *version)
         .map(|(_, path)| path)
-}
-
-/// Where Jig keeps debuggers it installs: Application Support on macOS,
-/// the XDG data folder elsewhere. `JIG_DEBUGGERS_DIR` says otherwise.
-pub fn debuggers_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("JIG_DEBUGGERS_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    crate::tools::dir("debuggers")
-}
-
-pub(crate) fn data_dir() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    if cfg!(target_os = "macos") {
-        return Some(home.join("Library/Application Support"));
-    }
-    Some(
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute())
-            .unwrap_or_else(|| home.join(".local/share")),
-    )
 }
 
 /// The unpacked `js-debug` folder: where Jig keeps debuggers, or Zed's.
@@ -712,7 +692,7 @@ fn rust_init_commands(cwd: &Path) -> Vec<String> {
         .no_window()
         .args(["--print", "sysroot"])
         .current_dir(cwd)
-        .env("PATH", crate::lsp::search_path())
+        .env("PATH", crate::tools::search_path())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -746,7 +726,7 @@ fn rust_init_commands(cwd: &Path) -> Vec<String> {
 pub const WITHOUT_STRUCT_SUMMARIES: &str = "script _ = lldb.debugger.GetCategory(\"Rust\").DeleteTypeSummary(lldb.SBTypeNameSpecifier(\"lldb_lookup.is_udt\", lldb.eFormatterMatchCallback))";
 
 fn program_on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(crate::lsp::search_path())
+    std::env::split_paths(crate::tools::search_path())
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
 }

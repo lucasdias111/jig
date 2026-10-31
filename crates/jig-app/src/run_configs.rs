@@ -225,7 +225,7 @@ fn cargo(root: &Path) -> Vec<RunConfig> {
         .no_window()
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(root)
-        .env("PATH", crate::lsp::search_path())
+        .env("PATH", crate::tools::search_path())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
@@ -475,7 +475,7 @@ pub fn shell_word(word: &str) -> String {
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(crate::lsp::search_path())
+    std::env::split_paths(crate::tools::search_path())
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
 }

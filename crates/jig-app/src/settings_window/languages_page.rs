@@ -21,8 +21,8 @@ use super::{
 };
 use crate::debuggers::{self, Debugger};
 use crate::formatters::{self, Formatter};
-use crate::languages::{self, Language, bundled};
-use crate::lsp::{self, Server};
+use crate::languages::{self, Language, Server, bundled};
+use crate::lsp;
 use crate::settings;
 
 /// A language's extensions as Settings shows and takes them: the user's,

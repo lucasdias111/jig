@@ -9,12 +9,11 @@
 pub mod gdscript;
 pub mod grammars;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::lsp::Server;
 use crate::settings::LanguageSettings;
 
 const BUILT_IN: &str = include_str!("../../../assets/default-languages.toml");
@@ -151,10 +150,7 @@ pub fn register_grammars() {
 
 /// The user's `language-servers.toml`; `None` in tests.
 pub fn user_path() -> Option<std::path::PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    crate::formatters::user_path().map(|path| path.with_file_name("language-servers.toml"))
+    crate::tools::user_file("language-servers.toml")
 }
 
 /// Every bundled language: the starters, then the ones to add from
@@ -242,6 +238,96 @@ fn matching<'a>(
             None => language.extensions.contains(&ext),
         }
     })
+}
+
+/// A language server, as `assets/default-languages.toml` describes it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Server {
+    pub name: String,
+    /// Jig's names for the languages it serves.
+    pub languages: Vec<String>,
+    /// Commands to try, in order; the first installed one is run.
+    pub commands: Vec<Vec<String>>,
+    /// Files whose folder is the project root; `*.ext` matches any file
+    /// with that extension.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
+    /// Take the outermost folder with a marker rather than the nearest: a
+    /// Cargo or Go workspace contains its members' manifests.
+    #[serde(default)]
+    pub outermost: bool,
+    /// A shell command installing it into `${dir}`, its own folder.
+    pub(crate) install: Option<String>,
+    help: Option<crate::tools::Help>,
+}
+
+impl Server {
+    pub fn installable(&self) -> bool {
+        self.install.is_some()
+    }
+
+    /// How to get it, for when it isn't installed.
+    pub fn help(&self) -> String {
+        self.help.as_ref().map_or_else(
+            || format!("Install {} and put it on the PATH.", self.name),
+            crate::tools::Help::text,
+        )
+    }
+
+    /// Whether `dir` holds one of the markers.
+    pub(crate) fn marks(&self, dir: &Path) -> bool {
+        self.root_markers
+            .iter()
+            .any(|marker| match marker.strip_prefix("*.") {
+                Some(extension) => std::fs::read_dir(dir).is_ok_and(|entries| {
+                    entries.flatten().any(|entry| {
+                        Path::new(&entry.file_name())
+                            .extension()
+                            .is_some_and(|ext| ext == extension)
+                    })
+                }),
+                None => dir.join(marker).exists(),
+            })
+    }
+}
+
+/// A server by name.
+pub fn server_named(name: &str) -> Option<&'static Server> {
+    servers().iter().find(|s| s.name == name)
+}
+
+/// `server`'s own folder in the servers folder, whether or not it's there.
+pub fn server_dir(server: &Server) -> Option<PathBuf> {
+    crate::tools::servers_dir().map(|dir| dir.join(&server.name))
+}
+
+/// The first of `server`'s commands that's installed, as its program and
+/// arguments.
+pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
+    let path = crate::tools::search_path();
+    let own = server_dir(server);
+    server.commands.iter().find_map(|argv| {
+        let (name, args) = argv.split_first()?;
+        let program = crate::tools::find_program(name, path)
+            .or_else(|| {
+                crate::tools::bin_dirs(own.as_ref()?)
+                    .iter()
+                    .find_map(|dir| crate::tools::executable_in(dir, name))
+            })
+            // Debuggers' installers may have put it with them.
+            .or_else(|| {
+                crate::tools::debuggers_dir()
+                    .map(|dir| dir.join("bin").join(name))
+                    .filter(|program| program.is_file())
+            })?;
+        Some((program, args))
+    })
+}
+
+/// Whether `server`, by name, is installed.
+pub fn is_installed(server: &str) -> bool {
+    server_named(server).is_some_and(|s| program_for(s).is_some())
 }
 
 #[cfg(test)]

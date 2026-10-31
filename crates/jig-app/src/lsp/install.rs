@@ -4,27 +4,11 @@
 //! Trash. Servers installed some other way (rustup, Homebrew, Xcode) are
 //! found on the PATH and left alone.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 
-use super::Server;
-
-/// Where Jig keeps servers it installs, beside its debuggers and
-/// formatters. `JIG_SERVERS_DIR` says otherwise.
-pub fn servers_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("JIG_SERVERS_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    crate::debuggers::debuggers_dir()?
-        .parent()
-        .map(|dir| dir.join("servers"))
-}
-
-/// `server`'s own folder in the servers folder, whether or not it's there.
-pub fn server_dir(server: &Server) -> Option<PathBuf> {
-    servers_dir().map(|dir| dir.join(&server.name))
-}
+use crate::languages::{Server, program_for, server_dir};
 
 /// Whether Jig installed `server`, so Uninstall has something to remove.
 pub fn installed_by_jig(server: &Server) -> bool {
@@ -37,7 +21,7 @@ pub fn status(server: &Server) -> (String, bool) {
     if server.commands.is_empty() {
         return ("Turned off in language-servers.toml.".into(), true);
     }
-    match super::program_for(server) {
+    match program_for(server) {
         Some((program, _)) => (
             format!("Using {}", crate::tools::home_relative(&program)),
             true,
@@ -57,7 +41,7 @@ pub fn status(server: &Server) -> (String, bool) {
 pub fn install(server: &Server) -> Result<()> {
     let dir = server_dir(server).context("No home folder to install into")?;
     install_into(server, &dir)?;
-    if super::program_for(server).is_none() {
+    if program_for(server).is_none() {
         bail!(
             "The installer finished, but Jig still can't find {}.",
             server.name
@@ -143,7 +127,7 @@ mod tests {
             std::env::var_os("JIG_SERVERS_DIR").is_some(),
             "set JIG_SERVERS_DIR"
         );
-        let server = crate::lsp::server_named("yaml-language-server").unwrap();
+        let server = crate::languages::server_named("yaml-language-server").unwrap();
         install(server).unwrap();
         assert!(installed_by_jig(server));
         let (status, ready) = status(server);

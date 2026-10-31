@@ -131,7 +131,7 @@ impl Process {
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
             .current_dir(&config.cwd)
-            .env("PATH", crate::lsp::search_path())
+            .env("PATH", crate::tools::search_path())
             .envs(COLOR_ENV.iter().copied())
             .envs(config.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())

@@ -113,7 +113,7 @@ impl Agent {
 /// The `PATH` agents are looked for on and started with: the login shell's,
 /// with Jig's agents folder.
 fn search_path() -> std::ffi::OsString {
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(crate::lsp::search_path()).collect();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(crate::tools::search_path()).collect();
     if let Some(dir) = agents_dir() {
         dirs.push(dir.join("node_modules/.bin"));
         dirs.push(dir.join("bin"));
@@ -313,7 +313,7 @@ pub fn agents_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("JIG_AGENTS_DIR") {
         return Some(PathBuf::from(dir));
     }
-    crate::debuggers::data_dir().map(|dir| {
+    crate::tools::data_dir().map(|dir| {
         dir.join(if cfg!(target_os = "macos") {
             "Jig"
         } else {

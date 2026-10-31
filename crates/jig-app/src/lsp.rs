@@ -11,15 +11,15 @@ pub mod diagnostics;
 pub mod install;
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::languages::{Server, program_for};
+use crate::tools::search_path;
 use gpui_kit::{App, Global};
 use jig_process::NoWindow as _;
-use serde::Deserialize;
 
 pub use client::{Client, Response};
 
@@ -31,68 +31,11 @@ pub enum Encoding {
     Utf16,
 }
 
-/// A language server, as `assets/default-languages.toml` describes it.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Server {
-    pub name: String,
-    /// Jig's names for the languages it serves.
-    pub languages: Vec<String>,
-    /// Commands to try, in order; the first installed one is run.
-    pub commands: Vec<Vec<String>>,
-    /// Files whose folder is the project root; `*.ext` matches any file
-    /// with that extension.
-    #[serde(default)]
-    pub root_markers: Vec<String>,
-    /// Take the outermost folder with a marker rather than the nearest: a
-    /// Cargo or Go workspace contains its members' manifests.
-    #[serde(default)]
-    pub outermost: bool,
-    /// A shell command installing it into `${dir}`, its own folder.
-    install: Option<String>,
-    help: Option<crate::tools::Help>,
-}
-
-impl Server {
-    pub fn installable(&self) -> bool {
-        self.install.is_some()
-    }
-
-    /// How to get it, for when it isn't installed.
-    pub fn help(&self) -> String {
-        self.help.as_ref().map_or_else(
-            || format!("Install {} and put it on the PATH.", self.name),
-            crate::tools::Help::text,
-        )
-    }
-
-    /// Whether `dir` holds one of the markers.
-    fn marks(&self, dir: &Path) -> bool {
-        self.root_markers
-            .iter()
-            .any(|marker| match marker.strip_prefix("*.") {
-                Some(extension) => std::fs::read_dir(dir).is_ok_and(|entries| {
-                    entries.flatten().any(|entry| {
-                        Path::new(&entry.file_name())
-                            .extension()
-                            .is_some_and(|ext| ext == extension)
-                    })
-                }),
-                None => dir.join(marker).exists(),
-            })
-    }
-}
-
 /// The server for `language`, if there is one.
 pub fn server_for(language: &str) -> Option<&'static Server> {
     crate::languages::servers()
         .iter()
         .find(|s| s.languages.iter().any(|l| l == language))
-}
-
-/// A server by name.
-pub fn server_named(name: &str) -> Option<&'static Server> {
-    crate::languages::servers().iter().find(|s| s.name == name)
 }
 
 /// The protocol's name for a language.
@@ -169,7 +112,7 @@ impl Global for Failures {}
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
     client.on_diagnostics(diagnostics_sink(cx));
     client.on_failure(failures_sink(cx));
-    let server = server_named(server).expect("a known server");
+    let server = crate::languages::server_named(server).expect("a known server");
     cx.default_global::<Registry>()
         .insert(server, (&server.name, root), client);
 }
@@ -275,11 +218,6 @@ pub fn failure_for(file: &Path, language: &str, cx: &App) -> Option<String> {
         .failure()
 }
 
-/// Whether `server`, by name, is installed.
-pub fn is_installed(server: &str) -> bool {
-    server_named(server).is_some_and(|s| program_for(s).is_some())
-}
-
 /// Bumped when a server is installed or uninstalled, for workspaces to
 /// open their files in it again.
 #[derive(Default)]
@@ -306,29 +244,6 @@ fn init_options(server: &Server) -> serde_json::Value {
         return serde_json::Value::Null;
     }
     serde_json::json!({"bundles": bundles})
-}
-
-/// The first of `server`'s commands that's installed, as its program and
-/// arguments.
-pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
-    let path = search_path();
-    let own = install::server_dir(server);
-    server.commands.iter().find_map(|argv| {
-        let (name, args) = argv.split_first()?;
-        let program = find_program(name, path)
-            .or_else(|| {
-                crate::tools::bin_dirs(own.as_ref()?)
-                    .iter()
-                    .find_map(|dir| crate::tools::executable_in(dir, name))
-            })
-            // Debuggers' installers may have put it with them.
-            .or_else(|| {
-                crate::debuggers::debuggers_dir()
-                    .map(|dir| dir.join("bin").join(name))
-                    .filter(|program| program.is_file())
-            })?;
-        Some((program, args))
-    })
 }
 
 /// The command to run `server` with, if one of its commands is installed.
@@ -371,108 +286,6 @@ fn cache_dir() -> PathBuf {
         var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|home| home.join(".cache")))
     };
     dir.unwrap_or_else(std::env::temp_dir)
-}
-
-fn find_program(name: &str, path: &OsString) -> Option<PathBuf> {
-    std::env::split_paths(path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
-
-/// The `PATH` servers and run configurations are found on and run with. An
-/// app opened from the Finder gets only the system's minimal one, so ask the
-/// login shell, as a terminal would have it, and add where installers
-/// usually put things.
-pub(crate) fn search_path() -> &'static OsString {
-    static PATH: OnceLock<OsString> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        if let Some(shell) = std::env::var_os("SHELL")
-            && let Ok(output) = Command::new(shell)
-                .args(["-l", "-c", "printf '%s' \"$PATH\""])
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-            && output.status.success()
-        {
-            let shell_path = OsString::from(String::from_utf8_lossy(&output.stdout).trim());
-            dirs.extend(std::env::split_paths(&shell_path));
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            dirs.extend(std::env::split_paths(&path));
-        }
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            for dir in [
-                ".cargo/bin",
-                ".local/bin",
-                "go/bin",
-                ".npm-global/bin",
-                ".bun/bin",
-                // OpenCode's installer, which adds it to the PATH only in
-                // `.zshrc` and the like.
-                ".opencode/bin",
-            ] {
-                dirs.push(home.join(dir));
-            }
-            dirs.extend(node_dirs(&home));
-        }
-        dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
-        let mut seen = std::collections::HashSet::new();
-        dirs.retain(|dir| seen.insert(dir.clone()));
-        std::env::join_paths(dirs).unwrap_or_default()
-    })
-}
-
-/// Where Node version managers keep `node` and `npm`. They set the `PATH`
-/// up in `.zshrc` and the like, which a login shell doesn't read.
-fn node_dirs(home: &Path) -> Vec<PathBuf> {
-    let nvm = std::env::var_os("NVM_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".nvm"));
-    let mut dirs: Vec<PathBuf> = nvm_bin(&nvm).into_iter().collect();
-    dirs.extend(
-        [
-            ".volta/bin",
-            ".local/share/fnm/aliases/default/bin",
-            "Library/Application Support/fnm/aliases/default/bin",
-            ".asdf/shims",
-            ".local/share/mise/shims",
-            "Library/pnpm",
-            ".local/share/pnpm",
-        ]
-        .map(|dir| home.join(dir)),
-    );
-    dirs
-}
-
-/// nvm's default Node, by its `alias/default` ("24", "v24.1.0"), or the
-/// newest one installed.
-fn nvm_bin(nvm: &Path) -> Option<PathBuf> {
-    let versions = nvm.join("versions/node");
-    let mut installed: Vec<(Vec<u64>, String)> = std::fs::read_dir(&versions)
-        .ok()?
-        .filter_map(|entry| {
-            let name = entry.ok()?.file_name().into_string().ok()?;
-            let numbers = name
-                .trim_start_matches('v')
-                .split('.')
-                .map(|part| part.parse().ok())
-                .collect::<Option<Vec<u64>>>()?;
-            Some((numbers, name))
-        })
-        .collect();
-    installed.sort();
-    let alias = std::fs::read_to_string(nvm.join("alias/default")).unwrap_or_default();
-    let alias = alias.trim().trim_start_matches('v');
-    let chosen = installed
-        .iter()
-        .rev()
-        .find(|(_, name)| {
-            let name = name.trim_start_matches('v');
-            !alias.is_empty() && (name == alias || name.starts_with(&format!("{alias}.")))
-        })
-        .or(installed.last())?;
-    Some(versions.join(&chosen.1).join("bin"))
 }
 
 /// The LSP position of byte `offset` in `text`.
@@ -802,22 +615,5 @@ mod tests {
         };
         files.sort();
         assert_eq!(files, ["lib.rs", "util.rs"]);
-    }
-
-    #[test]
-    fn finds_nvm_s_default_node() {
-        let nvm = tempfile::tempdir().unwrap();
-        for version in ["v18.20.0", "v24.2.0", "v24.19.0", "v9.0.0"] {
-            std::fs::create_dir_all(nvm.path().join("versions/node").join(version).join("bin"))
-                .unwrap();
-        }
-        let bin = |version: &str| nvm.path().join("versions/node").join(version).join("bin");
-        assert_eq!(nvm_bin(nvm.path()), Some(bin("v24.19.0")), "the newest");
-        std::fs::create_dir_all(nvm.path().join("alias")).unwrap();
-        std::fs::write(nvm.path().join("alias/default"), "18\n").unwrap();
-        assert_eq!(nvm_bin(nvm.path()), Some(bin("v18.20.0")), "the default");
-        std::fs::write(nvm.path().join("alias/default"), "v24.2.0").unwrap();
-        assert_eq!(nvm_bin(nvm.path()), Some(bin("v24.2.0")));
-        assert_eq!(nvm_bin(&nvm.path().join("nowhere")), None);
     }
 }

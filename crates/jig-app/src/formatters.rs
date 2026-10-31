@@ -72,7 +72,7 @@ impl Formatter {
             .ancestors()
             .skip(1)
             .map(|dir| dir.join("node_modules/.bin"));
-        std::env::split_paths(crate::lsp::search_path())
+        std::env::split_paths(crate::tools::search_path())
             .chain(own)
             .chain(local)
             .find_map(|dir| tools::executable_in(&dir, name))
@@ -168,7 +168,7 @@ impl Formatter {
         command
             .no_window()
             .args(self.args(file, root))
-            .env("PATH", crate::lsp::search_path());
+            .env("PATH", crate::tools::search_path());
         if let Some(dir) = file.parent().filter(|dir| dir.is_dir()) {
             command.current_dir(dir);
         }
@@ -188,7 +188,7 @@ pub fn formatters_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("JIG_FORMATTERS_DIR") {
         return Some(PathBuf::from(dir));
     }
-    crate::debuggers::debuggers_dir()?
+    crate::tools::debuggers_dir()?
         .parent()
         .map(|dir| dir.join("formatters"))
 }
@@ -327,15 +327,9 @@ pub fn use_for_tests(toml: &str) {
     TEST_REGISTRY.with(|test| *test.borrow_mut() = Some(Arc::new(registry)));
 }
 
-/// The user's `formatters.toml`; `None` in tests.
+/// The user's own `formatters.toml`; `None` in tests.
 pub fn user_path() -> Option<PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("jig").join("formatters.toml"))
+    crate::tools::user_file("formatters.toml")
 }
 
 fn parse(text: &str) -> Result<Vec<Formatter>> {

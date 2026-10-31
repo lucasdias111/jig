@@ -71,39 +71,55 @@ contract = [
 ]
 uses = ["settings"]
 
-# Languages and the tools serving them: language servers, formatters and
-# debuggers as data, and installing them.
-[capability.toolchain]
-modules = ["languages", "lsp", "tools", "formatters", "debuggers", "definitions"]
-contract = [
-    "languages",
-    "lsp",
-    "lsp::diagnostics",
-    "tools",
-    "formatters",
-    "debuggers",
-    "definitions",
-]
-uses = ["settings", "kit"]
+# Where Jig's tools live and installing them: the PATH programs are found
+# on, Jig's data and config folders, and running installers.
+[capability.tools]
+modules = ["tools"]
+contract = ["tools"]
+uses = []
 
-# Editing help in a buffer: documents, edits, snippets, completions, hover,
+# The languages and the language servers serving them, as data, and finding
+# a server's program.
+[capability.languages]
+modules = ["languages"]
+contract = ["languages"]
+uses = ["settings", "tools"]
+
+# Formatters as data, and running one.
+[capability.formatters]
+modules = ["formatters"]
+contract = ["formatters"]
+uses = ["kit", "tools"]
+
+# Debuggers as data: which runs what, and installing them.
+[capability.debuggers]
+modules = ["debuggers"]
+contract = ["debuggers"]
+uses = ["languages", "tools"]
+
+# Running language servers, and guessing definitions without one.
+[capability.language_servers]
+modules = ["lsp", "definitions"]
+contract = ["lsp", "lsp::diagnostics", "definitions"]
+uses = ["kit", "languages", "debuggers", "tools"]
+
 # find in the file.
 [capability.editor]
 modules = ["document", "text_edits", "snippets", "completions", "hover", "find_panel"]
 contract = ["document", "text_edits", "snippets", "completions", "hover", "find_panel"]
-uses = ["settings", "kit", "toolchain"]
+uses = ["settings", "kit", "language_servers", "languages"]
 
 # Go to File and Find in Files.
 [capability.search]
 modules = ["quick_open", "find_in_files", "project_search"]
 contract = ["quick_open", "find_in_files", "project_search"]
-uses = ["settings", "kit", "toolchain"]
+uses = ["settings", "kit", "languages"]
 
 # The file tree and its icons.
 [capability.files]
 modules = ["file_tree", "file_icons"]
 contract = ["file_tree", "file_icons"]
-uses = ["settings", "kit", "toolchain", "search"]
+uses = ["settings", "kit", "languages", "search"]
 
 # The git command line, the Git view and the branch picker, in their own crate.
 [capability.git]
@@ -114,19 +130,25 @@ uses = []
 [capability.run]
 modules = ["run_configs", "run_output", "run_picker"]
 contract = ["run_configs", "run_output", "run_picker"]
-uses = ["kit", "toolchain"]
+uses = ["kit", "tools"]
 
 # Debug sessions over the Debug Adapter Protocol.
 [capability.debug]
 modules = ["dap", "debug_target", "lsp_debug"]
 contract = ["dap", "debug_target", "lsp_debug"]
-uses = ["kit", "toolchain", "run"]
+uses = [
+    "kit",
+    "debuggers",
+    "language_servers",
+    "tools",
+    "run",
+]
 
 # The coding agent: agents as data, providers and the shared OpenCode server.
 [capability.agent]
 modules = ["agent", "agents", "providers"]
 contract = ["agent", "agents", "providers"]
-uses = ["settings", "kit", "toolchain"]
+uses = ["settings", "kit", "tools"]
 
 # The task planner, in its own crate.
 [capability.planner]
@@ -147,7 +169,16 @@ uses = []
 [capability.preferences]
 modules = ["settings_window", "about_window"]
 contract = ["settings_window", "about_window"]
-uses = ["settings", "kit", "toolchain", "agent", "updates"]
+uses = [
+    "settings",
+    "kit",
+    "languages",
+    "formatters",
+    "debuggers",
+    "language_servers",
+    "agent",
+    "updates",
+]
 
 # The app itself: the window and its workspace, menus and shortcuts, putting
 # every other capability together. Nothing else should need it.
@@ -157,7 +188,11 @@ contract = ["main", "workspace", "menus", "shortcuts"]
 uses = [
     "settings",
     "kit",
-    "toolchain",
+    "tools",
+    "languages",
+    "formatters",
+    "debuggers",
+    "language_servers",
     "editor",
     "search",
     "files",
