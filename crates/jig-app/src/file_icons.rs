@@ -4,8 +4,8 @@ use std::path::Path;
 
 use gpui_kit::Hsla;
 
-use crate::languages;
 use jig_kit::theme;
+use jig_languages as languages;
 use jig_settings::LanguageSettings;
 
 const RUST: &[u8] = include_bytes!("../../../assets/icons/rust.svg");

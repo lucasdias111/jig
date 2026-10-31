@@ -17,7 +17,7 @@ use super::{
     ToggleLineComment, Workspace,
 };
 use crate::definitions;
-use crate::languages;
+use jig_languages as languages;
 
 impl Workspace {
     /// Builds the menu for the current tab's editor. What it offers is

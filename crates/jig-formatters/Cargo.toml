@@ -1,0 +1,30 @@
+[package]
+name = "jig-formatters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests use what this crate's own tests do, and keeps them
+# off the user's own files and tools.
+testing = ["jig-kit/testing", "jig-tools/testing"]
+
+[dependencies]
+jig-kit.workspace = true
+jig-tools.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
+trash = "5"
+
+[dev-dependencies]
+jig-kit = { workspace = true, features = ["testing"] }
+jig-tools = { workspace = true, features = ["testing"] }
+tempfile.workspace = true
+jig-languages.workspace = true

@@ -256,7 +256,7 @@ pub struct Server {
     #[serde(default)]
     pub outermost: bool,
     /// A shell command installing it into `${dir}`, its own folder.
-    pub(crate) install: Option<String>,
+    pub install: Option<String>,
     help: Option<jig_tools::Help>,
 }
 
@@ -274,7 +274,7 @@ impl Server {
     }
 
     /// Whether `dir` holds one of the markers.
-    pub(crate) fn marks(&self, dir: &Path) -> bool {
+    pub fn marks(&self, dir: &Path) -> bool {
         self.root_markers
             .iter()
             .any(|marker| match marker.strip_prefix("*.") {
@@ -485,25 +485,6 @@ mod tests {
                 .filter(|s| s.languages.iter().any(|l| l == language.name))
                 .count();
             assert!(serving <= 1, "{} has {serving} servers", language.name);
-        }
-        // Formatters and debuggers name languages too.
-        for formatter in &crate::formatters::registry().formatters {
-            for language in &formatter.languages {
-                assert!(
-                    get(language).is_some(),
-                    "{} formats unknown {language}",
-                    formatter.name
-                );
-            }
-        }
-        for debugger in &crate::debuggers::registry().debuggers {
-            for language in &debugger.languages {
-                assert!(
-                    get(language).is_some(),
-                    "{} debugs unknown {language}",
-                    debugger.name
-                );
-            }
         }
     }
 

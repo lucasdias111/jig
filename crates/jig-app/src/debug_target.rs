@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::debuggers::{Debugger, Registry, Vars};
 use crate::run_configs::RunConfig;
+use jig_debuggers::{Debugger, Registry, Vars};
 
 #[derive(Clone, Debug)]
 pub struct DebugPlan {
@@ -235,7 +235,7 @@ mod tests {
     use crate::run_configs::{DebugProgram, Source};
 
     fn registry() -> Arc<Registry> {
-        crate::debuggers::registry()
+        jig_debuggers::registry()
     }
 
     fn config(command: &str) -> RunConfig {

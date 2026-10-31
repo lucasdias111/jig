@@ -364,7 +364,7 @@ impl Workspace {
         };
         let function = &project.functions[id];
         let path = project.root.join(&project.files[function.file].path);
-        let language = crate::languages::language_for(&path, &self.settings.languages);
+        let language = jig_languages::language_for(&path, &self.settings.languages);
         let Some(client) = lsp::client_for(&path, language, cx) else {
             return;
         };

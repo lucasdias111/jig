@@ -288,7 +288,7 @@ impl Registry {
 /// The formatters as they are now; the user's file is read again when it
 /// has changed.
 pub fn registry() -> Arc<Registry> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     if let Some(registry) = TEST_REGISTRY.with(|test| test.borrow().clone()) {
         return registry;
     }
@@ -310,7 +310,7 @@ pub fn registry() -> Arc<Registry> {
     registry
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 thread_local! {
     static TEST_REGISTRY: std::cell::RefCell<Option<Arc<Registry>>> =
         const { std::cell::RefCell::new(None) };
@@ -318,7 +318,7 @@ thread_local! {
 
 /// Use only the formatters in `toml` on this thread, for tests: none of
 /// the built-ins, which may well be installed.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn use_for_tests(toml: &str) {
     let registry = Registry {
         formatters: parse(toml).unwrap().into_iter().map(Arc::new).collect(),
@@ -411,6 +411,19 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn every_formatter_names_known_languages() {
+        for formatter in &registry().formatters {
+            for language in &formatter.languages {
+                assert!(
+                    jig_languages::get(language).is_some(),
+                    "{} formats unknown {language}",
+                    formatter.name
+                );
+            }
+        }
+    }
 
     const LIMIT: Duration = Duration::from_secs(10);
 

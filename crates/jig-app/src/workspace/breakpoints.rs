@@ -123,7 +123,7 @@ impl Workspace {
     /// Whether `document`'s language has its debugger turned on.
     fn takes_breakpoints(&self, document: &Document) -> bool {
         let language = document.language(&self.settings.languages);
-        crate::debuggers::registry()
+        jig_debuggers::registry()
             .for_language(language)
             .is_some_and(|debugger| self.settings.debugging.is_enabled(&debugger.key))
     }
@@ -268,7 +268,7 @@ impl Workspace {
     /// Every breakpoint in files the debugger `key` debugs.
     pub(super) fn breakpoints_for(&mut self, key: &str, cx: &App) -> Vec<(PathBuf, Vec<u32>)> {
         let languages = self.settings.languages.clone();
-        let registry = crate::debuggers::registry();
+        let registry = jig_debuggers::registry();
         self.all_breakpoints(cx)
             .into_iter()
             .filter(|(path, _)| takes(&registry, key, path, &languages))
@@ -277,7 +277,7 @@ impl Workspace {
 
     /// Whether debugger `key` debugs `path`'s language.
     pub(super) fn debugger_takes(&self, key: &str, path: &Path) -> bool {
-        let registry = crate::debuggers::registry();
+        let registry = jig_debuggers::registry();
         takes(&registry, key, path, &self.settings.languages)
     }
 
@@ -359,12 +359,12 @@ impl Workspace {
 
 /// Whether debugger `key` in `registry` debugs `path`'s language.
 fn takes(
-    registry: &crate::debuggers::Registry,
+    registry: &jig_debuggers::Registry,
     key: &str,
     path: &Path,
     languages: &jig_settings::LanguageSettings,
 ) -> bool {
-    let language = crate::languages::language_for(path, languages);
+    let language = jig_languages::language_for(path, languages);
     registry
         .for_language(language)
         .is_some_and(|debugger| debugger.key == key)

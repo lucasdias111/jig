@@ -13,7 +13,7 @@ fn open_with_formatting_server(
 ) -> (AnyWindowHandle, Entity<Workspace>, std::path::PathBuf) {
     cx.executor().allow_parking();
     // Only the server formats, never what happens to be installed.
-    crate::formatters::use_for_tests("");
+    jig_formatters::use_for_tests("");
     // As the workspace has it, so the server is found for the file.
     let dir = &dir.canonicalize().unwrap();
     let path = dir.join("main.rs");
@@ -186,7 +186,7 @@ fn follows_the_projects_editorconfig(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn without_a_server_the_formatter_formats(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    crate::formatters::use_for_tests(
+    jig_formatters::use_for_tests(
         r#"
 [[formatter]]
 key = "missing"
@@ -241,7 +241,7 @@ fn a_chosen_formatter_goes_ahead_of_the_server(cx: &mut TestAppContext) {
             "textDocument/formatting" => serde_json::json!([]),
             _ => serde_json::Value::Null,
         });
-    crate::formatters::use_for_tests(
+    jig_formatters::use_for_tests(
         r#"
 [[formatter]]
 key = "upper"

@@ -569,7 +569,7 @@ impl Workspace {
         let text = self.editor().text(cx);
         let languages = &self.settings.languages;
         let language_changed =
-            crate::languages::language_for(path, languages) != self.document().language(languages);
+            jig_languages::language_for(path, languages) != self.document().language(languages);
         if let Err(error) = self.tab_mut().document.save(path, &text) {
             self.show_error(&format!("Could not save: {error:#}"), window, cx);
             return;

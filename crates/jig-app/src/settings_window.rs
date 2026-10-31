@@ -29,9 +29,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::{ProviderTemplate, TEMPLATES};
 
-use crate::languages::{self, Language};
 use crate::providers;
 use jig_kit::theme::EDITABLE;
+use jig_languages::{self as languages, Language};
 use jig_settings::{self as settings, Shortcut};
 use ui::Section;
 

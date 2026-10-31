@@ -22,9 +22,9 @@ use serde_json::{Value, json};
 use super::{DebugSelected, EditDebuggers, Resume, StepInto, StepOut, StepOver, Workspace};
 use crate::dap::{self, Message};
 use crate::debug_target::{self, Build, DebugPlan};
-use crate::debuggers::{self, Debugger, Vars};
 use crate::run_configs::RunConfig;
 use crate::run_output::{OutputLine, Stream, Style};
+use jig_debuggers::{self as debuggers, Debugger, Vars};
 
 const ROW_HEIGHT: f32 = 20.;
 /// Messages taken from the adapter per update.
@@ -1369,7 +1369,7 @@ fn is_chatter(text: &str) -> bool {
     let text = text.trim();
     text.starts_with("Running initCommands")
         || text.starts_with("(lldb) command script import")
-        || text.strip_prefix("(lldb) ") == Some(crate::debuggers::WITHOUT_STRUCT_SUMMARIES)
+        || text.strip_prefix("(lldb) ") == Some(jig_debuggers::WITHOUT_STRUCT_SUMMARIES)
         || (text.starts_with("Process ") && text.contains(" exited with status"))
         || text.contains("no plugin for the language \"rust\"")
 }

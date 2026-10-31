@@ -23,7 +23,7 @@ use futures::channel::mpsc::UnboundedSender;
 use jig_process::NoWindow as _;
 use serde_json::{Value, json};
 
-use crate::debuggers::AdapterCommand;
+use jig_debuggers::AdapterCommand;
 
 /// Where a client's messages go: `(connection id, message)`.
 pub type Inbox = UnboundedSender<(usize, Message)>;
@@ -420,7 +420,7 @@ mod tests {
         assert!(built.success());
 
         let adapter = AdapterCommand {
-            program: crate::debuggers::lldb_dap().expect("lldb-dap"),
+            program: jig_debuggers::lldb_dap().expect("lldb-dap"),
             args: Vec::new(),
             env: Vec::new(),
             server: false,
@@ -461,7 +461,7 @@ mod tests {
             }),
             debugger: None,
         };
-        let arguments = crate::debug_target::plan_for(&config, &crate::debuggers::registry())
+        let arguments = crate::debug_target::plan_for(&config, &jig_debuggers::registry())
             .unwrap()
             .launch_arguments(&config, dir.path(), None, &[])
             .unwrap();

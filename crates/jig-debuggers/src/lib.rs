@@ -302,7 +302,7 @@ pub fn registry() -> Arc<Registry> {
 
 /// The user's `debuggers.toml`; `None` in tests.
 pub fn user_path() -> Option<PathBuf> {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "testing")) {
         return None;
     }
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/jig/debuggers.toml"))
@@ -474,7 +474,7 @@ fn glob(pattern: &str) -> Vec<PathBuf> {
 
 /// What's missing for a debugger that lives in a language server.
 fn lsp_missing(debugger: &Debugger, server: &str) -> Option<String> {
-    if !crate::languages::is_installed(server) {
+    if !jig_languages::is_installed(server) {
         return Some(format!("{server} isn't installed."));
     }
     let vars = Vars::new(&std::env::temp_dir());
@@ -736,6 +736,19 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn every_debugger_names_known_languages() {
+        for debugger in &registry().debuggers {
+            for language in &debugger.languages {
+                assert!(
+                    jig_languages::get(language).is_some(),
+                    "{} debugs unknown {language}",
+                    debugger.name
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_built_ins_parse_and_cover_five_languages() {

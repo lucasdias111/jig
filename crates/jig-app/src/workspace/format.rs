@@ -23,10 +23,11 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
-use crate::formatters::{self, Formatter};
 use crate::lsp::{Client, Encoding};
-use crate::{languages, settings, text_edits};
+use crate::{settings, text_edits};
+use jig_formatters::{self as formatters, Formatter};
 use jig_kit::editorconfig::EditorConfig;
+use jig_languages as languages;
 
 /// How long Format Document waits.
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10);

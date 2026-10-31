@@ -80,7 +80,7 @@ impl Workspace {
             String::new()
         };
         let language = tab.document.language(&self.settings.languages);
-        let comment = crate::languages::line_comment(language);
+        let comment = jig_languages::line_comment(language);
         let pair = jig_kit::brackets::matching(&text, cursor, comment);
         let guide = self
             .settings

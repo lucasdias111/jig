@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
-use crate::languages::language_for;
+use jig_languages::language_for;
 use jig_settings::LanguageSettings;
 
 #[derive(Debug, Default)]

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::languages::{Server, program_for, server_dir};
+use jig_languages::{Server, program_for, server_dir};
 
 /// Whether Jig installed `server`, so Uninstall has something to remove.
 pub fn installed_by_jig(server: &Server) -> bool {
@@ -127,7 +127,7 @@ mod tests {
             std::env::var_os("JIG_SERVERS_DIR").is_some(),
             "set JIG_SERVERS_DIR"
         );
-        let server = crate::languages::server_named("yaml-language-server").unwrap();
+        let server = jig_languages::server_named("yaml-language-server").unwrap();
         install(server).unwrap();
         assert!(installed_by_jig(server));
         let (status, ready) = status(server);
@@ -150,10 +150,7 @@ mod tests {
         let only = std::env::var("JIG_LIVE_TOOLS").ok();
         let scratch = tempfile::tempdir().unwrap();
         let mut failed = Vec::new();
-        for server in crate::languages::servers()
-            .iter()
-            .filter(|s| s.installable())
-        {
+        for server in jig_languages::servers().iter().filter(|s| s.installable()) {
             if only
                 .as_deref()
                 .is_some_and(|only| !only.split(',').any(|name| name == server.name))

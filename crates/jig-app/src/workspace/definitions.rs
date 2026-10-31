@@ -25,9 +25,9 @@ use serde_json::{Value, json};
 use super::Workspace;
 use super::tabs::canonical;
 use crate::definitions::{self, Target};
-use crate::languages::language_for;
 use crate::lsp::{self, Client};
 use crate::project_search::{self, SearchOptions, SearchResults};
+use jig_languages::language_for;
 
 /// The URI of a "show usages of this name" target: the name, then the
 /// offset it was clicked at.

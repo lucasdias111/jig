@@ -21,9 +21,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::{EditorHandle as _, KitEditor};
 
-use crate::languages::language_for;
 use crate::project_search::{self, LineMatch, MAX_RESULTS, SearchOptions, SearchResults};
 use crate::quick_open::group_digits;
+use jig_languages::language_for;
 use jig_settings::LanguageSettings;
 
 pub const WIDTH: f32 = 760.;

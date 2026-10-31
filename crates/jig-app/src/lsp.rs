@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::languages::{Server, program_for};
 use gpui_kit::{App, Global};
+use jig_languages::{Server, program_for};
 use jig_process::NoWindow as _;
 use jig_tools::search_path;
 
@@ -33,7 +33,7 @@ pub enum Encoding {
 
 /// The server for `language`, if there is one.
 pub fn server_for(language: &str) -> Option<&'static Server> {
-    crate::languages::servers()
+    jig_languages::servers()
         .iter()
         .find(|s| s.languages.iter().any(|l| l == language))
 }
@@ -41,7 +41,7 @@ pub fn server_for(language: &str) -> Option<&'static Server> {
 /// The protocol's name for a language.
 pub fn language_id(language: &str, path: &Path) -> &'static str {
     let jsx = path.extension().is_some_and(|e| e == "jsx");
-    match crate::languages::get(language) {
+    match jig_languages::get(language) {
         Some(_) if language == "javascript" && jsx => "javascriptreact",
         Some(known) => known.lsp_id,
         None => "plaintext",
@@ -112,7 +112,7 @@ impl Global for Failures {}
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
     client.on_diagnostics(diagnostics_sink(cx));
     client.on_failure(failures_sink(cx));
-    let server = crate::languages::server_named(server).expect("a known server");
+    let server = jig_languages::server_named(server).expect("a known server");
     cx.default_global::<Registry>()
         .insert(server, (&server.name, root), client);
 }
@@ -239,7 +239,7 @@ pub fn servers_changed(cx: &mut App) {
 /// What `server` is told in `initialize`: for jdtls, the plugins debuggers
 /// ask it to load, such as java-debug.
 fn init_options(server: &Server) -> serde_json::Value {
-    let bundles = crate::debuggers::lsp_bundles(&server.name);
+    let bundles = jig_debuggers::lsp_bundles(&server.name);
     if bundles.is_empty() {
         return serde_json::Value::Null;
     }

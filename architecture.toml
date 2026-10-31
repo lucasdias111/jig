@@ -26,8 +26,11 @@ jig-process = []
 jig-editor = []
 jig-commands = []
 jig-ai = ["jig-process"]
+jig-debuggers = ["jig-languages", "jig-process", "jig-tools"]
+jig-formatters = ["jig-kit", "jig-languages", "jig-process", "jig-tools"]
 jig-git = ["jig-commands", "jig-process"]
 jig-kit = ["jig-commands", "jig-settings"]
+jig-languages = ["jig-settings", "jig-tools"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
 jig-settings = ["jig-ai"]
@@ -36,9 +39,12 @@ jig-updates = ["jig-commands", "jig-process"]
 jig-app = [
     "jig-ai",
     "jig-commands",
+    "jig-debuggers",
     "jig-editor",
+    "jig-formatters",
     "jig-git",
     "jig-kit",
+    "jig-languages",
     "jig-map",
     "jig-planner",
     "jig-process",
@@ -65,22 +71,19 @@ crate = "jig-tools"
 uses = []
 
 # The languages and the language servers serving them, as data, and finding
-# a server's program.
+# a server's program, in its own crate.
 [capability.languages]
-modules = ["languages"]
-contract = ["languages"]
+crate = "jig-languages"
 uses = ["settings", "tools"]
 
-# Formatters as data, and running one.
+# Formatters as data, and running one, in its own crate.
 [capability.formatters]
-modules = ["formatters"]
-contract = ["formatters"]
+crate = "jig-formatters"
 uses = ["kit", "tools"]
 
-# Debuggers as data: which runs what, and installing them.
+# Debuggers as data: which runs what, and installing them, in its own crate.
 [capability.debuggers]
-modules = ["debuggers"]
-contract = ["debuggers"]
+crate = "jig-debuggers"
 uses = ["languages", "tools"]
 
 # Running language servers, and guessing definitions without one.

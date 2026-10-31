@@ -3600,9 +3600,12 @@ dependencies = [
  "ignore",
  "jig-ai",
  "jig-commands",
+ "jig-debuggers",
  "jig-editor",
+ "jig-formatters",
  "jig-git",
  "jig-kit",
+ "jig-languages",
  "jig-map",
  "jig-planner",
  "jig-process",
@@ -3665,10 +3668,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-debuggers"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "jig-languages",
+ "jig-process",
+ "jig-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "trash",
+]
+
+[[package]]
 name = "jig-editor"
 version = "0.5.0"
 dependencies = [
  "gpui-kit",
+]
+
+[[package]]
+name = "jig-formatters"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "jig-kit",
+ "jig-languages",
+ "jig-process",
+ "jig-tools",
+ "serde",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "trash",
 ]
 
 [[package]]
@@ -3695,6 +3728,48 @@ dependencies = [
  "serde_json",
  "similar",
  "tempfile",
+]
+
+[[package]]
+name = "jig-languages"
+version = "0.5.0"
+dependencies = [
+ "gpui-kit",
+ "jig-settings",
+ "jig-tools",
+ "serde",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "tree-sitter",
+ "tree-sitter-ada",
+ "tree-sitter-d",
+ "tree-sitter-dart",
+ "tree-sitter-dockerfile-updated",
+ "tree-sitter-elisp",
+ "tree-sitter-elm",
+ "tree-sitter-erlang",
+ "tree-sitter-fish",
+ "tree-sitter-gdscript",
+ "tree-sitter-gleam",
+ "tree-sitter-glsl",
+ "tree-sitter-haskell",
+ "tree-sitter-ini",
+ "tree-sitter-julia",
+ "tree-sitter-less",
+ "tree-sitter-matlab",
+ "tree-sitter-nix",
+ "tree-sitter-objc",
+ "tree-sitter-odin",
+ "tree-sitter-pascal",
+ "tree-sitter-powershell",
+ "tree-sitter-prisma-io",
+ "tree-sitter-r",
+ "tree-sitter-racket",
+ "tree-sitter-scss",
+ "tree-sitter-starlark",
+ "tree-sitter-vim",
+ "tree-sitter-vue-next",
+ "tree-sitter-xml",
 ]
 
 [[package]]
