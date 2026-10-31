@@ -27,13 +27,93 @@ pub(super) struct PlannerState {
     pub(super) unseen: bool,
     _events: Option<Subscription>,
     _watch: Option<TaskWatch>,
-    /// New Task or Edit Task, while it's open.
-    pub(super) form: Option<OpenTaskForm>,
 }
 
-pub(super) struct OpenTaskForm {
+/// New Task or Edit Task, as a sheet over the window, while it's open. Its
+/// own entity, so the workspace only opens it, places it and shows the
+/// task it saved.
+#[derive(Default)]
+pub(super) struct TaskFormSheet {
+    open: Option<OpenTaskForm>,
+}
+
+struct OpenTaskForm {
     view: Entity<TaskForm>,
     _events: Subscription,
+}
+
+/// The form closed: it saved the task with this id, or was cancelled.
+pub(super) enum TaskFormSheetEvent {
+    Saved(String),
+    Cancelled,
+}
+
+impl EventEmitter<TaskFormSheetEvent> for TaskFormSheet {}
+
+impl TaskFormSheet {
+    pub(super) fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// The form, while it's open.
+    #[cfg(test)]
+    pub(super) fn form(&self) -> Option<&Entity<TaskForm>> {
+        self.open.as_ref().map(|open| &open.view)
+    }
+
+    /// Open the form on `project`, editing `task` or making a new one;
+    /// `current` is the file on screen, whose names `@` lists first.
+    fn open(
+        &mut self,
+        project: &Path,
+        current: Option<String>,
+        task: Option<jig_ai::tasks::Task>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| TaskForm::new(project, current, task, window, cx));
+        let events = cx.subscribe(&view, |this, _, event, cx| {
+            let event = match event {
+                TaskFormEvent::Saved(id) => TaskFormSheetEvent::Saved(id.clone()),
+                TaskFormEvent::Cancelled => TaskFormSheetEvent::Cancelled,
+            };
+            if this.close(cx) {
+                cx.emit(event);
+            }
+        });
+        self.open = Some(OpenTaskForm {
+            view,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    /// Close the form without saving. Returns whether it was open.
+    pub(super) fn close(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.open.take().is_some();
+        if open {
+            cx.notify();
+        }
+        open
+    }
+}
+
+impl Render for TaskFormSheet {
+    /// The form, centred near the top like New Jig.
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let Some(open) = &self.open else {
+            return div().into_any_element();
+        };
+        let width = px(jig_planner::FORM_WIDTH);
+        let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
+        deferred(
+            anchored()
+                .position(point(left, px(super::TITLE_BAR_HEIGHT + 8.)))
+                .snap_to_window_with_margin(px(8.))
+                .child(open.view.clone()),
+        )
+        .into_any_element()
+    }
 }
 
 /// Watches the project's folder, `.jig` and `.jig/tasks`, each on its own,
@@ -138,8 +218,8 @@ impl Workspace {
             unseen: false,
             _events: Some(events),
             _watch: TaskWatch::start(root, window, cx),
-            form: None,
         };
+        self.task_form.update(cx, |sheet, cx| sheet.close(cx));
     }
 
     /// The planner's task `id` shown, from a sketch's bar.
@@ -291,61 +371,53 @@ impl Workspace {
                     .ok()
                     .map(|path| path.to_string_lossy().replace('\\', "/"))
             });
-        let view = cx.new(|cx| TaskForm::new(&project, current, task, window, cx));
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            TaskFormEvent::Saved(id) => {
-                let id = id.clone();
-                this.close_task_form(window, cx);
-                if !this.planner_shown() {
-                    this.set_mode(Mode::Planner, window, cx);
-                }
-                if let Some(view) = this.planner.view.clone() {
-                    view.update(cx, |planner, cx| {
-                        planner.reveal(&id, cx);
-                        planner.focus(window, cx);
-                    });
-                }
-            }
-            TaskFormEvent::Cancelled => this.close_task_form(window, cx),
-        });
-        self.planner.form = Some(OpenTaskForm {
-            view,
-            _events: events,
+        self.task_form.update(cx, |sheet, cx| {
+            sheet.open(&project, current, task, window, cx)
         });
         cx.notify();
     }
 
-    pub(super) fn close_task_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.planner.form.take().is_some() {
-            match &self.planner.view {
-                Some(view) if self.planner_shown() => {
-                    view.update(cx, |planner, cx| planner.focus(window, cx))
-                }
-                _ => self.focus_main(window, cx),
+    /// The form closed: the keyboard goes back to the planner, or the main
+    /// view, and a task it saved shows in the planner.
+    pub(super) fn on_task_form_event(
+        &mut self,
+        _: &Entity<TaskFormSheet>,
+        event: &TaskFormSheetEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match &self.planner.view {
+            Some(view) if self.planner_shown() => {
+                view.update(cx, |planner, cx| planner.focus(window, cx))
             }
-            cx.notify();
+            _ => self.focus_main(window, cx),
+        }
+        cx.notify();
+        let TaskFormSheetEvent::Saved(id) = event else {
+            return;
+        };
+        if !self.planner_shown() {
+            self.set_mode(Mode::Planner, window, cx);
+        }
+        if let Some(view) = self.planner.view.clone() {
+            view.update(cx, |planner, cx| {
+                planner.reveal(id, cx);
+                planner.focus(window, cx);
+            });
         }
     }
 
-    /// The task form, centred near the top like New Jig.
-    pub(super) fn render_task_form(&self, window: &Window) -> Option<AnyElement> {
-        let form = self.planner.form.as_ref()?;
-        let width = px(jig_planner::FORM_WIDTH);
-        let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
-        Some(
-            deferred(
-                anchored()
-                    .position(point(left, px(super::TITLE_BAR_HEIGHT + 8.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(form.view.clone()),
-            )
-            .into_any_element(),
-        )
+    /// The form, while it's open.
+    pub(super) fn render_task_form(&self, cx: &App) -> Option<AnyElement> {
+        self.task_form
+            .read(cx)
+            .is_open()
+            .then(|| self.task_form.clone().into_any_element())
     }
 
     #[cfg(test)]
-    pub(super) fn task_form(&self) -> Option<Entity<TaskForm>> {
-        self.planner.form.as_ref().map(|form| form.view.clone())
+    pub(super) fn task_form(&self, cx: &App) -> Option<Entity<TaskForm>> {
+        self.task_form.read(cx).form().cloned()
     }
 
     /// Hand all of `task` to the agent: a conversation that works through

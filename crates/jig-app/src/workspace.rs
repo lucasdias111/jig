@@ -205,6 +205,8 @@ pub struct Workspace {
     hunk_popup: Entity<git::hunk::HunkPopup>,
     /// The project's tasks, in the sidebar's Tasks view.
     planner: planner::PlannerState,
+    /// New Task or Edit Task.
+    task_form: Entity<planner::TaskFormSheet>,
     /// Where jumps came from, for Go Back and Go Forward.
     history: navigation::History,
     /// The logpoints that light the Map's functions up as the program
@@ -283,6 +285,9 @@ impl Workspace {
         let find_in_files = cx.new(|_| find::FindInFilesPanel::default());
         cx.subscribe_in(&find_in_files, window, Self::on_find_in_files_event)
             .detach();
+        let task_form = cx.new(|_| planner::TaskFormSheet::default());
+        cx.subscribe_in(&task_form, window, Self::on_task_form_event)
+            .detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -321,6 +326,7 @@ impl Workspace {
             branch_switcher,
             hunk_popup,
             planner: Default::default(),
+            task_form,
             history: Default::default(),
             mode: Mode::Code,
             map: None,
@@ -906,7 +912,7 @@ impl Render for Workspace {
                         .child(palette.view.clone()),
                 ))
             })
-            .children(self.render_task_form(window))
+            .children(self.render_task_form(cx))
             .children(self.render_quick_open(cx))
             .children(self.render_find_in_files(cx))
             .children(self.render_rename(cx))

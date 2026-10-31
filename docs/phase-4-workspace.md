@@ -119,9 +119,12 @@ where a mistake is cheap and obvious:
    `quick_open`, `file_index`, `recent_files`): these are modals, so this is
    when `modal_open` becomes a question asked of each modal entity instead
    of a list of fields.
-10. **Planner** (`planner`), then **the Map** (`map`, `pinched`) and the
-   **Map's agent**, then **the agent** (`agent`, `chat`), the largest
-   (3,300 lines) and the one most tangled with the Esc chain and review.
+10. **Planner**, **the Map** and **the agent**. The Planner's task form is a
+   modal like the others and becomes an entity; its view (`TaskPlanner`)
+   and the Map's (`MapView`) already are, in their own crates, so what's
+   left on the workspace for them is the mode, focus and how they reach
+   each other (a task arriving relinks the Map's sketches; a sketch's task
+   opens the Planner). The agent is where the review lives: see below.
 
 Each step is one commit: behaviour kept, the UI tests passing unchanged except
 for paths (`workspace.read(cx).x.is_some()` becoming
@@ -246,6 +249,41 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   Esc's fallback, for when the keyboard went back to the code under one,
   closes them all through `close_modals`; opening one closes the others
   through each one's `close`, as before.
+
+- **The Planner's task form** lives in `workspace/planner.rs` as
+  `TaskFormSheet`: it opens the form, draws it and says it closed, saved or
+  not; the workspace gives the keyboard back to the planner (or the main
+  view) and shows a saved task. With it, `modal_open` asks every modal but
+  the palette. The Planner's watch and its unseen dot stay on
+  `PlannerState`: a task arriving also relinks the Map's sketches.
+- **The Map** stays as it is: `MapPane` only holds the `MapView` entity and
+  its subscription, and `pinched` is the pinch from the code to the Map,
+  which is the window's layout.
+
+## The agent
+
+What's left of `Workspace` beyond its own concerns is the agent: `chat`
+(the conversation, `CommandRun`, used 85 times in `agent.rs` and 9 in
+`map_agent.rs`), `agent` (`AgentState`), `note`, `next_run_id`, and the
+palette. The conversation is where review lives: `chat.preview` is the edit
+under review, which `previewing()` reports to a dozen features (formatting,
+completions, the code menu, Git's revert, file watching), and accepting or
+rejecting it goes through the Esc, Enter and Tab capture handlers. It
+edits tabs, opens files, switches modes and starts the Map's drawings, so
+as an entity nearly everything it does would come back as an event. Two
+pieces could still move on their own:
+
+- **The conversation catalog** (`catalog`, `catalog_loading`,
+  `catalog_error`, `catalog_generation`): earlier conversations and
+  commands for ⌘K and Agent mode's list, loaded in the background. An
+  entity holding them and loading on request, with the palette and Agent
+  mode reading it.
+- **The docked conversation's width and drag** (`dock`, `resizing_dock`):
+  layout, so better beside the sidebar's and the run panel's.
+
+Moving the conversation itself is a phase of its own, if it's worth doing:
+it would start by giving review a narrow interface (`previewing`, accept,
+reject) that the other features ask, before anything moves.
 
 ## Not every field becomes an entity
 

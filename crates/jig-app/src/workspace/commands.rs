@@ -343,7 +343,7 @@ impl Workspace {
     /// The agent input or a form has the keyboard.
     pub(super) fn modal_open(&self, cx: &App) -> bool {
         self.palette.is_some()
-            || self.planner.form.is_some()
+            || self.task_form.read(cx).is_open()
             || self.quick_open.read(cx).is_open()
             || self.find_in_files.read(cx).is_open()
     }
@@ -352,7 +352,7 @@ impl Workspace {
     /// back to the code without them.
     fn close_modals(&mut self, cx: &mut Context<Self>) {
         self.palette = None;
-        self.planner.form = None;
+        self.task_form.update(cx, |sheet, cx| sheet.close(cx));
         self.close_quick_open(cx);
         self.close_find_in_files(cx);
     }

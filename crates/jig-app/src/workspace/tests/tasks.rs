@@ -81,7 +81,7 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| {
         window.dispatch_action(Box::new(crate::workspace::NewTask), cx)
     });
-    let form = cx.update(|cx| workspace.read(cx).task_form().expect("the form"));
+    let form = cx.update(|cx| workspace.read(cx).task_form(cx).expect("the form"));
     let view = form.clone();
     step(cx, window, move |window, cx| {
         view.update(cx, |form, cx| {
@@ -104,7 +104,7 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
     );
     assert_eq!(task_ids(cx, &planner), ["add-a-planner"]);
     assert!(
-        cx.update(|cx| workspace.read(cx).task_form().is_none()),
+        cx.update(|cx| workspace.read(cx).task_form(cx).is_none()),
         "closed"
     );
     assert!(cx.update(|cx| planner.read(cx).is_expanded("add-a-planner")));
@@ -145,7 +145,7 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
         step(cx, window, move |_, cx| {
             view.update(cx, |planner, cx| planner.edit_task("add-a-planner", cx))
         });
-        cx.update(|cx| workspace.read(cx).task_form().expect("the form"))
+        cx.update(|cx| workspace.read(cx).task_form(cx).expect("the form"))
     };
     let form = edit(cx);
     step(cx, window, move |window, cx| {
@@ -154,7 +154,7 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
             form.save(window, cx);
         });
     });
-    assert!(cx.update(|cx| workspace.read(cx).task_form().is_none()));
+    assert!(cx.update(|cx| workspace.read(cx).task_form(cx).is_none()));
     // Esc leaves a form without saving.
     edit(cx);
     step(cx, window, |window, cx| {
@@ -162,7 +162,7 @@ fn the_tasks_view_makes_checks_off_and_edits_tasks(cx: &mut TestAppContext) {
         window.press("escape", cx);
     });
     assert!(
-        cx.update(|cx| workspace.read(cx).task_form().is_none()),
+        cx.update(|cx| workspace.read(cx).task_form(cx).is_none()),
         "Esc cancels"
     );
     let task = jig_ai::tasks::load(dir.path(), "add-a-planner").unwrap();
@@ -345,7 +345,7 @@ fn typing_at_in_the_task_form_links_to_code(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| {
         window.dispatch_action(Box::new(crate::workspace::NewTask), cx)
     });
-    let form = cx.update(|cx| workspace.read(cx).task_form().expect("the form"));
+    let form = cx.update(|cx| workspace.read(cx).task_form(cx).expect("the form"));
     assert!(
         cx.update(|cx| form.read(cx).index_ready()),
         "the project was read"
@@ -381,7 +381,7 @@ fn typing_at_in_the_task_form_links_to_code(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| window.press("escape", cx));
     assert_eq!(cx.update(|cx| form.read(cx).mention_items()), None);
     assert!(
-        cx.update(|cx| workspace.read(cx).task_form().is_some()),
+        cx.update(|cx| workspace.read(cx).task_form(cx).is_some()),
         "still open"
     );
 }
