@@ -20,8 +20,13 @@ jig-settings.workspace = true
 jig-tools.workspace = true
 serde.workspace = true
 toml.workspace = true
+# GDScript's grammar, which GPUI Kit has no feature for; registered in
+# `gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
 tree-sitter-gdscript = "6"
 tree-sitter = "0.26"
+# More grammars GPUI Kit has no feature for, registered in `grammars`. Each
+# must build on `tree-sitter-language` (or tree-sitter >= 0.21), so it links
+# against the one tree-sitter above.
 tree-sitter-ada = "0.1"
 tree-sitter-d = "0.8"
 tree-sitter-dart = "0.2"
