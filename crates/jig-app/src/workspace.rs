@@ -170,8 +170,8 @@ pub struct Workspace {
     agent: agent::AgentState,
     quick_open: Option<go_to_file::OpenQuickOpen>,
     find_in_files: Option<find::OpenFindInFiles>,
-    /// Rename Symbol's field, while it's open.
-    rename: Option<rename::OpenRename>,
+    /// Rename Symbol's field.
+    rename: Entity<rename::RenameField>,
     /// Go to Line's field.
     go_to_line: Entity<go_to_line::GoToLineField>,
     last_find: find::LastFind,
@@ -255,6 +255,9 @@ impl Workspace {
         let go_to_line = cx.new(|_| go_to_line::GoToLineField::default());
         cx.subscribe_in(&go_to_line, window, Self::on_go_to_line_event)
             .detach();
+        let rename = cx.new(|_| rename::RenameField::default());
+        cx.subscribe_in(&rename, window, Self::on_rename_event)
+            .detach();
         let mut this = Self {
             selection_button,
             tabs: Vec::new(),
@@ -270,7 +273,7 @@ impl Workspace {
             agent: agent::AgentState::default(),
             quick_open: None,
             find_in_files: None,
-            rename: None,
+            rename,
             go_to_line,
             last_find: Default::default(),
             find_panel: None,
@@ -871,7 +874,7 @@ impl Render for Workspace {
             .children(self.render_task_form(window))
             .children(self.render_quick_open(window))
             .children(self.render_find_in_files(window))
-            .children(self.render_rename())
+            .children(self.render_rename(cx))
             .children(self.render_go_to_line(cx))
             .children(self.render_run_picker(window))
             .children(self.render_branch_picker(window))

@@ -21,14 +21,102 @@ use jig_lsp::lsp::{self, Encoding};
 /// How long to wait for the language server before renaming in this file.
 const RENAME_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(super) struct OpenRename {
-    pub(super) view: Entity<FieldBox>,
+/// Rename's field, while it's open. Its own entity, so the workspace only
+/// opens it, places it and renames when it says so.
+#[derive(Default)]
+pub(super) struct RenameField {
+    open: Option<OpenRename>,
+}
+
+struct OpenRename {
+    view: Entity<FieldBox>,
     anchor: Point<Pixels>,
     /// The tab the name is in.
     tab: EntityId,
     /// Where the name was when the field opened.
     range: Range<usize>,
     _events: Subscription,
+}
+
+/// What the field asks of the workspace, which has the code and the focus.
+pub(super) enum RenameEvent {
+    /// Rename the name at `range` in tab `tab` to `name`. The field has
+    /// closed.
+    Rename {
+        name: String,
+        tab: EntityId,
+        range: Range<usize>,
+    },
+    /// The field closed without renaming. `refocus` when it was dismissed,
+    /// rather than left by clicking elsewhere.
+    Closed { refocus: bool },
+}
+
+impl EventEmitter<RenameEvent> for RenameField {}
+
+impl RenameField {
+    pub(super) fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Open the field at `anchor` on `name`, the one at `range` in tab
+    /// `tab`, with the keyboard.
+    fn open(
+        &mut self,
+        name: &str,
+        tab: EntityId,
+        range: Range<usize>,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| FieldBox::new(name, "", "↩ rename · esc cancel", window, cx));
+        let events = cx.subscribe(&view, |this, _, event, cx| match event {
+            FieldBoxEvent::Submit(name) => {
+                if let Some(open) = this.open.take() {
+                    cx.emit(RenameEvent::Rename {
+                        name: name.clone(),
+                        tab: open.tab,
+                        range: open.range,
+                    });
+                    cx.notify();
+                }
+            }
+            FieldBoxEvent::Dismissed => this.close(true, cx),
+            FieldBoxEvent::Blurred => this.close(false, cx),
+        });
+        self.open = Some(OpenRename {
+            view,
+            anchor,
+            tab,
+            range,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close(&mut self, refocus: bool, cx: &mut Context<Self>) {
+        if self.open.take().is_some() {
+            cx.emit(RenameEvent::Closed { refocus });
+            cx.notify();
+        }
+    }
+}
+
+impl Render for RenameField {
+    /// The field, under the name.
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let Some(open) = &self.open else {
+            return div().into_any_element();
+        };
+        deferred(
+            anchored()
+                .position(open.anchor)
+                .snap_to_window_with_margin(px(8.))
+                .child(open.view.clone()),
+        )
+        .into_any_element()
+    }
 }
 
 impl Workspace {
@@ -38,7 +126,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.home || self.previewing() || self.modal_open() || self.rename.is_some() {
+        if self.home || self.previewing() || self.modal_open() || self.rename.read(cx).is_open() {
             return;
         }
         let text = self.editor().text(cx);
@@ -46,60 +134,57 @@ impl Workspace {
             self.show_note("Put the cursor on a name to rename it.".into(), window, cx);
             return;
         };
-        let view = cx.new(|cx| {
-            FieldBox::new(
-                &text[range.clone()],
-                "",
-                "↩ rename · esc cancel",
-                window,
-                cx,
-            )
-        });
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            FieldBoxEvent::Submit(name) => {
-                let name = name.clone();
-                this.finish_rename(name, window, cx);
-            }
-            FieldBoxEvent::Dismissed => this.close_rename(true, window, cx),
-            FieldBoxEvent::Blurred => this.close_rename(false, window, cx),
-        });
-        self.rename = Some(OpenRename {
-            view,
-            anchor: self.floating_anchor(cx),
-            tab: self.tab().id(),
-            range,
-            _events: events,
+        let tab = self.tab().id();
+        let anchor = self.floating_anchor(cx);
+        self.rename.update(cx, |field, cx| {
+            field.open(&text[range.clone()], tab, range, anchor, window, cx)
         });
         cx.notify();
     }
 
-    fn close_rename(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.rename.take().is_some() {
-            if refocus {
-                self.focus_main(window, cx);
+    /// Act on what the field says: rename, or back to the code.
+    pub(super) fn on_rename_event(
+        &mut self,
+        _: &Entity<RenameField>,
+        event: &RenameEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            RenameEvent::Rename { name, tab, range } => {
+                cx.notify();
+                self.finish_rename(name.clone(), *tab, range.clone(), window, cx);
             }
-            cx.notify();
+            RenameEvent::Closed { refocus } => {
+                if *refocus {
+                    self.focus_main(window, cx);
+                }
+                cx.notify();
+            }
         }
     }
 
-    fn finish_rename(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.rename.take() else {
-            return;
-        };
-        cx.notify();
-        if self.home || self.tab().id() != open.tab {
+    fn finish_rename(
+        &mut self,
+        name: String,
+        tab: EntityId,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.home || self.tab().id() != tab {
             return;
         }
         self.focus_editor(window, cx);
         let text = self.editor().text(cx);
         let Some(lsp) = self.tab().lsp.as_ref() else {
-            self.rename_in_file(open.range, &name, window, cx);
+            self.rename_in_file(range, &name, window, cx);
             return;
         };
         let client = lsp.client.clone();
         let encoding = client.encoding();
         let mut params =
-            lsp::text_document_position(&lsp.uri, lsp::position(&text, open.range.start, encoding));
+            lsp::text_document_position(&lsp.uri, lsp::position(&text, range.start, encoding));
         params["newName"] = json!(name);
         let request = client.request("textDocument/rename", params);
         cx.spawn_in(window, async move |this, cx| {
@@ -110,7 +195,7 @@ impl Workspace {
             };
             this.update_in(cx, |this, window, cx| {
                 // Typed into since: the server's answer is about other text.
-                if this.home || this.tab().id() != open.tab || this.editor().text(cx) != text {
+                if this.home || this.tab().id() != tab || this.editor().text(cx) != text {
                     return;
                 }
                 match response {
@@ -118,10 +203,10 @@ impl Workspace {
                         this.show_note(format!("Can't rename: {error}"), window, cx)
                     }
                     Some(Ok(edit)) if !workspace_edits(&edit).is_empty() => {
-                        this.apply_rename(&edit, encoding, open.range.start, window, cx)
+                        this.apply_rename(&edit, encoding, range.start, window, cx)
                     }
                     // No answer, or none it could give: this file's uses.
-                    _ => this.rename_in_file(open.range, &name, window, cx),
+                    _ => this.rename_in_file(range, &name, window, cx),
                 }
             })
             .ok();
@@ -219,18 +304,12 @@ impl Workspace {
         (files, changed)
     }
 
-    /// The field, under the name.
-    pub(super) fn render_rename(&self) -> Option<AnyElement> {
-        let open = self.rename.as_ref()?;
-        Some(
-            deferred(
-                anchored()
-                    .position(open.anchor)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(open.view.clone()),
-            )
-            .into_any_element(),
-        )
+    /// The field, under the name, while it's open.
+    pub(super) fn render_rename(&self, cx: &App) -> Option<AnyElement> {
+        self.rename
+            .read(cx)
+            .is_open()
+            .then(|| self.rename.clone().into_any_element())
     }
 }
 

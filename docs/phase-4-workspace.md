@@ -157,3 +157,8 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   `Closed { refocus }`. The workspace opens it (`open(anchor, …)`), places it
   while open, and on its events refocuses, jumps and remembers the place for
   Go Back, as before.
+- **Rename Symbol's field** lives in `workspace/rename.rs` as `RenameField`:
+  it keeps the tab and range of the name it opened on, and emits
+  `Rename { name, tab, range }` or `Closed { refocus }`. Renaming (the
+  server's edits, or this file's whole-word uses) stays on the workspace,
+  since it edits tabs.

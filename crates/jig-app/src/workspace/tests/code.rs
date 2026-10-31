@@ -486,12 +486,12 @@ fn rename_symbol_without_a_server_renames_in_the_file(cx: &mut TestAppContext) {
         editor.select(at..at, cx);
     });
     step(cx, window, |window, cx| window.press("f2", cx));
-    assert!(workspace.read_with(cx, |this, _| this.rename.is_some()));
+    assert!(workspace.read_with(cx, |this, cx| this.rename.read(cx).is_open()));
     // The old name is selected, so typing replaces it.
     cx.simulate_input(window, "sum");
     cx.simulate_keystrokes(window, "enter");
     cx.run_until_parked();
-    assert!(workspace.read_with(cx, |this, _| this.rename.is_none()));
+    assert!(workspace.read_with(cx, |this, cx| !this.rename.read(cx).is_open()));
     assert_eq!(
         text(cx, &workspace),
         "fn main() {\n    let sum = 1;\n    use_it(sum, subtotal);\n}\n"
@@ -505,7 +505,7 @@ fn rename_symbol_without_a_server_renames_in_the_file(cx: &mut TestAppContext) {
     cx.simulate_input(window, "other");
     cx.simulate_keystrokes(window, "escape");
     cx.run_until_parked();
-    assert!(workspace.read_with(cx, |this, _| this.rename.is_none()));
+    assert!(workspace.read_with(cx, |this, cx| !this.rename.read(cx).is_open()));
     assert!(text(cx, &workspace).contains("let sum = 1;"));
 }
 
