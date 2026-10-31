@@ -2,9 +2,12 @@
 //! where the cursor is, and how the file is indented, encoded and
 //! highlighted.
 
+use std::time::Duration;
+
 use gpui_kit::component::input::EditorState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Workspace;
@@ -13,6 +16,61 @@ use jig_languages as languages;
 use jig_updates::{self as update, RestartToUpdate};
 
 pub(super) const HEIGHT: f32 = 24.;
+/// How long a message stays in the status bar.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// A message in the status bar, such as why a save wasn't formatted, gone
+/// after a while. A view of its own, so it clears itself.
+#[derive(Default)]
+pub(super) struct StatusMessage {
+    showing: Option<Showing>,
+    /// Which message is showing, so an older one's timer leaves a newer
+    /// one be.
+    serial: u64,
+}
+
+struct Showing {
+    message: SharedString,
+    _task: Task<()>,
+}
+
+impl StatusMessage {
+    /// The message showing, if any.
+    pub(super) fn message(&self) -> Option<&SharedString> {
+        self.showing.as_ref().map(|showing| &showing.message)
+    }
+
+    /// Show `message` for a while, in place of any other.
+    fn show(&mut self, message: SharedString, cx: &mut Context<Self>) {
+        self.serial += 1;
+        let serial = self.serial;
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STATUS_TIMEOUT).await;
+            this.update(cx, |this, cx| {
+                if this.serial == serial {
+                    this.showing = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
+        self.showing = Some(Showing {
+            message,
+            _task: task,
+        });
+        cx.notify();
+    }
+}
+
+impl Render for StatusMessage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .min_w_0()
+            .truncate()
+            .text_color(cx.theme().warning)
+            .children(self.message().cloned())
+    }
+}
 
 /// `Ln 12, Col 5`, for one tab's editor. A view of its own so the cursor
 /// moving repaints just this, not the whole workspace.
@@ -48,6 +106,12 @@ impl Render for CursorPosition {
 }
 
 impl Workspace {
+    /// Show `message` in the status bar for a while.
+    pub(super) fn show_status(&mut self, message: SharedString, cx: &mut Context<Self>) {
+        self.status_note
+            .update(cx, |status, cx| status.show(message, cx));
+    }
+
     pub(super) fn render_status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let tab = self.tab();
@@ -70,13 +134,9 @@ impl Workspace {
             .text_color(theme.muted_foreground)
             .children(self.render_branch_switcher(cx))
             .children(self.render_problem_counts(cx))
-            .children(self.status_note.as_ref().map(|note| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.warning)
-                    .child(note.message.clone())
-            }))
+            .when(self.status_note.read(cx).message().is_some(), |this| {
+                this.child(self.status_note.clone())
+            })
             .child(div().flex_1())
             .children(render_update(cx))
             .child(tab.cursor.clone())

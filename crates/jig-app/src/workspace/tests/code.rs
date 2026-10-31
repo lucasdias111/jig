@@ -198,8 +198,9 @@ fn a_server_that_cant_start_says_why(cx: &mut TestAppContext) {
             let workspace = workspace.read(cx);
             workspace
                 .status_note
-                .as_ref()
-                .map(|note| note.message.to_string())
+                .read(cx)
+                .message()
+                .map(|note| note.to_string())
         })
     };
     for _ in 0..200 {

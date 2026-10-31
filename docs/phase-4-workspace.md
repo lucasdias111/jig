@@ -92,8 +92,9 @@ where a mistake is cheap and obvious:
 3. **Find and Replace in the file** (`find_panel`, `last_find_query`). Two
    fields, one file; closed from the Esc chain, `tabs.rs` and `mode.rs`
    through `close`.
-4. **Status note and pending save** (`status_note`, `pending_save`):
-   format-on-save's state, read by the status bar.
+4. **The status bar's message** (`status_note`), shown by formatting and
+   the language servers. `pending_save` stays: it only holds the task that
+   finishes the workspace's own save, and has nothing to draw or decide.
 5. **Go Back and Go Forward** (`history`). One file owns it; ten call
    `remember_location`, which becomes a method on the entity taking `here`.
 6. **Breakpoints** (`breakpoints`) and **live points** (`live`), then
@@ -169,3 +170,15 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   switching tabs and modes, and the palette close it through
   `Workspace::close_find_panel`, as before. The workspace places it at the
   top right of the code.
+- **The status bar's message** lives in `workspace/status_bar.rs` as
+  `StatusMessage`: it shows a message, clears it after a while and draws
+  it. `Workspace::show_status` asks it to show one, and the workspace
+  observes it, since whether there's a message decides what the status bar
+  holds. `pending_save` stayed on the workspace, as above.
+
+## Not every field becomes an entity
+
+An entity earns its place when a feature has state of its own and draws or
+decides something with it. A field that only holds a task driving the
+workspace's own work (`pending_save`), or a counter, stays where it is:
+wrapping it would add a hop without taking anything off `Workspace`.

@@ -34,8 +34,6 @@ use jig_lsp::lsp::{Client, Encoding};
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long saving waits for the formatter before saving the file as it is.
 pub(super) const SAVE_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long a note stays in the status bar.
-const STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The file's formatted text, or why there isn't any.
 type Job = LocalBoxFuture<'static, Result<String, String>>;
@@ -330,28 +328,6 @@ impl Workspace {
         })
     }
 
-    /// Show `message` in the status bar for a while.
-    pub(super) fn show_status(&mut self, message: SharedString, cx: &mut Context<Self>) {
-        self.next_run_id += 1;
-        let id = self.next_run_id;
-        let task = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(STATUS_TIMEOUT).await;
-            this.update(cx, |this, cx| {
-                if this.status_note.as_ref().is_some_and(|note| note.id == id) {
-                    this.status_note = None;
-                    cx.notify();
-                }
-            })
-            .ok();
-        });
-        self.status_note = Some(StatusNote {
-            id,
-            message,
-            _task: task,
-        });
-        cx.notify();
-    }
-
     /// Open `~/.config/jig/formatters.toml`, starting it from the template.
     pub(super) fn edit_formatters(
         &mut self,
@@ -406,13 +382,6 @@ impl Workspace {
         }
         self.open_file(&path, window, cx);
     }
-}
-
-/// A message in the status bar, gone after a while.
-pub(super) struct StatusNote {
-    id: u64,
-    pub(super) message: SharedString,
-    _task: Task<()>,
 }
 
 /// Ask the server to format `text`, or `range` of it.

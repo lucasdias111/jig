@@ -213,7 +213,7 @@ pub struct Workspace {
     /// A save waiting on its formatter.
     pending_save: Option<format::PendingSave>,
     /// A note in the status bar, such as why a save wasn't formatted.
-    status_note: Option<format::StatusNote>,
+    status_note: Entity<status_bar::StatusMessage>,
 }
 
 struct ProjectTree {
@@ -256,6 +256,9 @@ impl Workspace {
         let rename = cx.new(|_| rename::RenameField::default());
         cx.subscribe_in(&rename, window, Self::on_rename_event)
             .detach();
+        let status_note = cx.new(|_| status_bar::StatusMessage::default());
+        // Whether the status bar has a message decides what it holds.
+        cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
         let find_panel = cx.new(|_| find_panel::FindInFile::default());
         cx.subscribe_in(&find_panel, window, Self::on_find_dismissed)
             .detach();
@@ -296,7 +299,7 @@ impl Workspace {
             live: Default::default(),
             file_watch: file_watch::FileWatch::start(window, cx),
             pending_save: None,
-            status_note: None,
+            status_note,
         };
         let tab = this.new_tab(document, window, cx);
         if this.home {

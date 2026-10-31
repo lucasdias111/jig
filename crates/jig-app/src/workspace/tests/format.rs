@@ -133,9 +133,9 @@ fn saving_gives_up_on_a_slow_formatter(cx: &mut TestAppContext) {
         let this = workspace.read(cx);
         assert!(!this.tab().dirty);
         assert!(this.pending_save.is_none());
-        let note = this.status_note.as_ref().unwrap();
+        let note = this.status_note.read(cx).message().unwrap();
         assert_eq!(
-            note.message.as_ref(),
+            note.as_ref(),
             "Saved without formatting. The formatter took more than 2 s."
         );
     });
