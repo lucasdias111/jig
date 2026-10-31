@@ -14,8 +14,8 @@ use notify::Watcher as _;
 use super::commands::Ask;
 use super::mode::Mode;
 use super::{NewTask, ToggleTaskPlanner, Workspace};
-use crate::planner::{CodeLink, TaskForm, TaskFormEvent, first_code_link, locate_link};
-use crate::planner::{TaskPlanner, TaskPlannerEvent};
+use jig_planner::{CodeLink, TaskForm, TaskFormEvent, first_code_link, locate_link};
+use jig_planner::{TaskPlanner, TaskPlannerEvent};
 
 /// An agent writes a task in one go, but saves come as several events.
 const SETTLE: Duration = Duration::from_millis(100);
@@ -330,7 +330,7 @@ impl Workspace {
     /// The task form, centred near the top like New Jig.
     pub(super) fn render_task_form(&self, window: &Window) -> Option<AnyElement> {
         let form = self.planner.form.as_ref()?;
-        let width = px(crate::planner::FORM_WIDTH);
+        let width = px(jig_planner::FORM_WIDTH);
         let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
         Some(
             deferred(

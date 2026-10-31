@@ -3603,6 +3603,7 @@ dependencies = [
  "jig-editor",
  "jig-git",
  "jig-map",
+ "jig-planner",
  "jig-process",
  "libc",
  "lsp-types",
@@ -3655,6 +3656,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "ignore",
  "serde",
  "tempfile",
  "toml 1.1.6+spec-1.1.0",
@@ -3705,6 +3707,19 @@ dependencies = [
  "tree-sitter-swift",
  "tree-sitter-typescript",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "jig-planner"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-ai",
+ "jig-commands",
+ "regex",
+ "tempfile",
+ "trash",
 ]
 
 [[package]]

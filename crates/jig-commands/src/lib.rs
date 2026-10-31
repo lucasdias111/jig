@@ -6,6 +6,7 @@ pub mod chat;
 pub mod fuzzy;
 pub mod motion;
 pub mod palette;
+pub mod project_files;
 pub mod surface;
 
 pub use bubble::{Bubble, LiveStep};

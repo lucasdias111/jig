@@ -78,7 +78,7 @@ pub fn declarations(text: &str) -> Vec<(String, String, usize)> {
 /// Walk `root` and read what it declares. Blocks; run it in the background.
 pub fn index(root: &Path) -> ProjectIndex {
     // Jig's own files, the tasks among them, aren't what a task links to.
-    let files: Vec<String> = crate::quick_open::walk(root)
+    let files: Vec<String> = jig_commands::project_files::walk(root)
         .into_iter()
         .filter(|path| !path.starts_with(".jig/"))
         .collect();

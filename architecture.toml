@@ -28,12 +28,14 @@ jig-commands = []
 jig-ai = ["jig-process"]
 jig-git = ["jig-commands", "jig-process"]
 jig-map = ["jig-ai", "jig-commands"]
+jig-planner = ["jig-ai", "jig-commands"]
 jig-app = [
     "jig-ai",
     "jig-commands",
     "jig-editor",
     "jig-git",
     "jig-map",
+    "jig-planner",
     "jig-process",
 ]
 
@@ -126,11 +128,10 @@ modules = ["agent", "agents", "providers"]
 contract = ["agent", "agents", "providers"]
 uses = ["settings", "kit", "toolchain"]
 
-# The task planner.
+# The task planner, in its own crate.
 [capability.planner]
-modules = ["planner"]
-contract = ["planner"]
-uses = ["kit", "git", "search"]
+crate = "jig-planner"
+uses = []
 
 # The Map, in its own crate.
 [capability.map]

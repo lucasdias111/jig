@@ -141,7 +141,7 @@ impl FindInFiles {
         let walk = cx.spawn_in(window, async move |this, cx| {
             let files = cx
                 .background_executor()
-                .spawn(async move { crate::quick_open::walk(&walk_root) })
+                .spawn(async move { jig_commands::project_files::walk(&walk_root) })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 let files = Arc::new(files);

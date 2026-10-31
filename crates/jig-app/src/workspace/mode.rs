@@ -171,7 +171,7 @@ impl Workspace {
             };
             let icon = match mode {
                 Mode::Code => Icon::default().data(CODE_ICON),
-                Mode::Planner => Icon::default().data(crate::planner::TASKS_ICON),
+                Mode::Planner => Icon::default().data(jig_planner::TASKS_ICON),
                 Mode::Map => Icon::new(IconName::Map),
                 Mode::Agent => jig_commands::surface::agent_icon(),
             };

@@ -199,9 +199,9 @@ async fn guess(
             let (files, found) = cx
                 .background_executor()
                 .spawn(async move {
-                    let files = info
-                        .files
-                        .unwrap_or_else(|| Arc::new(crate::quick_open::walk(&search_root)));
+                    let files = info.files.unwrap_or_else(|| {
+                        Arc::new(jig_commands::project_files::walk(&search_root))
+                    });
                     let found = search_files(
                         &search_root,
                         &files,

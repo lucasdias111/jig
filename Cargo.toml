@@ -66,6 +66,7 @@ jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }
 jig-git = { path = "crates/jig-git" }
 jig-map = { path = "crates/jig-map" }
+jig-planner = { path = "crates/jig-planner" }
 jig-process = { path = "crates/jig-process" }
 # Shared by more than one crate, so they stay on one version.
 anyhow = "1"

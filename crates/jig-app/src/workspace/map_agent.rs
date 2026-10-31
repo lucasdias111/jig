@@ -421,8 +421,7 @@ impl Workspace {
         else {
             return;
         };
-        if let Some(crate::planner::LinkTarget::Code(code)) = crate::planner::link_target(link, "")
-        {
+        if let Some(jig_planner::LinkTarget::Code(code)) = jig_planner::link_target(link, "") {
             let path = project.join(&code.path);
             self.open_code_link(&path, &code, window, cx);
         }

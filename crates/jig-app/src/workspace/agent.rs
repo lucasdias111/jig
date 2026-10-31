@@ -34,8 +34,8 @@ use serde_json::Value;
 use super::commands::{CommandRun, Preview};
 use super::tabs::canonical;
 use super::{EditAgents, OpenAgentConversations, OpenCommand, SendSelectionToAgent, Workspace};
-use crate::planner::link_files;
 use jig_map::{Action, only_reads};
+use jig_planner::link_files;
 
 /// Why a conversation can't start.
 const NO_PROJECT: &str =

@@ -2,7 +2,7 @@
 //! add, and links from a task to the code, with Go Back and Go Forward.
 
 use super::*;
-use crate::planner::TaskPlanner;
+use jig_planner::TaskPlanner;
 
 const GO_BACK: &str = if cfg!(target_os = "macos") {
     "ctrl--"

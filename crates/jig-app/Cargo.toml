@@ -22,6 +22,7 @@ jig-commands.workspace = true
 jig-ai.workspace = true
 jig-git.workspace = true
 jig-map.workspace = true
+jig-planner.workspace = true
 jig-process.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
@@ -88,6 +89,7 @@ snapshots = ["gpui-kit/test-support"]
 tempfile.workspace = true
 jig-map = { workspace = true, features = ["testing"] }
 jig-git = { workspace = true, features = ["testing"] }
+jig-planner = { workspace = true, features = ["testing"] }
 # Reads the source as tokens for the architecture test.
 proc-macro2 = "1"
 gpui-kit = { workspace = true, features = ["test-support"] }

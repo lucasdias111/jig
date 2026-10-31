@@ -30,7 +30,6 @@ mod lines;
 mod lsp;
 mod lsp_debug;
 mod menus;
-mod planner;
 mod project;
 mod project_search;
 mod providers;

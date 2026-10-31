@@ -5,9 +5,9 @@
 //! returns. Agents add tasks with their tool ([`jig_ai::tasks::mcp`]); the
 //! workspace watches the folder, so theirs show up as they're made.
 
-pub mod form;
-pub mod links;
-pub mod symbols;
+mod form;
+mod links;
+mod symbols;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -107,7 +107,7 @@ impl TaskPlanner {
         this
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn tasks(&self) -> &[Task] {
         &self.tasks
     }
@@ -302,27 +302,27 @@ impl TaskPlanner {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_expanded(&self, id: &str) -> bool {
         self.expanded.contains(id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn click_link(&mut self, url: &str, markdown: &str, cx: &mut Context<Self>) {
         self.open_link(url, markdown, cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn edit_task(&mut self, id: &str, cx: &mut Context<Self>) {
         self.edit(id, cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn delegate_todo(&mut self, id: &str, todo: usize, cx: &mut Context<Self>) {
         self.delegate(id, todo, cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn start_adding_todo(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.start_quick_add(id, window, cx);
     }

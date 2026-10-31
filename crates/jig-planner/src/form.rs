@@ -545,30 +545,30 @@ impl TaskForm {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn mention_items(&self) -> Option<Vec<String>> {
         self.mention
             .as_ref()
             .map(|mention| mention.items.iter().map(Mentioned::link).collect())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn index_ready(&self) -> bool {
         self.index.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn focus_description(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.description
             .update(cx, |input, cx| input.focus(window, cx));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn description(&self, cx: &App) -> String {
         self.description.read(cx).value().to_string()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn fill(
         &mut self,
         title: &str,
