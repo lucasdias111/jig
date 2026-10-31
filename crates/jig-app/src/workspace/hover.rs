@@ -28,7 +28,7 @@ use super::diagnostics::{LINGER, ProblemHover, problem_row};
 use super::quick_fix::PanelFixes;
 use super::{ShowHover, Workspace};
 use crate::hover::{self, Signature};
-use crate::lsp::{self, Client};
+use jig_lsp::lsp::{self, Client};
 
 /// How long the pointer rests on a name before the server is asked.
 const HOVER_DELAY: Duration = Duration::from_millis(500);
@@ -150,7 +150,7 @@ impl HoverProvider for Hovers {
     ) -> Task<Result<Option<Hover>>> {
         let source = text.to_string();
         // Not on a name: nothing to ask about.
-        if crate::definitions::name_at(&source, offset).is_none() {
+        if jig_lsp::definitions::name_at(&source, offset).is_none() {
             return Task::ready(Ok(None));
         }
         let Some((client, uri)) = self
@@ -454,7 +454,7 @@ impl CodeHover {
                     .collect()
             })
             .unwrap_or_default();
-        let name = crate::definitions::name_at(&source, cursor);
+        let name = jig_lsp::definitions::name_at(&source, cursor);
         let range = name.clone().unwrap_or(cursor..cursor);
         let pin = move |this: &mut Self,
                         markdown: Option<SharedString>,

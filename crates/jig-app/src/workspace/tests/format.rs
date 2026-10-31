@@ -18,10 +18,10 @@ fn open_with_formatting_server(
     let dir = &dir.canonicalize().unwrap();
     let path = dir.join("main.rs");
     std::fs::write(&path, text).unwrap();
-    let (client, _seen) = crate::lsp::fake_server(dir.to_path_buf(), answer);
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client.clone(), cx));
+    let (client, _seen) = jig_lsp::lsp::fake_server(dir.to_path_buf(), answer);
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client.clone(), cx));
     for _ in 0..500 {
         if client.formatting().document {
             break;

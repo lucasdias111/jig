@@ -178,9 +178,9 @@ fn a_server_that_cant_start_says_why(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("main.rs");
     std::fs::write(&path, "fn main() {}\n").unwrap();
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    let client = crate::lsp::Client::start(
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    let client = jig_lsp::lsp::Client::start(
         "rust-analyzer",
         root.clone(),
         serde_json::Value::Null,
@@ -191,7 +191,7 @@ fn a_server_that_cant_start_says_why(cx: &mut TestAppContext) {
         },
     );
     let (window, workspace) = open(cx, dir.path());
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
     open_file(cx, window, &workspace, &path);
     let note = |cx: &mut TestAppContext| {
         cx.update(|cx| {
@@ -225,16 +225,16 @@ fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
     let path = dir.path().join("src/main.rs");
     std::fs::write(&path, "fn main() {\n    v\n}\n").unwrap();
     let (client, seen) =
-        crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
             "textDocument/completion" => json!({"isIncomplete": false, "items": [
                 {"label": "pop", "kind": 2},
                 {"label": "push", "kind": 2, "detail": "fn(&mut self, T)"},
             ]}),
             _ => serde_json::Value::Null,
         });
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
@@ -283,10 +283,10 @@ fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
                     .to_string();
             }
             Some("textDocument/completion") => {
-                let offset = crate::lsp::offset(
+                let offset = jig_lsp::lsp::offset(
                     &text,
                     serde_json::from_value(message["params"]["position"].clone()).unwrap(),
-                    crate::lsp::Encoding::Utf8,
+                    jig_lsp::lsp::Encoding::Utf8,
                 );
                 assert!(
                     text[..offset].ends_with(['.', 'p', 'u']),
@@ -318,11 +318,11 @@ fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContex
         "fn main() {\n    renamed();\n}\n",
     )
     .unwrap();
-    let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
-    let main = crate::lsp::file_uri(&dir.path().join("src/main.rs"));
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let main = jig_lsp::lsp::file_uri(&dir.path().join("src/main.rs"));
     let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
     let (client, _seen) =
-        crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
             "textDocument/definition" => json!({"uri": lib, "range": at(0, 7, 12)}),
             "textDocument/references" => json!([
                 {"uri": lib, "range": at(0, 7, 12)},
@@ -331,9 +331,9 @@ fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContex
             _ => serde_json::Value::Null,
         });
     let main_path = dir.path().join("src/main.rs");
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);
@@ -417,17 +417,17 @@ fn cmd_click_to_definition(cx: &mut TestAppContext, padding: usize) {
     );
     let call = main.find("renamed").unwrap();
     std::fs::write(dir.path().join("src/main.rs"), &main).unwrap();
-    let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
     let (client, _seen) =
-        crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
             "textDocument/definition" => json!({"uri": lib, "range": {
                     "start": {"line": 0, "character": 7}, "end": {"line": 0, "character": 12}}}),
             _ => serde_json::Value::Null,
         });
     let main_path = dir.path().join("src/main.rs");
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);
@@ -523,10 +523,10 @@ fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
         "fn main() {\n    alpha();\n}\n",
     )
     .unwrap();
-    let lib = crate::lsp::file_uri(&dir.path().join("src/lib.rs"));
-    let main = crate::lsp::file_uri(&dir.path().join("src/main.rs"));
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let main = jig_lsp::lsp::file_uri(&dir.path().join("src/main.rs"));
     let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
-    let (client, _seen) = crate::lsp::fake_server(
+    let (client, _seen) = jig_lsp::lsp::fake_server(
         dir.path().to_path_buf(),
         move |method, params| match method {
             "textDocument/rename" => {
@@ -540,9 +540,9 @@ fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
         },
     );
     let main_path = dir.path().join("src/main.rs");
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &main_path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &main_path);
@@ -598,16 +598,16 @@ fn with_completing_server(
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     let path = dir.path().join("src/main.rs");
     std::fs::write(&path, text).unwrap();
-    let (client, _seen) = crate::lsp::fake_server(
+    let (client, _seen) = jig_lsp::lsp::fake_server(
         dir.path().to_path_buf(),
         move |method, params| match method {
             "textDocument/completion" => answer(params["position"]["line"].as_u64().unwrap()),
             _ => serde_json::Value::Null,
         },
     );
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
     // The folder goes with the test's end; the tab has read the file.

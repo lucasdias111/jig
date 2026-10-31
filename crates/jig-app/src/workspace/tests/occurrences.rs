@@ -84,16 +84,16 @@ fn the_language_server_says_where_the_uses_are(cx: &mut TestAppContext) {
     std::fs::write(&path, text).unwrap();
     let at = |line: u32, character: u32| json!({"line": line, "character": character});
     let (client, _seen) =
-        crate::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
             "textDocument/documentHighlight" => json!([
                 {"range": {"start": at(0, 5), "end": at(0, 6)}, "kind": 1},
                 {"range": {"start": at(2, 6), "end": at(2, 7)}, "kind": 2},
             ]),
             _ => serde_json::Value::Null,
         });
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
 
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);

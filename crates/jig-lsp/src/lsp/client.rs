@@ -139,7 +139,7 @@ impl Client {
     }
 
     /// A client over streams already connected to a server, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn connect(
         root: PathBuf,
         reader: impl Read + Send + 'static,
@@ -629,7 +629,7 @@ fn read_message(reader: &mut impl BufRead) -> Option<Value> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod tests {
     use super::*;
 
@@ -740,6 +740,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(test)]
     /// Answers `test/publish` by first sending its params as a
     /// `publishDiagnostics`, so they've been read once the answer is.
     fn publishing_server() -> Arc<Client> {

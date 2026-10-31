@@ -12,8 +12,8 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, InsertTextFormat,
 };
 
-use crate::lsp::{self, Encoding};
 use crate::snippets::{self, Snippet};
+use jig_lsp::lsp::{self, Encoding};
 
 /// Most suggestions shown at once.
 const MAX_ITEMS: usize = 100;

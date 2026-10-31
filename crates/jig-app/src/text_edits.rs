@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use serde_json::Value;
 
-use crate::lsp::{self, Encoding};
+use jig_lsp::lsp::{self, Encoding};
 
 /// Byte ranges and what replaces them.
 pub type Edits = Vec<(Range<usize>, String)>;

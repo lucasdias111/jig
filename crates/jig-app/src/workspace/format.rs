@@ -23,11 +23,11 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
-use crate::lsp::{Client, Encoding};
 use crate::{settings, text_edits};
 use jig_formatters::{self as formatters, Formatter};
 use jig_kit::editorconfig::EditorConfig;
 use jig_languages as languages;
+use jig_lsp::lsp::{Client, Encoding};
 
 /// How long Format Document waits.
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -421,7 +421,7 @@ fn server_request(
     text: &str,
     range: Option<Range<usize>>,
     options: Value,
-) -> oneshot::Receiver<crate::lsp::Response> {
+) -> oneshot::Receiver<jig_lsp::lsp::Response> {
     let encoding = client.encoding();
     let mut params = json!({"textDocument": {"uri": uri}, "options": options});
     // The server formats what it was last sent.
@@ -429,8 +429,8 @@ fn server_request(
     match range {
         Some(range) => {
             params["range"] = json!(lsp_types::Range::new(
-                crate::lsp::position(text, range.start, encoding),
-                crate::lsp::position(text, range.end, encoding),
+                jig_lsp::lsp::position(text, range.start, encoding),
+                jig_lsp::lsp::position(text, range.end, encoding),
             ));
             client.request("textDocument/rangeFormatting", params)
         }

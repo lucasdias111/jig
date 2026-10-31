@@ -14,10 +14,14 @@ fn tabs_leave_a_server_started_before_its_project(cx: &mut TestAppContext) {
     std::fs::create_dir(root.join("src")).unwrap();
     let path = root.join("src/main.rs");
     std::fs::write(&path, "fn main() {}\n").unwrap();
-    let server = crate::lsp::server_for("rust").unwrap();
-    assert_eq!(crate::lsp::root_for(server, &path), root, "the repository");
-    let (client, seen) = crate::lsp::fake_server(root.clone(), |_, _| serde_json::Value::Null);
-    cx.update(|cx| crate::lsp::register(&server.name, root.clone(), client, cx));
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    assert_eq!(
+        jig_lsp::lsp::root_for(server, &path),
+        root,
+        "the repository"
+    );
+    let (client, seen) = jig_lsp::lsp::fake_server(root.clone(), |_, _| serde_json::Value::Null);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root.clone(), client, cx));
     let (window, workspace) = open(cx, &root);
     open_file(cx, window, &workspace, &path);
     let in_a_server =
@@ -55,10 +59,10 @@ fn a_mended_cargo_toml_brings_problems_back_live(cx: &mut TestAppContext) {
     std::fs::write(&main, "fn main() {\n    let x: u32 = \"s\";\n}\n").unwrap();
     let (window, workspace) = open(cx, &root);
     open_file(cx, window, &workspace, &main);
-    let key = crate::lsp::diagnostics::path_key(&main);
+    let key = jig_lsp::lsp::diagnostics::path_key(&main);
     let problems = |cx: &mut TestAppContext| {
         cx.update(|cx| {
-            cx.try_global::<crate::lsp::diagnostics::Diagnostics>()
+            cx.try_global::<jig_lsp::lsp::diagnostics::Diagnostics>()
                 .and_then(|store| store.get(&key))
                 .map_or(0, |stored| stored.published.items.len())
         })

@@ -3606,6 +3606,7 @@ dependencies = [
  "jig-git",
  "jig-kit",
  "jig-languages",
+ "jig-lsp",
  "jig-map",
  "jig-planner",
  "jig-process",
@@ -3770,6 +3771,26 @@ dependencies = [
  "tree-sitter-vim",
  "tree-sitter-vue-next",
  "tree-sitter-xml",
+]
+
+[[package]]
+name = "jig-lsp"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui-kit",
+ "jig-debuggers",
+ "jig-kit",
+ "jig-languages",
+ "jig-process",
+ "jig-tools",
+ "lsp-types",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "trash",
 ]
 
 [[package]]

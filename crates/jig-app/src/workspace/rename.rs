@@ -13,10 +13,10 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{RenameSymbol, Workspace};
-use crate::definitions;
-use crate::lsp::{self, Encoding};
 use crate::text_edits::{Edits, shift, splice};
 use jig_kit::field_box::{FieldBox, FieldBoxEvent};
+use jig_lsp::definitions;
+use jig_lsp::lsp::{self, Encoding};
 
 /// How long to wait for the language server before renaming in this file.
 const RENAME_TIMEOUT: Duration = Duration::from_secs(10);

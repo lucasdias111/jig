@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::lsp::Client;
+use jig_lsp::lsp::Client;
 
 /// How long a server gets to load the project; jdtls importing a large
 /// Maven project for the first time can take minutes.

@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use super::Workspace;
 use super::definitions::with_timeout;
-use crate::definitions;
-use crate::lsp::{self, Encoding};
+use jig_lsp::definitions;
+use jig_lsp::lsp::{self, Encoding};
 
 /// How long the cursor rests on a name before its uses are looked for, so
 /// moving through the code doesn't flicker.
@@ -170,7 +170,7 @@ mod tests {
     use serde_json::json;
 
     use super::{highlights, target, whole_words};
-    use crate::lsp::Encoding;
+    use jig_lsp::lsp::Encoding;
 
     #[test]
     fn the_target_is_the_name_at_the_cursor_or_selected() {

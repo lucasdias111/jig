@@ -25,7 +25,7 @@ use super::definitions::with_timeout;
 use super::mode::Mode;
 use super::tabs::canonical;
 use super::{ExplainLevel, IndexDomains, ShowMap, UpdateDomains, Workspace};
-use crate::lsp;
+use jig_lsp::lsp;
 use jig_map::{Action, FnId, Level, MapEvent, MapView, Project, Target, ruler};
 
 /// How long the language server has to answer, and how many times it's
@@ -549,7 +549,7 @@ mod tests {
     use serde_json::json;
 
     use super::{Texts, package_of, targets};
-    use crate::lsp;
+    use jig_lsp::lsp;
     use jig_map::{Project, Target};
 
     #[test]

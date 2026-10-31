@@ -108,7 +108,7 @@ pub struct Failures(pub u64);
 impl Global for Failures {}
 
 /// Use `client` for `server`'s files under `root`, for tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn register(server: &'static str, root: PathBuf, client: Arc<Client>, cx: &mut App) {
     client.on_diagnostics(diagnostics_sink(cx));
     client.on_failure(failures_sink(cx));
@@ -172,7 +172,7 @@ pub fn client_for(file: &Path, language: &str, cx: &mut App) -> Option<Arc<Clien
     }
     // Tests use fake servers, never what happens to be installed, unless
     // a live test asks for the real ones.
-    if cfg!(test) && std::env::var_os("JIG_LIVE_LSP").is_none() {
+    if cfg!(any(test, feature = "testing")) && std::env::var_os("JIG_LIVE_LSP").is_none() {
         return None;
     }
     // One that isn't installed is kept too, dead, so it isn't looked for
@@ -431,7 +431,7 @@ pub fn text_document_position(uri: &str, position: lsp_types::Position) -> serde
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub use client::tests::fake_server;
 
 #[cfg(test)]

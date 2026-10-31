@@ -5,7 +5,7 @@
 //! it a [`DefinitionProvider`] and takes over showing a target that isn't in
 //! the current file. The file's language server answers when there is one;
 //! otherwise, or when it has no answer (say, while it's still indexing),
-//! [`crate::definitions`] guesses.
+//! [`jig_lsp::definitions`] guesses.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -24,10 +24,10 @@ use serde_json::{Value, json};
 
 use super::Workspace;
 use super::tabs::canonical;
-use crate::definitions::{self, Target};
-use crate::lsp::{self, Client};
 use crate::project_search::{self, SearchOptions, SearchResults};
 use jig_languages::language_for;
+use jig_lsp::definitions::{self, Target};
+use jig_lsp::lsp::{self, Client};
 
 /// The URI of a "show usages of this name" target: the name, then the
 /// offset it was clicked at.
@@ -163,7 +163,7 @@ impl DefinitionProvider for Definitions {
     }
 }
 
-/// Where the name at `range` is declared, by [`crate::definitions`]'
+/// Where the name at `range` is declared, by [`jig_lsp::definitions`]'
 /// reckoning, for when no language server answers.
 async fn guess(
     source: String,
@@ -512,7 +512,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::reference_results;
-    use crate::lsp::Encoding;
+    use jig_lsp::lsp::Encoding;
 
     #[test]
     fn references_become_rows() {

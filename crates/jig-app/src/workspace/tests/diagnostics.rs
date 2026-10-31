@@ -18,13 +18,13 @@ fn problems(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<(Stri
 }
 
 fn report(cx: &mut TestAppContext, path: &Path, items: serde_json::Value) {
-    let published = crate::lsp::diagnostics::Published {
-        key: crate::lsp::diagnostics::path_key(path),
+    let published = jig_lsp::lsp::diagnostics::Published {
+        key: jig_lsp::lsp::diagnostics::path_key(path),
         version: None,
         items: serde_json::from_value(items).unwrap(),
-        encoding: crate::lsp::Encoding::Utf16,
+        encoding: jig_lsp::lsp::Encoding::Utf16,
     };
-    cx.update(|cx| crate::lsp::diagnostics::publish(published, cx));
+    cx.update(|cx| jig_lsp::lsp::diagnostics::publish(published, cx));
     cx.run_until_parked();
 }
 
@@ -41,10 +41,10 @@ fn problems_show_count_and_can_be_stepped_through(cx: &mut TestAppContext) {
     let other = dir.path().join("src/other.rs");
     std::fs::write(&other, "pub fn f() {}\n").unwrap();
     let (client, _seen) =
-        crate::lsp::fake_server(dir.path().to_path_buf(), |_, _| serde_json::Value::Null);
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), |_, _| serde_json::Value::Null);
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
     let counts = |cx: &mut TestAppContext| {
@@ -218,10 +218,10 @@ fn with_fake_server(
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     let path = dir.path().join("src/main.rs");
     std::fs::write(&path, text).unwrap();
-    let (client, _seen) = crate::lsp::fake_server(dir.path().to_path_buf(), answer);
-    let server = crate::lsp::server_for("rust").unwrap();
-    let root = crate::lsp::root_for(server, &path);
-    cx.update(|cx| crate::lsp::register(&server.name, root, client, cx));
+    let (client, _seen) = jig_lsp::lsp::fake_server(dir.path().to_path_buf(), answer);
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
     let (window, workspace) = open(cx, dir.path());
     open_file(cx, window, &workspace, &path);
     (window, workspace, path, dir)

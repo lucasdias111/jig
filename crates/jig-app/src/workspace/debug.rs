@@ -282,9 +282,9 @@ fn start_lsp_adapter(
     let language = debugger
         .languages
         .iter()
-        .find(|language| crate::lsp::server_for(language).is_some_and(|s| s.name == server))
+        .find(|language| jig_lsp::lsp::server_for(language).is_some_and(|s| s.name == server))
         .ok_or_else(|| anyhow::anyhow!("Jig doesn't run {server} for any of its languages."))?;
-    let client = crate::lsp::client_for(&root.join("_"), language, cx)
+    let client = jig_lsp::lsp::client_for(&root.join("_"), language, cx)
         .ok_or_else(|| anyhow::anyhow!("{server} isn't installed."))?;
     let wanted = debuggers::lsp_bundles(server);
     let loaded = client.init_options()["bundles"].clone();

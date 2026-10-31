@@ -23,7 +23,7 @@ use super::definitions::with_timeout;
 use super::snippets::{Offer, Offers};
 use super::{ShowCompletions, Workspace};
 use crate::completions::{self, Completion};
-use crate::lsp::{self, Client};
+use jig_lsp::lsp::{self, Client};
 
 /// Past this, the server is too slow to keep up with typing; offer words.
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(1500);

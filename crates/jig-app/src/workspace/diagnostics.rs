@@ -19,7 +19,7 @@ use jig_editor::EditorHandle;
 
 use super::quick_fix::PanelFixes;
 use super::{NextProblem, PreviousProblem, Workspace};
-use crate::lsp::diagnostics::{self, Diagnostics};
+use jig_lsp::lsp::diagnostics::{self, Diagnostics};
 
 /// Lucide "circle-x".
 const ERROR_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>"#;

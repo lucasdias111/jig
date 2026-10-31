@@ -8,7 +8,7 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 
 use super::Workspace;
-use crate::lsp::{self, Client};
+use jig_lsp::lsp::{self, Client};
 
 /// A tab's file, open in its language server.
 pub(super) struct TabLsp {

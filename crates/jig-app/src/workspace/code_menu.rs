@@ -16,8 +16,8 @@ use super::{
     FindReferences, FormatDocument, OpenCommand, RenameSymbol, SendSelectionToAgent,
     ToggleLineComment, Workspace,
 };
-use crate::definitions;
 use jig_languages as languages;
+use jig_lsp::definitions;
 
 impl Workspace {
     /// Builds the menu for the current tab's editor. What it offers is

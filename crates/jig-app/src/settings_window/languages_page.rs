@@ -19,10 +19,10 @@ use super::{
     Detail, EditDebuggers, EditFormatters, EditLanguageServers, Fetch, Nav, Page, SettingsWindow,
     language, send_to_workspace,
 };
-use crate::lsp;
 use jig_debuggers::{self as debuggers, Debugger};
 use jig_formatters::{self as formatters, Formatter};
 use jig_languages::{self as languages, Language, Server, bundled};
+use jig_lsp::lsp;
 use jig_settings as settings;
 
 /// A language's extensions as Settings shows and takes them: the user's,

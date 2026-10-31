@@ -310,7 +310,7 @@ impl Workspace {
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();
-        cx.observe_global::<crate::lsp::ServersChanged>(|this, cx| {
+        cx.observe_global::<jig_lsp::lsp::ServersChanged>(|this, cx| {
             this.reopen_in_servers(false, cx)
         })
         .detach();
@@ -320,9 +320,9 @@ impl Workspace {
             this.refresh_palette_models(cx);
         })
         .detach();
-        cx.observe_global::<crate::lsp::diagnostics::Diagnostics>(Self::problems_reported)
+        cx.observe_global::<jig_lsp::lsp::diagnostics::Diagnostics>(Self::problems_reported)
             .detach();
-        cx.observe_global::<crate::lsp::Failures>(Self::server_failed)
+        cx.observe_global::<jig_lsp::lsp::Failures>(Self::server_failed)
             .detach();
         // A downloaded update shows in the status bar.
         cx.observe_global::<jig_updates::Updates>(|_, cx| cx.notify())

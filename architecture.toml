@@ -31,6 +31,7 @@ jig-formatters = ["jig-kit", "jig-languages", "jig-process", "jig-tools"]
 jig-git = ["jig-commands", "jig-process"]
 jig-kit = ["jig-commands", "jig-settings"]
 jig-languages = ["jig-settings", "jig-tools"]
+jig-lsp = ["jig-debuggers", "jig-kit", "jig-languages", "jig-process", "jig-tools"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
 jig-settings = ["jig-ai"]
@@ -45,6 +46,7 @@ jig-app = [
     "jig-git",
     "jig-kit",
     "jig-languages",
+    "jig-lsp",
     "jig-map",
     "jig-planner",
     "jig-process",
@@ -86,10 +88,9 @@ uses = ["kit", "tools"]
 crate = "jig-debuggers"
 uses = ["languages", "tools"]
 
-# Running language servers, and guessing definitions without one.
+# Running language servers, and guessing definitions without one, in its own crate.
 [capability.language_servers]
-modules = ["lsp", "definitions"]
-contract = ["lsp", "lsp::diagnostics", "definitions"]
+crate = "jig-lsp"
 uses = ["kit", "languages", "debuggers", "tools"]
 
 # find in the file.

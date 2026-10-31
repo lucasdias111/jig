@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use super::Workspace;
 use super::commands::Ask;
 use super::definitions::with_timeout;
-use crate::lsp;
+use jig_lsp::lsp;
 
 /// Past this, the list opens with Fix with Agent alone.
 const FIX_TIMEOUT: Duration = Duration::from_secs(3);
