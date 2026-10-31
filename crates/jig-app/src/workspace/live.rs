@@ -53,6 +53,40 @@ impl LivePoints {
     pub(super) fn files(&self) -> impl Iterator<Item = &PathBuf> {
         self.lines.keys()
     }
+
+    /// Listen for `lines` now, for the Map `view`. Returns the files whose
+    /// lines changed, which need their logpoints set again.
+    fn listen(
+        &mut self,
+        lines: BTreeMap<PathBuf, BTreeSet<u32>>,
+        view: Option<WeakEntity<MapView>>,
+    ) -> BTreeSet<PathBuf> {
+        self.view = view;
+        if lines == self.lines {
+            return BTreeSet::new();
+        }
+        let changed = lines
+            .keys()
+            .chain(self.lines.keys())
+            .filter(|path| lines.get(*path) != self.lines.get(*path))
+            .cloned()
+            .collect();
+        self.lines = lines;
+        changed
+    }
+
+    /// Light up the places of logpoints `ids` on the Map.
+    fn fire(&self, ids: &[usize], cx: &mut App) {
+        let Some(view) = self.view.clone() else {
+            return;
+        };
+        for &id in ids {
+            let Some((path, line)) = self.places.get(id).cloned() else {
+                continue;
+            };
+            let _ = view.update(cx, |view, cx| view.fire_line(&path, line, cx));
+        }
+    }
 }
 
 /// The places' ids in a debugger's output, when it's our logpoints'. Some
@@ -77,18 +111,8 @@ impl Workspace {
                 lines.entry(canonical(&path)).or_default().insert(line);
             }
         }
-        self.live.view = self.map_showing().map(|view| view.downgrade());
-        if lines == self.live.lines {
-            return;
-        }
-        let changed: BTreeSet<PathBuf> = lines
-            .keys()
-            .chain(self.live.lines.keys())
-            .filter(|path| lines.get(*path) != self.live.lines.get(*path))
-            .cloned()
-            .collect();
-        self.live.lines = lines;
-        for path in changed {
+        let view = self.map_showing().map(|view| view.downgrade());
+        for path in self.live.listen(lines, view) {
             self.breakpoints_changed(&path, cx);
         }
     }
@@ -96,21 +120,13 @@ impl Workspace {
     /// The program reached the logpoints `ids`: light up their
     /// functions.
     pub(super) fn on_fired(&mut self, ids: &[usize], cx: &mut App) {
-        let Some(view) = self.live.view.clone() else {
-            return;
-        };
-        for &id in ids {
-            let Some((path, line)) = self.live.places.get(id).cloned() else {
-                continue;
-            };
-            let _ = view.update(cx, |view, cx| view.fire_line(&path, line, cx));
-        }
+        self.live.fire(ids, cx);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
     use super::{LivePoints, fired};
@@ -146,5 +162,25 @@ mod tests {
             ]
         );
         assert_eq!(live.places[2], (path, 4));
+    }
+
+    #[test]
+    fn listening_names_only_the_files_that_changed() {
+        let (a, b) = (
+            PathBuf::from("/nowhere/a.rs"),
+            PathBuf::from("/nowhere/b.rs"),
+        );
+        let mut live = LivePoints::default();
+        let first = BTreeMap::from([
+            (a.clone(), BTreeSet::from([1])),
+            (b.clone(), BTreeSet::from([2])),
+        ]);
+        assert_eq!(
+            live.listen(first.clone(), None),
+            BTreeSet::from([a.clone(), b.clone()])
+        );
+        assert_eq!(live.listen(first, None), BTreeSet::new());
+        let second = BTreeMap::from([(a.clone(), BTreeSet::from([1, 3]))]);
+        assert_eq!(live.listen(second, None), BTreeSet::from([a, b]));
     }
 }

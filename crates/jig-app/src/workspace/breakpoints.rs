@@ -79,6 +79,14 @@ impl Breakpoints {
         self.by_file.get(path).cloned().unwrap_or_default()
     }
 
+    /// Every file's breakpoints, as remembered.
+    fn all(&self) -> Vec<(PathBuf, Vec<u32>)> {
+        self.by_file
+            .iter()
+            .map(|(path, lines)| (path.clone(), lines.iter().copied().collect()))
+            .collect()
+    }
+
     fn set(&mut self, path: PathBuf, lines: BTreeSet<u32>) {
         let changed = if lines.is_empty() {
             self.by_file.remove(&path).is_some()
@@ -258,11 +266,7 @@ impl Workspace {
         for ix in 0..self.tabs.len() {
             self.remember_breakpoints(ix, cx);
         }
-        self.breakpoints
-            .by_file
-            .iter()
-            .map(|(path, lines)| (path.clone(), lines.iter().copied().collect()))
-            .collect()
+        self.breakpoints.all()
     }
 
     /// Every breakpoint in files the debugger `key` debugs.
