@@ -200,6 +200,10 @@ pub struct Workspace {
     run_output: Entity<run::output::RunOutput>,
     breakpoints: breakpoints::Breakpoints,
     git: git::GitState,
+    /// The branch picker.
+    branch_switcher: Entity<git::branches::BranchSwitcher>,
+    /// The popup with a change's old lines.
+    hunk_popup: Entity<git::hunk::HunkPopup>,
     /// The project's tasks, in the sidebar's Tasks view.
     planner: planner::PlannerState,
     /// Where jumps came from, for Go Back and Go Forward.
@@ -268,6 +272,12 @@ impl Workspace {
         let run_output = cx.new(run::output::RunOutput::new);
         cx.subscribe_in(&run_output, window, Self::on_run_output_event)
             .detach();
+        let branch_switcher = cx.new(|_| git::branches::BranchSwitcher::default());
+        cx.subscribe_in(&branch_switcher, window, Self::on_branch_switcher_event)
+            .detach();
+        let hunk_popup = cx.new(|_| git::hunk::HunkPopup::default());
+        cx.subscribe_in(&hunk_popup, window, Self::revert_hunk)
+            .detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -305,6 +315,8 @@ impl Workspace {
             run_output,
             breakpoints: breakpoints::Breakpoints::load(),
             git: Default::default(),
+            branch_switcher,
+            hunk_popup,
             planner: Default::default(),
             history: Default::default(),
             mode: Mode::Code,
@@ -898,7 +910,7 @@ impl Render for Workspace {
             .children(self.render_rename(cx))
             .children(self.render_go_to_line(cx))
             .children(self.render_run_picker(cx))
-            .children(self.render_branch_picker(window))
+            .children(self.render_branch_picker(cx))
             .children(self.render_hunk_popup(cx))
             .when(self.mode == Mode::Code && !self.home, |this| {
                 this.child(self.tab().problems.hover.clone())

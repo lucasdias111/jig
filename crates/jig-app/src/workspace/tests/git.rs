@@ -66,13 +66,13 @@ fn changed_lines_are_marked_and_a_change_can_be_reverted(cx: &mut TestAppContext
     );
     vcx.simulate_click(bar, gpui_kit::Modifiers::none());
     vcx.run_until_parked();
-    assert!(vcx.update(|_, cx| workspace.read(cx).hunk_popup_open()));
+    assert!(vcx.update(|_, cx| workspace.read(cx).hunk_popup_open(cx)));
     vcx.update(|window, cx| window.render_frame(cx));
     let revert = vcx.debug_bounds("git-revert").expect("the popup shows");
     vcx.simulate_click(revert.center(), gpui_kit::Modifiers::none());
     vcx.run_until_parked();
     assert_eq!(text_of(&mut vcx, &workspace), "one\ntwo\nthree\nfour\n");
-    assert!(!vcx.update(|_, cx| workspace.read(cx).hunk_popup_open()));
+    assert!(!vcx.update(|_, cx| workspace.read(cx).hunk_popup_open(cx)));
     assert_eq!(
         vcx.update(|_, cx| workspace.read(cx).line_change_rows(cx)),
         vec![(3..4, LineChangeKind::Added)]
@@ -184,7 +184,7 @@ fn the_activity_bar_switches_and_collapses_the_sidebar(cx: &mut TestAppContext) 
     );
 
     click(&mut vcx, "branch-switcher");
-    assert!(vcx.update(|_, cx| workspace.read(cx).branch_picker().is_some()));
+    assert!(vcx.update(|_, cx| workspace.read(cx).branch_picker(cx).is_some()));
 }
 
 #[gpui_kit::test]
@@ -263,7 +263,7 @@ fn switching_branches_reloads_open_files(cx: &mut TestAppContext) {
         window.dispatch_action(Box::new(crate::workspace::SwitchBranch), cx)
     });
     let picker = workspace
-        .read_with(cx, |this, _| this.branch_picker())
+        .read_with(cx, |this, cx| this.branch_picker(cx))
         .expect("the picker opens");
     // New Branch… first, then the branches, most recent first, but both
     // commits are in the same second.
@@ -274,7 +274,7 @@ fn switching_branches_reloads_open_files(cx: &mut TestAppContext) {
     cx.simulate_input(window, "oth");
     cx.simulate_keystrokes(window, "enter");
     cx.run_until_parked();
-    assert!(workspace.read_with(cx, |this, _| this.branch_picker().is_none()));
+    assert!(workspace.read_with(cx, |this, cx| this.branch_picker(cx).is_none()));
     assert_eq!(text(cx, &workspace), "other\n");
     assert_eq!(
         workspace.read_with(cx, |this, cx| this.line_change_rows(cx)),
@@ -296,7 +296,7 @@ fn new_branch_from_the_picker_and_the_git_menu(cx: &mut TestAppContext) {
     };
     let rows = |cx: &mut TestAppContext| {
         let picker = workspace
-            .read_with(cx, |this, _| this.branch_picker())
+            .read_with(cx, |this, cx| this.branch_picker(cx))
             .unwrap();
         picker.read_with(cx, |picker, _| picker.row_names())
     };
@@ -323,7 +323,7 @@ fn new_branch_from_the_picker_and_the_git_menu(cx: &mut TestAppContext) {
     assert_eq!(rows(cx), ["Create my-feature"]);
     cx.simulate_keystrokes(window, "enter");
     cx.run_until_parked();
-    assert!(workspace.read_with(cx, |this, _| this.branch_picker().is_none()));
+    assert!(workspace.read_with(cx, |this, cx| this.branch_picker(cx).is_none()));
     assert_eq!(head(), "my-feature");
 }
 
@@ -345,7 +345,7 @@ fn the_git_views_branch_button_switches_or_creates_branches(cx: &mut TestAppCont
     vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
     vcx.run_until_parked();
     let picker = vcx
-        .update(|_, cx| workspace.read(cx).branch_picker())
+        .update(|_, cx| workspace.read(cx).branch_picker(cx))
         .expect("the switcher opens");
     let rows =
         |vcx: &mut gpui_kit::VisualTestContext| vcx.update(|_, cx| picker.read(cx).row_names());

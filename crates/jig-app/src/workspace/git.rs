@@ -13,23 +13,22 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::base::input::{LineChange, LineChangeKind};
 use gpui_kit::component::input::EditorState;
-use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::*;
 use jig_editor::EditorHandle as _;
 
+pub(super) mod branches;
+pub(super) mod hunk;
 pub(super) mod watch;
 
 use super::sidebar::SidebarView;
-use super::{NewBranch, SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
+use super::{NewBranch, SwitchBranch, ToggleGitPanel, Workspace};
+use branches::{BranchSwitcher, BranchSwitcherEvent};
+use hunk::{HunkPopup, RevertHunk};
 use jig_editing::document::Document;
+use jig_git::BranchPickerMode;
 use jig_git::{self as git, Hunk, Repo};
 use jig_git::{BRANCH_ICON, GitPanel, GitPanelEvent};
-use jig_git::{BranchPicker, BranchPickerEvent, BranchPickerMode};
-
-/// Lines of a change the popup shows on each side before cutting it short.
-const POPUP_LINES: usize = 16;
-const POPUP_WIDTH: f32 = 520.;
 
 #[derive(Default)]
 pub(super) struct GitState {
@@ -39,13 +38,11 @@ pub(super) struct GitState {
     head: Option<String>,
     /// Each tab's file as last committed, and how the buffer differs.
     files: HashMap<EntityId, TabGit>,
-    popup: Option<HunkPopup>,
     /// The sidebar's Git view, kept while the sidebar shows something else
     /// so a half-written commit message survives.
     panel: Option<Opened<GitPanel>>,
     /// The repository watched while the Git view shows.
     watch: Option<watch::RepoWatch>,
-    branches: Option<Opened<BranchPicker>>,
     _refresh: Option<Task<()>>,
     _loads: HashMap<EntityId, Task<()>>,
     _switch: Option<Task<()>>,
@@ -54,13 +51,6 @@ pub(super) struct GitState {
 struct TabGit {
     committed: String,
     hunks: Vec<Hunk>,
-}
-
-/// The old lines of one change, shown under it.
-struct HunkPopup {
-    tab: EntityId,
-    hunk: Hunk,
-    anchor: Point<Pixels>,
 }
 
 struct Opened<V> {
@@ -129,8 +119,8 @@ impl Workspace {
     /// would be out of date.
     pub(super) fn git_buffer_changed(&mut self, ix: usize, cx: &mut Context<Self>) {
         let id = self.tabs[ix].id();
-        if self.git.popup.as_ref().is_some_and(|popup| popup.tab == id) {
-            self.git.popup = None;
+        if self.hunk_popup.read(cx).tab() == Some(id) {
+            self.hunk_popup.update(cx, |popup, cx| popup.close(cx));
         }
         self.update_line_changes(ix, cx);
     }
@@ -230,13 +220,8 @@ impl Workspace {
         }) else {
             return;
         };
-        if self
-            .git
-            .popup
-            .as_ref()
-            .is_some_and(|popup| popup.tab == id && popup.hunk == hunk)
-        {
-            self.git.popup = None;
+        if self.hunk_popup.read(cx).shows(id, &hunk) {
+            self.hunk_popup.update(cx, |popup, cx| popup.close(cx));
             cx.notify();
             return;
         }
@@ -258,17 +243,16 @@ impl Workspace {
         let Some(anchor) = at else {
             return;
         };
-        self.git.popup = Some(HunkPopup {
-            tab: id,
-            hunk,
-            anchor: point(anchor.x, anchor.y + px(4.)),
-        });
+        let new_text = text[line_start(&text, hunk.lines.start)..below].to_string();
+        let anchor = point(anchor.x, anchor.y + px(4.));
+        self.hunk_popup
+            .update(cx, |popup, cx| popup.open(id, hunk, new_text, anchor, cx));
         cx.notify();
     }
 
     /// Esc: close the change popup, if it's open.
     pub(super) fn close_hunk_popup(&mut self, cx: &mut Context<Self>) -> bool {
-        let open = self.git.popup.take().is_some();
+        let open = self.hunk_popup.update(cx, |popup, cx| popup.close(cx));
         if open {
             cx.notify();
         }
@@ -276,10 +260,13 @@ impl Workspace {
     }
 
     /// Put the change's lines back as they were committed, as one undo step.
-    fn revert_hunk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(popup) = self.git.popup.take() else {
-            return;
-        };
+    pub(super) fn revert_hunk(
+        &mut self,
+        _: &Entity<HunkPopup>,
+        popup: &RevertHunk,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(ix) = self.tabs.iter().position(|tab| tab.id() == popup.tab) else {
             return;
         };
@@ -295,115 +282,13 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn render_hunk_popup(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let popup = self.git.popup.as_ref()?;
-        let tab = self.tabs.iter().find(|tab| tab.id() == popup.tab)?;
-        let theme = cx.theme();
-        let text = tab.editor.text(cx);
-        let new_text = &text
-            [line_start(&text, popup.hunk.lines.start)..line_start(&text, popup.hunk.lines.end)];
-        let title = if popup.hunk.is_deletion() {
-            plural(
-                popup.hunk.old_text.lines().count(),
-                "line removed",
-                "lines removed",
-            )
-        } else if popup.hunk.is_addition() {
-            plural(popup.hunk.lines.len(), "line added", "lines added")
-        } else {
-            plural(popup.hunk.lines.len(), "line changed", "lines changed")
-        };
-        let lines = |text: &str, sign: &'static str, color: Hsla| {
-            let all: Vec<&str> = text.lines().collect();
-            let more = all.len().saturating_sub(POPUP_LINES);
-            v_flex()
-                .children(all.into_iter().take(POPUP_LINES).map(move |line| {
-                    h_flex()
-                        .px_2()
-                        .bg(color.opacity(0.12))
-                        .child(div().flex_none().w(px(14.)).text_color(color).child(sign))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .whitespace_nowrap()
-                                .child(line.replace('\t', "    ")),
-                        )
-                }))
-                .when(more > 0, |this| {
-                    this.child(
-                        div()
-                            .px_2()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("… {more} more")),
-                    )
-                })
-        };
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.into())
-                .px_2()
-                .h(px(22.))
-                .flex()
-                .items_center()
-                .rounded(px(5.))
-                .text_size(px(11.5))
-                .text_color(theme.foreground.opacity(0.85))
-                .hover(|s| s.bg(theme.foreground.opacity(0.08)))
-                .child(label)
-        };
-        let panel =
-            jig_commands::surface::panel(cx)
-                .id("git-hunk")
-                .w(px(POPUP_WIDTH))
-                .max_w(px(POPUP_WIDTH))
-                .p_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.close_hunk_popup(cx);
-                }))
-                .child(
-                    h_flex()
-                        .pl_2()
-                        .gap_1()
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_size(px(11.5))
-                                .text_color(theme.muted_foreground)
-                                .child(format!("{title} since the last commit")),
-                        )
-                        .child(button("git-revert", "Revert").on_click(
-                            cx.listener(|this, _, window, cx| this.revert_hunk(window, cx)),
-                        ))
-                        .child(button("git-hunk-close", "Close").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.close_hunk_popup(cx);
-                            },
-                        ))),
-                )
-                .child(
-                    v_flex()
-                        .rounded(px(6.))
-                        .overflow_hidden()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_size(px(12.))
-                        .child(lines(&popup.hunk.old_text, "−", theme.red))
-                        .child(lines(new_text, "+", theme.green)),
-                );
-        Some(
-            deferred(
-                anchored()
-                    .position(popup.anchor)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(panel),
-            )
-            .into_any_element(),
-        )
+    /// The change popup, while it's open on a tab that's still there.
+    pub(super) fn render_hunk_popup(&self, cx: &App) -> Option<AnyElement> {
+        let tab = self.hunk_popup.read(cx).tab()?;
+        self.tabs
+            .iter()
+            .any(|t| t.id() == tab)
+            .then(|| self.hunk_popup.clone().into_any_element())
     }
 
     /// ⌃⇧G: the sidebar's Git view, or collapsing the sidebar.
@@ -423,7 +308,7 @@ impl Workspace {
     /// The sidebar has just switched to Git: make the panel if there's a
     /// repository, bring its lists up to date, and focus the message.
     pub(super) fn show_git_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.git.popup = None;
+        self.hunk_popup.update(cx, |popup, cx| popup.close(cx));
         if !self.ensure_git_panel(window, cx) {
             self.refresh_git_panel(window, cx);
         }
@@ -518,44 +403,42 @@ impl Workspace {
         self.quick_open = None;
         self.find_in_files = None;
         let head = self.git.head.clone();
-        let view = cx.new(|cx| BranchPicker::new(mode, head, window, cx));
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            BranchPickerEvent::Switch(branch) => {
-                let branch = branch.clone();
-                this.close_branch_picker(window, cx, true);
-                if !branch.current {
-                    this.checkout(move |repo| repo.switch(&branch), window, cx);
-                }
-            }
-            BranchPickerEvent::Create(name) => {
-                let name = name.clone();
-                this.close_branch_picker(window, cx, true);
-                this.checkout(move |repo| repo.create_branch(&name), window, cx);
-            }
-            BranchPickerEvent::Dismissed => this.close_branch_picker(window, cx, true),
-            BranchPickerEvent::Blurred => this.close_branch_picker(window, cx, false),
+        self.branch_switcher.update(cx, |switcher, cx| {
+            switcher.open(repo, head, mode, window, cx)
         });
-        self.git.branches = Some(Opened {
-            view: view.clone(),
-            _events: events,
-        });
-        cx.spawn(async move |_, cx| {
-            let branches = cx
-                .background_executor()
-                .spawn(async move { repo.branches().unwrap_or_default() })
-                .await;
-            view.update(cx, |picker, cx| picker.set_branches(branches, cx));
-        })
-        .detach();
         cx.notify();
     }
 
-    fn close_branch_picker(&mut self, window: &mut Window, cx: &mut Context<Self>, refocus: bool) {
-        if self.git.branches.take().is_some() {
-            if refocus {
+    /// Act on what the branch picker says: check out, or back to where the
+    /// keyboard was.
+    pub(super) fn on_branch_switcher_event(
+        &mut self,
+        _: &Entity<BranchSwitcher>,
+        event: &BranchSwitcherEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            BranchSwitcherEvent::Switch(branch) => {
                 self.focus_main(window, cx);
+                cx.notify();
+                if !branch.current {
+                    let branch = branch.clone();
+                    self.checkout(move |repo| repo.switch(&branch), window, cx);
+                }
             }
-            cx.notify();
+            BranchSwitcherEvent::Create(name) => {
+                self.focus_main(window, cx);
+                cx.notify();
+                let name = name.clone();
+                self.checkout(move |repo| repo.create_branch(&name), window, cx);
+            }
+            BranchSwitcherEvent::Closed { refocus } => {
+                if *refocus {
+                    self.focus_main(window, cx);
+                }
+                cx.notify();
+            }
         }
     }
 
@@ -644,19 +527,12 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn render_branch_picker(&self, window: &Window) -> Option<AnyElement> {
-        let open = self.git.branches.as_ref()?;
-        let width = px(jig_git::BRANCH_PICKER_WIDTH);
-        let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
-        Some(
-            deferred(
-                anchored()
-                    .position(point(left, px(TITLE_BAR_HEIGHT + 24.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(open.view.clone()),
-            )
-            .into_any_element(),
-        )
+    /// The branch picker, while it's open.
+    pub(super) fn render_branch_picker(&self, cx: &App) -> Option<AnyElement> {
+        self.branch_switcher
+            .read(cx)
+            .is_open()
+            .then(|| self.branch_switcher.clone().into_any_element())
     }
 
     /// The branch, in the status bar; clicking it opens the branch picker.
@@ -704,8 +580,8 @@ impl Workspace {
     }
 
     #[cfg(test)]
-    pub(super) fn hunk_popup_open(&self) -> bool {
-        self.git.popup.is_some()
+    pub(super) fn hunk_popup_open(&self, cx: &App) -> bool {
+        self.hunk_popup.read(cx).is_open()
     }
 
     #[cfg(test)]
@@ -714,8 +590,8 @@ impl Workspace {
     }
 
     #[cfg(test)]
-    pub(super) fn branch_picker(&self) -> Option<Entity<BranchPicker>> {
-        self.git.branches.as_ref().map(|picker| picker.view.clone())
+    pub(super) fn branch_picker(&self, cx: &App) -> Option<Entity<jig_git::BranchPicker>> {
+        self.branch_switcher.read(cx).picker().cloned()
     }
 }
 
@@ -754,14 +630,6 @@ fn line_start(text: &str, line: usize) -> usize {
     text.match_indices('\n')
         .nth(line - 1)
         .map_or(text.len(), |(ix, _)| ix + 1)
-}
-
-fn plural(n: usize, one: &str, many: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {many}")
-    }
 }
 
 #[cfg(test)]

@@ -109,9 +109,12 @@ where a mistake is cheap and obvious:
    selection, scroll, height, focus) is the natural entity; the debugger's
    pauses still reach the tabs (the paused line), the Map and the hover
    through the workspace, so they come out as events.
-8. **Git** (`git`, with `workspace/git/watch.rs`) and the **sidebar**
-   (`sidebar`, `tree`): the gutter bars need the tabs, so the entity is told
-   about tab changes.
+8. **Git**: the branch picker and the change popup, as entities. The
+   change bars, the Git view's panel and the repository watch stay: the
+   bars are per tab and redrawn on every edit, the panel is the sidebar's
+   and watched only while it shows. The **sidebar** stays too: its width,
+   motion and which view shows are layout, which is the workspace's, and
+   the file tree is already an entity.
 9. **Find in Files** and **Go to File** (`find_in_files`, `last_find`,
    `quick_open`, `file_index`, `recent_files`): these are modals, so this is
    when `modal_open` becomes a question asked of each modal entity instead
@@ -215,6 +218,16 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   Map, breakpoints or the hover, so as an entity it would only send all of
   that back as events. Its call stack and variables view could become an
   entity later, if the debugger grows.
+
+- **Git's branch picker** lives in `workspace/git/branches.rs` as
+  `BranchSwitcher`: it opens the picker, reads the branches in the
+  background and emits `Switch`, `Create` or `Closed { refocus }`; the
+  workspace saves files and checks out, as before.
+- **Git's change popup** lives in `workspace/git/hunk.rs` as `HunkPopup`:
+  the change, its lines as they are now (any edit to the tab closes it, so
+  they're taken when it opens), where it shows, and its drawing; Revert
+  comes out as `RevertHunk`, which the workspace makes as one undo step. It
+  shows only while its tab is open, as before.
 
 ## Not every field becomes an entity
 
