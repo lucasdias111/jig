@@ -52,8 +52,8 @@ pub fn run(dir: &Path) {
                         ThemeChoice::Light
                     }
                 });
-                crate::theme::init(cx);
-                crate::theme::apply(None, cx);
+                jig_kit::theme::init(cx);
+                jig_kit::theme::apply(None, cx);
             });
             let (handle, _) = cx
                 .update(|cx| {
@@ -123,8 +123,8 @@ fn about(dir: &Path, dark: bool) {
                 ThemeChoice::Light
             }
         });
-        crate::theme::init(cx);
-        crate::theme::apply(None, cx);
+        jig_kit::theme::init(cx);
+        jig_kit::theme::apply(None, cx);
     });
     let (handle, _) = cx
         .update(|cx| {

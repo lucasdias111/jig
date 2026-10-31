@@ -51,8 +51,8 @@ use jig_editor::EditorHandle;
 
 use crate::document::Document;
 use crate::file_tree::FileTree;
-use crate::theme;
 use commands::{CommandRun, Note};
+use jig_kit::theme;
 use jig_settings::{self as settings, Settings};
 use mode::Mode;
 use tabs::Tab;
@@ -305,8 +305,8 @@ impl Workspace {
             this.show_in_tree(&file, window, cx);
         }
         this.update_title(window);
-        crate::theme::sync(window, cx);
-        cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx))
+        jig_kit::theme::sync(window, cx);
+        cx.observe_window_appearance(window, |_, window, cx| jig_kit::theme::sync(window, cx))
             .detach();
         cx.observe_global_in::<settings::AppSettings>(window, Self::apply_settings)
             .detach();

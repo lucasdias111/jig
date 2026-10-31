@@ -58,7 +58,7 @@ pub fn root_for(server: &Server, file: &Path) -> PathBuf {
     } else {
         marked.next()
     };
-    found.map_or_else(|| crate::project::root_for(file), Path::to_path_buf)
+    found.map_or_else(|| jig_kit::project::root_for(file), Path::to_path_buf)
 }
 
 /// A server and the root it runs in.

@@ -100,9 +100,9 @@ impl Workspace {
         if let Some(path) = document.path.as_deref() {
             self.file_watch.watch(path);
         }
-        let detected = crate::indentation::detect(&document.saved_text);
+        let detected = jig_kit::indentation::detect(&document.saved_text);
         let indentation = match document.path.as_deref() {
-            Some(path) => crate::editorconfig::EditorConfig::for_file(path).tab_size(detected),
+            Some(path) => jig_kit::editorconfig::EditorConfig::for_file(path).tab_size(detected),
             None => detected,
         };
         let state = cx.new(|cx| {

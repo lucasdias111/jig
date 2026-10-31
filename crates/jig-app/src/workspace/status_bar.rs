@@ -8,7 +8,8 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::*;
 
 use super::Workspace;
-use crate::{indentation, languages};
+use crate::languages;
+use jig_kit::indentation;
 use jig_updates::{self as update, RestartToUpdate};
 
 pub(super) const HEIGHT: f32 = 24.;

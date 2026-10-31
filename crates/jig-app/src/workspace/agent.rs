@@ -2213,7 +2213,7 @@ impl Workspace {
                 .flex_none()
                 .h_full()
                 .p_2()
-                .bg(crate::theme::editor_surface(cx))
+                .bg(jig_kit::theme::editor_surface(cx))
                 .border_l_1()
                 .border_color(cx.theme().title_bar_border)
                 .children(self.render_agent_chat(cx))
@@ -2811,7 +2811,7 @@ impl Workspace {
         }
         self.answer_edit(&edit.id, true, None, cx);
         let path = self.relative(&edit.path);
-        let diff = crate::diff::edit_lines(&disk, &new);
+        let diff = jig_kit::diff::edit_lines(&disk, &new);
         if let Some(agent) = self.chat.as_mut().and_then(|run| run.agent.as_mut()) {
             agent.entries.push(ChatEntry::Edit {
                 path,
@@ -2863,7 +2863,7 @@ impl Workspace {
         self.catch_up_with_disk(self.active, window, cx);
 
         let old = self.editor().text(cx);
-        let preview = crate::diff::preview_edit(&old, &new, 0);
+        let preview = jig_kit::diff::preview_edit(&old, &new, 0);
         let relative = self.relative(&edit.path);
         let Some(run) = self.chat.as_mut() else {
             return Ok(());
@@ -2984,7 +2984,7 @@ impl Workspace {
             agent.entries.push(ChatEntry::Edit {
                 path,
                 accepted: accept,
-                diff: crate::diff::edit_lines(&pending.before, &proposed),
+                diff: jig_kit::diff::edit_lines(&pending.before, &proposed),
             });
             agent.scroll.scroll_to_bottom();
             run.bubble = Bubble::Running {
@@ -3125,7 +3125,7 @@ impl Workspace {
         if tab.dirty || disk == text {
             return;
         }
-        let (range, replacement) = crate::diff::changed_range(&text, &disk);
+        let (range, replacement) = jig_kit::diff::changed_range(&text, &disk);
         tab.editor.apply_edit(range, replacement, window, cx);
         tab.document.saved_text = disk;
         tab.dirty = false;
@@ -3138,7 +3138,7 @@ impl Workspace {
             .and_then(|run| run.agent.as_ref())
             .map(|agent| agent.directory.clone())
             .filter(|root| path.starts_with(root))
-            .unwrap_or_else(|| crate::project::root_for(path));
+            .unwrap_or_else(|| jig_kit::project::root_for(path));
         path.strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
@@ -3154,7 +3154,7 @@ impl Workspace {
         match self.document().path.as_deref() {
             Some(path) => Some(
                 open.filter(|root| path.starts_with(root))
-                    .unwrap_or_else(|| crate::project::root_for(path)),
+                    .unwrap_or_else(|| jig_kit::project::root_for(path)),
             ),
             None => open,
         }

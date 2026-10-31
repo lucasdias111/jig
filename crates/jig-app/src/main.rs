@@ -8,29 +8,22 @@
 mod about_window;
 mod agent;
 mod agents;
-mod brackets;
 mod completions;
 mod dap;
 mod debug_target;
 mod debuggers;
 mod definitions;
-mod diff;
 mod document;
-mod editorconfig;
-mod field_box;
 mod file_icons;
 mod file_tree;
 mod find_in_files;
 mod find_panel;
 mod formatters;
 mod hover;
-mod indentation;
 mod languages;
-mod lines;
 mod lsp;
 mod lsp_debug;
 mod menus;
-mod project;
 mod project_search;
 mod providers;
 mod quick_open;
@@ -41,13 +34,13 @@ mod settings_window;
 mod shortcuts;
 mod snippets;
 mod text_edits;
-mod theme;
 mod workspace;
 
 use std::path::PathBuf;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
+use jig_kit::theme;
 use jig_settings::{self as settings, recent, session};
 use workspace::{Quit, Workspace};
 

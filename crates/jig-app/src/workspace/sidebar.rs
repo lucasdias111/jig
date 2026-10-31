@@ -100,7 +100,7 @@ impl Workspace {
     ) {
         let file = canonical(file);
         if self.tree.is_none() {
-            self.set_tree_root(&crate::project::root_for(&file), window, cx);
+            self.set_tree_root(&jig_kit::project::root_for(&file), window, cx);
         }
         if let Some(tree) = &self.tree {
             tree.view.update(cx, |tree, cx| {

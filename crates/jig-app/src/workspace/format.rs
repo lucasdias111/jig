@@ -23,10 +23,10 @@ use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::{EditFormatters, EditLanguageServers, FormatDocument, Workspace};
-use crate::editorconfig::EditorConfig;
 use crate::formatters::{self, Formatter};
 use crate::lsp::{Client, Encoding};
 use crate::{languages, settings, text_edits};
+use jig_kit::editorconfig::EditorConfig;
 
 /// How long Format Document waits.
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -285,7 +285,7 @@ impl Workspace {
             });
         let text = text.to_string();
         let external_job = external.clone().map(|formatter| {
-            let root = crate::project::root_for(&path);
+            let root = jig_kit::project::root_for(&path);
             let (text, path) = (text.clone(), path.clone());
             move || run_external(formatter, text, path, root, limit)
         });

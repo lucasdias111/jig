@@ -64,6 +64,7 @@ gpui-kit = { version = "=0.7.0", features = [
 jig-editor = { path = "crates/jig-editor" }
 jig-commands = { path = "crates/jig-commands" }
 jig-ai = { path = "crates/jig-ai" }
+jig-kit = { path = "crates/jig-kit" }
 jig-git = { path = "crates/jig-git" }
 jig-map = { path = "crates/jig-map" }
 jig-planner = { path = "crates/jig-planner" }

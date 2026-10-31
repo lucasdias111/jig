@@ -120,7 +120,7 @@ impl Workspace {
             }
             let editor = self.tabs[ix].editor.clone();
             let selection = editor.selection(cx);
-            let (range, replacement) = crate::diff::changed_range(&text, &disk);
+            let (range, replacement) = jig_kit::diff::changed_range(&text, &disk);
             let new_len = replacement.len();
             editor.apply_edit(range.clone(), replacement, window, cx);
             let follow = |offset| shift(offset, &range, new_len);

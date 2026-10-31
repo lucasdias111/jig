@@ -4,8 +4,8 @@ use gpui_kit::*;
 use jig_editor::EditorHandle;
 
 use super::{GoToLine, Workspace};
-use crate::field_box::{FieldBox, FieldBoxEvent};
-use crate::lines;
+use jig_kit::field_box::{FieldBox, FieldBoxEvent};
+use jig_kit::lines;
 
 pub(super) struct OpenGoToLine {
     view: Entity<FieldBox>,

@@ -345,7 +345,7 @@ impl Workspace {
         Some(ruler(
             depth,
             "Code",
-            crate::theme::editor_surface(cx),
+            jig_kit::theme::editor_surface(cx),
             None,
             cx,
         ))

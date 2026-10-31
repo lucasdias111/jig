@@ -31,7 +31,7 @@ use jig_ai::{ProviderTemplate, TEMPLATES};
 
 use crate::languages::{self, Language};
 use crate::providers;
-use crate::theme::EDITABLE;
+use jig_kit::theme::EDITABLE;
 use jig_settings::{self as settings, Shortcut};
 use ui::Section;
 
@@ -273,10 +273,10 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        crate::theme::sync(window, cx);
+        jig_kit::theme::sync(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let mut subscriptions = vec![
-            cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx)),
+            cx.observe_window_appearance(window, |_, window, cx| jig_kit::theme::sync(window, cx)),
             cx.observe_global::<settings::AppSettings>(|_, cx| cx.notify()),
             cx.observe_global::<providers::Providers>(|_, cx| cx.notify()),
             cx.observe_global::<jig_updates::Updates>(|_, cx| cx.notify()),
@@ -638,7 +638,7 @@ mod tests {
         START.set(nav);
         cx.update(|cx| {
             gpui_kit::init(cx);
-            crate::theme::init(cx);
+            jig_kit::theme::init(cx);
             init(cx, crate::shortcuts::ALL);
             open(cx);
         });
@@ -672,7 +672,7 @@ mod tests {
     fn opens_once_and_reflects_changes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            crate::theme::init(cx);
+            jig_kit::theme::init(cx);
             init(cx, crate::shortcuts::ALL);
             open(cx);
             open(cx);
@@ -694,11 +694,11 @@ mod tests {
     fn picking_ember_s_own_color_clears_the_change(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            crate::theme::init(cx);
+            jig_kit::theme::init(cx);
             settings::update(cx, |s| s.appearance.theme = ThemeChoice::Dark);
         });
         cx.update(|cx| {
-            appearance_page::set_color("syntax.keyword", crate::theme::parse_hex("#FF0000"), cx);
+            appearance_page::set_color("syntax.keyword", jig_kit::theme::parse_hex("#FF0000"), cx);
             assert_eq!(settings::get(cx).colors.dark["syntax.keyword"], "#FF0000");
             assert!(
                 settings::get(cx).colors.light.is_empty(),
@@ -707,7 +707,7 @@ mod tests {
 
             appearance_page::set_color(
                 "syntax.keyword",
-                crate::theme::default_color("syntax.keyword", true),
+                jig_kit::theme::default_color("syntax.keyword", true),
                 cx,
             );
             assert!(settings::get(cx).colors.dark.is_empty());

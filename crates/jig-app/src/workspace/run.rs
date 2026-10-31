@@ -136,7 +136,7 @@ impl Workspace {
             self.document()
                 .path
                 .as_deref()
-                .map(crate::project::root_for)
+                .map(jig_kit::project::root_for)
         })
     }
 

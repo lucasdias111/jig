@@ -3,7 +3,7 @@
 use gpui_kit::*;
 
 use super::{EditAgentsFile, Workspace};
-use crate::project;
+use jig_kit::project;
 
 impl Workspace {
     /// Open the `AGENTS.md` that applies to the current file, creating one

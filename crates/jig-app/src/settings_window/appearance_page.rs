@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::ui::{self, Row, Section};
 use super::{Detail, Nav, Page, SettingsWindow};
-use crate::theme::{self, EDITABLE, Section as ColorSection};
+use jig_kit::theme::{self, EDITABLE, Section as ColorSection};
 use jig_settings::{
     self as settings, DEFAULT_TRANSLUCENCY, EditorSettings, FormatSettings, MAX_FONT_SIZE,
     MAX_TRANSLUCENCY, MIN_FONT_SIZE, ThemeChoice,

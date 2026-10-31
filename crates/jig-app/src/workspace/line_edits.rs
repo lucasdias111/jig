@@ -8,7 +8,7 @@ use super::{
     DeleteLine, DuplicateLine, InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp,
     ResetZoom, SelectLine, Workspace, ZoomIn, ZoomOut,
 };
-use crate::lines::{self, LineEdit};
+use jig_kit::lines::{self, LineEdit};
 use jig_settings::{self as settings, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
 
 impl Workspace {

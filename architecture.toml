@@ -27,6 +27,7 @@ jig-editor = []
 jig-commands = []
 jig-ai = ["jig-process"]
 jig-git = ["jig-commands", "jig-process"]
+jig-kit = ["jig-commands", "jig-settings"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
 jig-settings = ["jig-ai"]
@@ -37,6 +38,7 @@ jig-app = [
     "jig-commands",
     "jig-editor",
     "jig-git",
+    "jig-kit",
     "jig-map",
     "jig-planner",
     "jig-process",
@@ -50,28 +52,9 @@ jig-app = [
 crate = "jig-settings"
 uses = []
 
-# Small shared pieces with no feature of their own.
+# Small shared pieces with no feature of their own, in its own crate.
 [capability.kit]
-modules = [
-    "field_box",
-    "theme",
-    "project",
-    "editorconfig",
-    "diff",
-    "lines",
-    "indentation",
-    "brackets",
-]
-contract = [
-    "field_box",
-    "theme",
-    "project",
-    "editorconfig",
-    "diff",
-    "lines",
-    "indentation",
-    "brackets",
-]
+crate = "jig-kit"
 uses = ["settings"]
 
 # Where Jig's tools live and installing them: the PATH programs are found

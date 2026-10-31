@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use jig_process::NoWindow as _;
 use serde::Deserialize;
 
-use crate::editorconfig::LineEnding;
+use jig_kit::editorconfig::LineEnding;
 use jig_tools::{self as tools, Help};
 
 const BUILT_IN: &str = include_str!("../../../assets/default-formatters.toml");

@@ -81,14 +81,14 @@ impl Workspace {
         };
         let language = tab.document.language(&self.settings.languages);
         let comment = crate::languages::line_comment(language);
-        let pair = crate::brackets::matching(&text, cursor, comment);
+        let pair = jig_kit::brackets::matching(&text, cursor, comment);
         let guide = self
             .settings
             .editor
             .indent_guides
             .then(|| {
                 let row = text[..cursor.min(text.len())].matches('\n').count();
-                crate::indentation::active_guide(&text, row, tab.indentation.tab_size)
+                jig_kit::indentation::active_guide(&text, row, tab.indentation.tab_size)
             })
             .flatten();
 

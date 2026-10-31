@@ -63,11 +63,12 @@ pub(crate) struct AboutWindow {
 
 impl AboutWindow {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        crate::theme::sync(window, cx);
+        jig_kit::theme::sync(window, cx);
         window.set_window_title("About Jig");
         Self {
-            _appearance: cx
-                .observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx)),
+            _appearance: cx.observe_window_appearance(window, |_, window, cx| {
+                jig_kit::theme::sync(window, cx)
+            }),
         }
     }
 }
@@ -140,7 +141,7 @@ mod tests {
     fn opens_once_and_draws(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            crate::theme::init(cx);
+            jig_kit::theme::init(cx);
             open(cx);
             open(cx);
         });

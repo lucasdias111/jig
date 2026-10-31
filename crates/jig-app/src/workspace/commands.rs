@@ -299,7 +299,7 @@ impl Workspace {
             file_name: self.document().path.as_deref().map(|path| {
                 // Relative to the project, so the agent knows where the
                 // file sits.
-                let root = crate::project::root_for(path);
+                let root = jig_kit::project::root_for(path);
                 path.strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
@@ -336,7 +336,7 @@ impl Workspace {
         self.document()
             .path
             .as_deref()
-            .map(crate::project::context_names)
+            .map(jig_kit::project::context_names)
             .unwrap_or_default()
     }
 
