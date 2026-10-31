@@ -6,7 +6,6 @@ crates/jig-ai/src/agent/acp.rs 1526
 crates/jig-ai/src/agent/opencode.rs 1078
 crates/jig-app/src/shortcuts.rs 649
 crates/jig-app/src/workspace.rs 964
-crates/jig-app/src/workspace/agent.rs 3248
 crates/jig-app/src/workspace/commands.rs 600
 crates/jig-app/src/workspace/debug.rs 1446
 crates/jig-app/src/workspace/definitions.rs 510
