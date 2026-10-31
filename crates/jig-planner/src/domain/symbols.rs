@@ -3,6 +3,9 @@
 //! declarations take (`fn name`, `class Name`, `func name`, a top-level
 //! `const NAME`…) rather than by language servers, so it works for every
 //! language, with or without a server installed. Locals are left out.
+//!
+//! Reading the project is the store's ([`ProjectFiles`]), so this works on
+//! whatever files it's handed.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -75,10 +78,22 @@ pub fn declarations(text: &str) -> Vec<(String, String, usize)> {
         .collect()
 }
 
-/// Walk `root` and read what it declares. Blocks; run it in the background.
-pub fn index(root: &Path) -> ProjectIndex {
+/// The project's files, as the index reads them. The store reads them
+/// from disk; tests hand them over in memory.
+pub trait ProjectFiles {
+    /// Every file, relative to the project, as `.gitignore` leaves them.
+    fn files(&self) -> Vec<String>;
+    /// How many bytes the file at `path` holds, if it's there.
+    fn size(&self, path: &str) -> Option<u64>;
+    /// The file at `path` as text, if it reads as text.
+    fn read(&self, path: &str) -> Option<String>;
+}
+
+/// Read what `project` declares. Reads every file; run it in the background.
+pub fn index(project: &impl ProjectFiles) -> ProjectIndex {
     // Jig's own files, the tasks among them, aren't what a task links to.
-    let files: Vec<String> = jig_commands::project_files::walk(root)
+    let files: Vec<String> = project
+        .files()
         .into_iter()
         .filter(|path| !path.starts_with(".jig/"))
         .collect();
@@ -88,14 +103,13 @@ pub fn index(root: &Path) -> ProjectIndex {
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| CODE.contains(&extension));
-        let full = root.join(path);
-        let small = full
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() <= MAX_FILE_BYTES);
+        let small = project
+            .size(path)
+            .is_some_and(|size| size <= MAX_FILE_BYTES);
         if !code || !small {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&full) else {
+        let Some(text) = project.read(path) else {
             continue;
         };
         symbols.extend(
@@ -170,15 +184,33 @@ mod tests {
         );
     }
 
+    /// Files in memory, by path.
+    struct Files(Vec<(&'static str, &'static str)>);
+
+    impl ProjectFiles for Files {
+        fn files(&self) -> Vec<String> {
+            self.0.iter().map(|(path, _)| path.to_string()).collect()
+        }
+
+        fn size(&self, path: &str) -> Option<u64> {
+            self.read(path).map(|text| text.len() as u64)
+        }
+
+        fn read(&self, path: &str) -> Option<String> {
+            self.0
+                .iter()
+                .find(|(p, _)| *p == path)
+                .map(|(_, text)| text.to_string())
+        }
+    }
+
     #[test]
     fn indexes_a_projects_code_and_files() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/a.rs"), "fn run() {}\n").unwrap();
-        std::fs::write(dir.path().join("README.md"), "type the name\n").unwrap();
-        std::fs::create_dir_all(dir.path().join(".jig/tasks")).unwrap();
-        std::fs::write(dir.path().join(".jig/tasks/a.md"), "# A\n").unwrap();
-        let index = index(dir.path());
+        let index = index(&Files(vec![
+            (".jig/tasks/a.md", "# A\n"),
+            ("README.md", "type the name\n"),
+            ("src/a.rs", "fn run() {}\n"),
+        ]));
         assert_eq!(
             index.symbols,
             [Symbol {

@@ -187,6 +187,7 @@ uses = ["settings", "kit", "tools"]
 # The task planner, in its own crate.
 [capability.planner]
 crate = "jig-planner"
+layered = true
 uses = []
 
 # The Map, in its own crate.
