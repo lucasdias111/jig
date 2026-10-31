@@ -7,7 +7,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, TitleBar, v_flex};
 use gpui_kit::*;
 
-use crate::update;
+use jig_updates as update;
 
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/jig-1024.png");
 

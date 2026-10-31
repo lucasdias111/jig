@@ -29,6 +29,7 @@ jig-ai = ["jig-process"]
 jig-git = ["jig-commands", "jig-process"]
 jig-map = ["jig-ai", "jig-commands"]
 jig-planner = ["jig-ai", "jig-commands"]
+jig-updates = ["jig-commands", "jig-process"]
 jig-app = [
     "jig-ai",
     "jig-commands",
@@ -37,6 +38,7 @@ jig-app = [
     "jig-map",
     "jig-planner",
     "jig-process",
+    "jig-updates",
 ]
 
 # Settings files and what's remembered between launches.
@@ -56,7 +58,6 @@ modules = [
     "lines",
     "indentation",
     "brackets",
-    "windows",
 ]
 contract = [
     "field_box",
@@ -67,7 +68,6 @@ contract = [
     "lines",
     "indentation",
     "brackets",
-    "windows",
 ]
 uses = ["settings"]
 
@@ -138,16 +138,15 @@ uses = []
 crate = "jig-map"
 uses = []
 
-# Checking for and installing updates, and the About window.
+# Checking for and installing updates, in their own crate.
 [capability.updates]
-modules = ["update", "about_window"]
-contract = ["update", "about_window"]
-uses = ["settings", "kit"]
+crate = "jig-updates"
+uses = []
 
-# The Settings window.
+# The Settings and About windows.
 [capability.preferences]
-modules = ["settings_window"]
-contract = ["settings_window"]
+modules = ["settings_window", "about_window"]
+contract = ["settings_window", "about_window"]
 uses = ["settings", "kit", "toolchain", "agent", "updates"]
 
 # The app itself: the window and its workspace, menus and shortcuts, putting

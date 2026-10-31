@@ -3605,9 +3605,9 @@ dependencies = [
  "jig-map",
  "jig-planner",
  "jig-process",
+ "jig-updates",
  "libc",
  "lsp-types",
- "minisign-verify",
  "notify 8.2.0",
  "proc-macro2",
  "regex",
@@ -3647,7 +3647,6 @@ dependencies = [
  "tree-sitter-vim",
  "tree-sitter-vue-next",
  "tree-sitter-xml",
- "ureq",
 ]
 
 [[package]]
@@ -3727,6 +3726,21 @@ name = "jig-process"
 version = "0.5.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "jig-updates"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-commands",
+ "jig-process",
+ "minisign-verify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]

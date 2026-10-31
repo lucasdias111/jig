@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-use crate::settings;
 pub use release::Version;
 
 actions!(jig, [CheckForUpdates, RestartToUpdate]);
@@ -50,13 +49,15 @@ pub struct Updates {
 
 impl Global for Updates {}
 
-pub fn init(cx: &mut App) {
+/// Start looking for updates, shortly and then daily, whenever `automatic`
+/// says to (the app reads it from Settings > Updates).
+pub fn init(automatic: fn(&App) -> bool, cx: &mut App) {
     install::clean_up();
     let schedule = cx.spawn(async move |cx| {
         cx.background_executor().timer(FIRST_CHECK).await;
         loop {
             cx.update(|cx| {
-                if settings::get(cx).updates.automatic {
+                if automatic(cx) {
                     check(false, cx);
                 }
             });
@@ -205,7 +206,7 @@ fn announce(cx: &mut App) {
                 }
                 cx.update(|cx| match state(cx) {
                     State::Ready { .. } => {
-                        crate::windows::send_to_editor(Box::new(RestartToUpdate), cx)
+                        jig_commands::windows::send_to_editor(Box::new(RestartToUpdate), cx)
                     }
                     State::Manual { .. } => open_releases_page(cx),
                     _ => {}
@@ -254,7 +255,7 @@ pub fn restart(reopen: Option<PathBuf>, cx: &mut App) -> Result<(), String> {
 }
 
 /// Put updates in `state`, as a check would.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn set_for_test(state: State, cx: &mut App) {
     cx.set_global(Updates {
         state,

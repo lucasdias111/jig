@@ -7,7 +7,7 @@ use gpui_kit::*;
 use super::SettingsWindow;
 use super::ui::{self, Row, Section};
 use crate::settings;
-use crate::update::{self, RestartToUpdate, State};
+use jig_updates::{self as update, RestartToUpdate, State};
 
 impl SettingsWindow {
     pub(super) fn updates_sections(&self, cx: &Context<Self>) -> Vec<Section> {

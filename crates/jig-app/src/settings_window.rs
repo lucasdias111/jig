@@ -227,7 +227,7 @@ pub fn is_settings_window(window: AnyWindowHandle, cx: &App) -> bool {
 
 /// Run `action` in the frontmost editor window, bringing it forward.
 pub(crate) fn send_to_workspace(action: Box<dyn Action>, cx: &mut App) {
-    crate::windows::send_to_editor(action, cx);
+    jig_commands::windows::send_to_editor(action, cx);
 }
 
 /// Work Settings started, such as installing something.
@@ -267,7 +267,7 @@ impl SettingsWindow {
             cx.observe_window_appearance(window, |_, window, cx| crate::theme::sync(window, cx)),
             cx.observe_global::<settings::AppSettings>(|_, cx| cx.notify()),
             cx.observe_global::<providers::Providers>(|_, cx| cx.notify()),
-            cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify()),
+            cx.observe_global::<jig_updates::Updates>(|_, cx| cx.notify()),
             // The providers may have been edited in the meantime.
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
@@ -811,7 +811,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn the_updates_page_draws_in_every_state(cx: &mut TestAppContext) {
-        use crate::update::{self, State, Version};
+        use jig_updates::{self as update, State, Version};
         let handle = open_on(Nav::page(Page::Updates), cx);
         let version = Version(9, 0, 0);
         for state in [

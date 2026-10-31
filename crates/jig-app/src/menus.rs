@@ -4,7 +4,6 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, ToggleCodeAc
 use gpui_kit::*;
 
 use crate::settings_window::OpenSettings;
-use crate::update::CheckForUpdates;
 use crate::workspace::{
     ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine, DuplicateLine,
     EditAgents, EditAgentsFile, EditDebuggers, EditRunConfigurations, ExplainLevel, Find,
@@ -16,6 +15,7 @@ use crate::workspace::{
     StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
     ToggleSidebar, ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
 };
+use jig_updates::CheckForUpdates;
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
 

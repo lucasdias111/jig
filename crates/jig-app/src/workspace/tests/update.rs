@@ -1,7 +1,7 @@
 //! A downloaded update in the status bar.
 
 use super::*;
-use crate::update::{self, State};
+use jig_updates::{self as update, State};
 
 #[gpui_kit::test]
 fn a_downloaded_update_offers_a_restart(cx: &mut TestAppContext) {

@@ -23,6 +23,7 @@ jig-ai.workspace = true
 jig-git.workspace = true
 jig-map.workspace = true
 jig-planner.workspace = true
+jig-updates.workspace = true
 jig-process.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
@@ -40,10 +41,6 @@ similar = "3"
 notify = "8"
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
-# Updates: the latest release from GitHub, and the check that a download
-# was signed with Jig's key.
-ureq.workspace = true
-minisign-verify = "0.3"
 # GDScript's grammar, which GPUI Kit has no feature for; registered in
 # `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
 tree-sitter-gdscript = "6"
@@ -90,6 +87,7 @@ tempfile.workspace = true
 jig-map = { workspace = true, features = ["testing"] }
 jig-git = { workspace = true, features = ["testing"] }
 jig-planner = { workspace = true, features = ["testing"] }
+jig-updates = { workspace = true, features = ["testing"] }
 # Reads the source as tokens for the architecture test.
 proc-macro2 = "1"
 gpui-kit = { workspace = true, features = ["test-support"] }

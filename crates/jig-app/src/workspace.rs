@@ -325,7 +325,7 @@ impl Workspace {
         cx.observe_global::<crate::lsp::Failures>(Self::server_failed)
             .detach();
         // A downloaded update shows in the status bar.
-        cx.observe_global::<crate::update::Updates>(|_, cx| cx.notify())
+        cx.observe_global::<jig_updates::Updates>(|_, cx| cx.notify())
             .detach();
         // A running configuration would outlive Jig otherwise.
         cx.on_app_quit(|this, _| {
@@ -604,7 +604,7 @@ impl Workspace {
     /// or file, as quitting would: unsaved changes are asked about first.
     fn restart_to_update(
         &mut self,
-        _: &crate::update::RestartToUpdate,
+        _: &jig_updates::RestartToUpdate,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -612,7 +612,7 @@ impl Workspace {
             let reopen = this
                 .project_root(cx)
                 .or_else(|| this.document().path.clone());
-            if let Err(error) = crate::update::restart(reopen, cx) {
+            if let Err(error) = jig_updates::restart(reopen, cx) {
                 this.show_error(&error, window, cx);
             }
         });

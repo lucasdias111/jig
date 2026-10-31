@@ -1,0 +1,30 @@
+[package]
+name = "jig-updates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's tests set where updates stand.
+testing = []
+
+[dependencies]
+gpui-kit.workspace = true
+jig-commands.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The latest release from GitHub, and the check that a download was signed
+# with Jig's key.
+ureq.workspace = true
+minisign-verify = "0.3"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

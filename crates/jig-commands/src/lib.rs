@@ -8,6 +8,7 @@ pub mod motion;
 pub mod palette;
 pub mod project_files;
 pub mod surface;
+pub mod windows;
 
 pub use bubble::{Bubble, LiveStep};
 pub use chat::{

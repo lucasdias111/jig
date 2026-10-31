@@ -46,8 +46,6 @@ mod snippets;
 mod text_edits;
 mod theme;
 mod tools;
-mod update;
-mod windows;
 mod workspace;
 
 use std::path::PathBuf;
@@ -107,12 +105,12 @@ fn main() {
             recent::init(cx);
             session::init(cx);
             agent::init(cx);
-            update::init(cx);
+            jig_updates::init(|cx| settings::get(cx).updates.automatic, cx);
             theme::init(cx);
             theme::apply(None, cx);
             cx.bind_keys(workspace::key_bindings());
             // Before the menus: they show only shortcuts bound by then.
-            windows::init(cx, is_editor_window);
+            jig_commands::windows::init(cx, is_editor_window);
             settings_window::init(cx);
             menus::init(cx);
             // Last: it takes over the shortcuts Settings can change.
