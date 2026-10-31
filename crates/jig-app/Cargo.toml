@@ -20,6 +20,7 @@ gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
 jig-ai.workspace = true
+jig-git.workspace = true
 jig-map.workspace = true
 jig-process.workspace = true
 anyhow.workspace = true
@@ -32,7 +33,7 @@ libc.workspace = true
 futures = "0.3"
 # The LSP types GPUI Kit's editor speaks, for go-to-definition.
 lsp-types = "0.97"
-# Line diffs against git for the gutter's change bars.
+# Line diffs for previewing the agent's edits (`diff.rs`).
 similar = "3"
 # Reloading open files changed outside Jig. GPUI already builds this version.
 notify = "8"
@@ -86,6 +87,7 @@ snapshots = ["gpui-kit/test-support"]
 [dev-dependencies]
 tempfile.workspace = true
 jig-map = { workspace = true, features = ["testing"] }
+jig-git = { workspace = true, features = ["testing"] }
 # Reads the source as tokens for the architecture test.
 proc-macro2 = "1"
 gpui-kit = { workspace = true, features = ["test-support"] }

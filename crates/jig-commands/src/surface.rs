@@ -100,6 +100,9 @@ pub fn agent_accent(cx: &App) -> Hsla {
     cx.theme().info
 }
 
+/// Lucide "plus", for buttons that add something.
+pub const PLUS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>"#;
+
 pub fn agent_icon() -> gpui_kit::component::Icon {
     gpui_kit::component::Icon::default().data(AGENT_ICON)
 }

@@ -1,0 +1,27 @@
+[package]
+name = "jig-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Lets jig-app's UI tests drive the Git view.
+testing = []
+
+[dependencies]
+gpui-kit.workspace = true
+jig-commands.workspace = true
+jig-process.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+# Hunks: line diffs against the committed text, for the gutter's change bars.
+similar = "3"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

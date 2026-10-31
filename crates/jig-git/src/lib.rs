@@ -13,6 +13,15 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, bail};
 use jig_process::NoWindow as _;
 
+mod branch_picker;
+mod panel;
+
+// The Git view and the branch picker, beside the command line above.
+pub use branch_picker::{
+    BranchPicker, BranchPickerEvent, Mode as BranchPickerMode, WIDTH as BRANCH_PICKER_WIDTH,
+};
+pub use panel::{BRANCH_ICON, GitPanel, GitPanelEvent};
+
 /// How long fetch, pull and push get. A remote that stops answering would
 /// otherwise leave the Git view spinning for good.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(5 * 60);

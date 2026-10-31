@@ -3601,6 +3601,7 @@ dependencies = [
  "jig-ai",
  "jig-commands",
  "jig-editor",
+ "jig-git",
  "jig-map",
  "jig-process",
  "libc",
@@ -3664,6 +3665,19 @@ name = "jig-editor"
 version = "0.5.0"
 dependencies = [
  "gpui-kit",
+]
+
+[[package]]
+name = "jig-git"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-commands",
+ "jig-process",
+ "libc",
+ "similar",
+ "tempfile",
 ]
 
 [[package]]

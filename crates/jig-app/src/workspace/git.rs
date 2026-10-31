@@ -22,10 +22,10 @@ pub(super) mod watch;
 
 use super::sidebar::SidebarView;
 use super::{NewBranch, SwitchBranch, TITLE_BAR_HEIGHT, ToggleGitPanel, Workspace};
-use crate::branch_picker::{self, BranchPicker, BranchPickerEvent};
 use crate::document::Document;
-use crate::git::{self, Hunk, Repo};
-use crate::git_panel::{BRANCH_ICON, GitPanel, GitPanelEvent};
+use jig_git::{self as git, Hunk, Repo};
+use jig_git::{BRANCH_ICON, GitPanel, GitPanelEvent};
+use jig_git::{BranchPicker, BranchPickerEvent, BranchPickerMode};
 
 /// Lines of a change the popup shows on each side before cutting it short.
 const POPUP_LINES: usize = 16;
@@ -450,7 +450,7 @@ impl Workspace {
             GitPanelEvent::Changed => this.git_changed(window, cx),
             GitPanelEvent::Dismissed => this.leave_sidebar(window, cx),
             GitPanelEvent::Branches => {
-                this.open_branch_picker(branch_picker::Mode::Switch, window, cx)
+                this.open_branch_picker(BranchPickerMode::Switch, window, cx)
             }
         });
         self.git.panel = Some(Opened {
@@ -492,7 +492,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_branch_picker(branch_picker::Mode::Switch, window, cx);
+        self.open_branch_picker(BranchPickerMode::Switch, window, cx);
     }
 
     pub(super) fn new_branch(
@@ -501,12 +501,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_branch_picker(branch_picker::Mode::Create, window, cx);
+        self.open_branch_picker(BranchPickerMode::Create, window, cx);
     }
 
     fn open_branch_picker(
         &mut self,
-        mode: branch_picker::Mode,
+        mode: BranchPickerMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -646,7 +646,7 @@ impl Workspace {
 
     pub(super) fn render_branch_picker(&self, window: &Window) -> Option<AnyElement> {
         let open = self.git.branches.as_ref()?;
-        let width = px(crate::branch_picker::WIDTH);
+        let width = px(jig_git::BRANCH_PICKER_WIDTH);
         let left = ((window.viewport_size().width - width) / 2.).max(px(8.));
         Some(
             deferred(
@@ -680,7 +680,7 @@ impl Workspace {
                 .child(Icon::default().data(BRANCH_ICON).size(px(12.)).flex_none())
                 .child(div().min_w_0().truncate().whitespace_nowrap().child(head))
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_branch_picker(branch_picker::Mode::Switch, window, cx)
+                    this.open_branch_picker(BranchPickerMode::Switch, window, cx)
                 }))
                 .into_any_element(),
         )

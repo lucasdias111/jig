@@ -10,9 +10,10 @@ use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::fuzzy;
-use crate::git::Branch;
-use crate::git_panel::{BRANCH_ICON, PLUS};
+use crate::Branch;
+use crate::panel::BRANCH_ICON;
+use jig_commands::fuzzy;
+use jig_commands::surface::PLUS_ICON as PLUS;
 
 pub const WIDTH: f32 = 480.;
 const ROW_HEIGHT: f32 = 32.;
@@ -102,7 +103,7 @@ impl BranchPicker {
         self.refilter(cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn row_names(&self) -> Vec<String> {
         self.rows
             .iter()

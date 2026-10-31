@@ -9,8 +9,8 @@ use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::fuzzy;
 use crate::run_configs::RunConfig;
+use jig_commands::fuzzy;
 
 pub const WIDTH: f32 = 560.;
 const ROW_HEIGHT: f32 = 34.;

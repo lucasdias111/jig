@@ -3,6 +3,7 @@
 
 pub mod bubble;
 pub mod chat;
+pub mod fuzzy;
 pub mod motion;
 pub mod palette;
 pub mod surface;

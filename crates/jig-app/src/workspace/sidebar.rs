@@ -16,8 +16,8 @@ use super::{
     ToggleSidebar, Workspace,
 };
 use crate::file_tree::{FileTree, FileTreeEvent};
-use crate::git_panel::BRANCH_ICON;
 use crate::settings_window::OpenSettings;
+use jig_git::BRANCH_ICON;
 
 /// The activity bar's width.
 pub(super) const ACTIVITY_BAR_WIDTH: f32 = 44.;

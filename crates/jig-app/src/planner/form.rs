@@ -20,7 +20,7 @@ use jig_ai::tasks::{self, Task, Todo};
 
 use super::symbols::{self, ProjectIndex, Symbol};
 use super::{CROSS, checkbox, field, small_button};
-use crate::git_panel::PLUS;
+use jig_commands::surface::PLUS_ICON as PLUS;
 
 /// How many names the `@` list shows.
 const MENTION_ROWS: usize = 8;
@@ -352,13 +352,16 @@ impl TaskForm {
                 .collect();
         }
         let lower = query.to_lowercase();
-        let names = crate::fuzzy::match_paths(
+        let names = jig_commands::fuzzy::match_paths(
             index.symbols.iter().map(|symbol| symbol.name.as_str()),
             query,
             MENTION_ROWS * 4,
         );
-        let files =
-            crate::fuzzy::match_paths(index.files.iter().map(String::as_str), query, MENTION_ROWS);
+        let files = jig_commands::fuzzy::match_paths(
+            index.files.iter().map(String::as_str),
+            query,
+            MENTION_ROWS,
+        );
         let mut scored: Vec<(i32, Mentioned)> = names
             .into_iter()
             .map(|found| {

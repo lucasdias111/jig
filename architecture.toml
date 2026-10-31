@@ -26,8 +26,16 @@ jig-process = []
 jig-editor = []
 jig-commands = []
 jig-ai = ["jig-process"]
+jig-git = ["jig-commands", "jig-process"]
 jig-map = ["jig-ai", "jig-commands"]
-jig-app = ["jig-ai", "jig-commands", "jig-editor", "jig-map", "jig-process"]
+jig-app = [
+    "jig-ai",
+    "jig-commands",
+    "jig-editor",
+    "jig-git",
+    "jig-map",
+    "jig-process",
+]
 
 # Settings files and what's remembered between launches.
 [capability.settings]
@@ -38,7 +46,6 @@ uses = []
 # Small shared pieces with no feature of their own.
 [capability.kit]
 modules = [
-    "fuzzy",
     "field_box",
     "theme",
     "project",
@@ -50,7 +57,6 @@ modules = [
     "windows",
 ]
 contract = [
-    "fuzzy",
     "field_box",
     "theme",
     "project",
@@ -97,11 +103,10 @@ modules = ["file_tree", "file_icons"]
 contract = ["file_tree", "file_icons"]
 uses = ["settings", "kit", "toolchain", "search"]
 
-# The git command line, the Git view and the branch picker.
+# The git command line, the Git view and the branch picker, in their own crate.
 [capability.git]
-modules = ["git", "git_panel", "branch_picker"]
-contract = ["git", "git_panel", "branch_picker"]
-uses = ["kit"]
+crate = "jig-git"
+uses = []
 
 # Run configurations and their output.
 [capability.run]

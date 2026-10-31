@@ -13,13 +13,13 @@ use gpui_kit::component::{ActiveTheme as _, Icon, StyledExt as _, h_flex, v_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::git::{Change, FileStatus, Repo, Status};
+use crate::{Change, FileStatus, Repo, Status};
+use jig_commands::surface::PLUS_ICON as PLUS;
 
 const ROW_HEIGHT: f32 = 26.;
 
 /// Lucide "git-branch".
 pub const BRANCH_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>"#;
-pub const PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>"#;
 const CHECK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 /// Lucide "refresh-cw".
 const FETCH: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>"#;
@@ -127,17 +127,17 @@ impl GitPanel {
         self.message.update(cx, |input, cx| input.focus(window, cx));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn status(&self) -> Option<&Status> {
         self.status.as_ref()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_busy(&self) -> bool {
         self.busy.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_message(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.message.update(cx, |input, cx| {
             input.set_value(text.to_string(), window, cx)
@@ -314,14 +314,14 @@ impl GitPanel {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn checked_files(&self) -> Vec<String> {
         let mut paths = self.checked_paths();
         paths.sort();
         paths
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn toggle_file(&mut self, path: &str, cx: &mut Context<Self>) {
         self.toggle(path, cx);
     }

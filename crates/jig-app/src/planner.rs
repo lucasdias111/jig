@@ -20,7 +20,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::tasks::{self, Task, Todo};
 
-use crate::git_panel::PLUS;
+use jig_commands::surface::PLUS_ICON as PLUS;
 use links::Target;
 
 // The planner's contract: what the rest of Jig uses of it (`architecture.toml`).

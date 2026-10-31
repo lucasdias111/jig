@@ -16,7 +16,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use ignore::WalkBuilder;
 
-use crate::fuzzy;
+use jig_commands::fuzzy;
 
 // Asked of the workspace from elsewhere, such as the file tree's menu.
 actions!(jig, [GoToFile]);
