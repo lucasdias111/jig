@@ -12,8 +12,12 @@ cargo build --locked --release -p jig-app
 
 app=target/Jig.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-rm -rf "$app"
+# Updated in place, not deleted first: the Dock and Finder keep a reference
+# to the bundle itself, and a new one in its place shows a blank icon.
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# The executable is replaced, not written over, so a copy still running
+# keeps its own and macOS doesn't kill it for a changed signature.
+rm -f "$app/Contents/MacOS/Jig"
 cp target/release/Jig "$app/Contents/MacOS/Jig"
 cp assets/app-icon/Jig.icns "$app/Contents/Resources/Jig.icns"
 cp LICENSE "$app/Contents/Resources/LICENSE"
