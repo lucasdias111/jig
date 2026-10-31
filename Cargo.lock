@@ -3606,6 +3606,7 @@ dependencies = [
  "lsp-types",
  "minisign-verify",
  "notify 8.2.0",
+ "proc-macro2",
  "regex",
  "resvg 0.46.0",
  "serde",

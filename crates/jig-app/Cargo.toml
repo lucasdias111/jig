@@ -99,4 +99,6 @@ snapshots = ["gpui-kit/test-support"]
 
 [dev-dependencies]
 tempfile.workspace = true
+# Reads the source as tokens for the architecture test.
+proc-macro2 = "1"
 gpui-kit = { workspace = true, features = ["test-support"] }
