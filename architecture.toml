@@ -14,12 +14,48 @@
 # - Test code (any module path with a `tests` segment, and anything marked
 #   `#[cfg(test)]`) is left out.
 #
+# - `[layers]` says how a capability crate is laid out inside, once its
+#   capability says `layered = true` (see below and `docs/layers.md`).
+#
 # Crossings that break these rules today are listed in
 # `architecture-baseline.txt`. The test fails on any crossing that isn't
 # listed there, and on any listed one that no longer happens, so the list
 # only shrinks. To rewrite it after removing (or, deliberately, adding) one:
 #
 #     JIG_ARCH_BLESS=1 cargo test -p jig-app --test architecture
+
+# Inside a layered crate, each file belongs to a layer by its folder under
+# `src/`: `ui/` (or `ui.rs`), `domain/`, `store/`; every other file at the
+# top (`lib.rs` and any small API file beside it) is the facade. A layer
+# names another (by `crate::` or `super::` paths) only if it `uses` it,
+# never names what it `forbids` (a path's start, e.g. `std::fs` covers
+# `std::fs::read` and `use std::{fs, …}`), and the facade stays thin: no
+# `impl` of what `forbids_impls` lists, and at most `max_lines` lines.
+# Test code is left out, as above. Crates convert one at a time: a
+# capability marks its crate `layered = true` once it's done.
+[layers.facade]
+uses = ["ui", "domain", "store"]
+forbids = ["std::fs", "std::process", "std::net", "jig_process", "trash"]
+forbids_impls = ["Render", "RenderOnce"]
+max_lines = 150
+
+# GPUI views, drawing, events and focus. No file or network IO: that's the
+# store's.
+[layers.ui]
+uses = ["domain", "store"]
+forbids = ["std::fs", "std::process", "std::net", "jig_process", "trash"]
+
+# The business logic, plain Rust: tested without a window or a folder.
+# What it needs kept is a trait here that the store implements.
+[layers.domain]
+uses = []
+forbids = ["gpui_kit", "std::fs", "std::process", "std::net", "jig_process", "trash"]
+
+# The state and how it's kept: `session.rs` (this window or process, in
+# memory), `cache.rs` (derived, rebuilt when stale), `persist.rs` (on disk).
+[layers.store]
+uses = ["domain"]
+forbids = ["gpui_kit"]
 
 [crates]
 jig-process = []

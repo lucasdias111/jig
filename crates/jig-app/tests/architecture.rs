@@ -6,6 +6,9 @@
 //! `crate::` and `super::` path, in `use` lines, code and macros alike, but
 //! not names brought in some other way (a glob, or a path through a module
 //! of the same capability that re-exports another's).
+//!
+//! Inside a crate whose capability is `layered`, [`layers`] keeps its
+//! facade, `ui`, `domain` and `store` apart the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -15,12 +18,18 @@ use std::path::{Path, PathBuf};
 use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 use serde::Deserialize;
 
+#[path = "architecture/layers.rs"]
+mod layers;
+#[path = "architecture/scan_tests.rs"]
+mod scan_tests;
+
 const BLESS: &str = "JIG_ARCH_BLESS";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Architecture {
     crates: BTreeMap<String, Vec<String>>,
+    layers: BTreeMap<String, layers::Layer>,
     capability: BTreeMap<String, Capability>,
 }
 
@@ -36,6 +45,9 @@ struct Capability {
     #[serde(default)]
     contract: Vec<String>,
     uses: Vec<String>,
+    /// Whether its crate is laid out in layers yet (`[layers]`).
+    #[serde(default)]
+    layered: bool,
 }
 
 impl Capability {
@@ -199,8 +211,8 @@ fn baseline_text(crossings: &BTreeMap<String, String>) -> String {
     text
 }
 
-/// Every source file under `src`, with its module path (`main.rs` is the
-/// crate root, `a/mod.rs` is `a`). Test modules are left out.
+/// Every source file under `src`, with its module path (`main.rs` or
+/// `lib.rs` is the crate root, `a/mod.rs` is `a`). Test modules are left out.
 fn source_files(source: &Path) -> Vec<(PathBuf, Vec<String>)> {
     let mut files = Vec::new();
     let mut folders = vec![source.to_path_buf()];
@@ -219,7 +231,10 @@ fn source_files(source: &Path) -> Vec<(PathBuf, Vec<String>)> {
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect();
-            if matches!(here.last().map(String::as_str), Some("main" | "mod")) {
+            if matches!(
+                here.last().map(String::as_str),
+                Some("main" | "lib" | "mod")
+            ) {
                 here.pop();
             }
             if here.iter().any(|segment| segment == "tests") {
@@ -272,6 +287,7 @@ impl Scan {
                 TokenTree::Ident(word) if !follows_separator(&tokens, at) => {
                     let start = match word.to_string().as_str() {
                         "crate" => Some(Vec::new()),
+                        "self" => Some(here.to_vec()),
                         "super" => Some(here[..here.len().saturating_sub(1)].to_vec()),
                         name if (self.root || self.crates.iter().any(|c| c == name))
                             && is_separator(&tokens, at + 1) =>
@@ -543,64 +559,4 @@ fn cycle(architecture: &Architecture) -> Option<Vec<String>> {
         .capability
         .keys()
         .find_map(|name| visit(name, architecture, &mut Vec::new(), &mut done))
-}
-
-fn scan(source: &str, here: &[&str]) -> Vec<String> {
-    let here: Vec<String> = here.iter().map(|s| s.to_string()).collect();
-    let mut scan = Scan {
-        root: here.is_empty(),
-        crates: vec!["jig_map".into()],
-        ..Scan::default()
-    };
-    scan.tokens(source.parse().unwrap(), &here);
-    scan.paths.iter().map(|p| p.join("::")).collect()
-}
-
-#[test]
-fn reads_paths_in_use_lines_and_code() {
-    assert_eq!(
-        scan(
-            "use crate::{map::{self, view::Scene}, git};\nfn f() { crate::lsp::start::<T>(); }",
-            &["planner"],
-        ),
-        ["map", "map::view::Scene", "git", "lsp::start"]
-    );
-}
-
-#[test]
-fn resolves_super_from_where_the_file_is() {
-    assert_eq!(
-        scan("use super::super::git::Repo;", &["map", "view", "scene"]),
-        ["map::git::Repo"]
-    );
-}
-
-#[test]
-fn reads_paths_from_the_root_without_crate() {
-    assert_eq!(
-        scan("fn main() { workspace::open(); }", &[]),
-        ["workspace::open"]
-    );
-}
-
-#[test]
-fn leaves_out_test_code() {
-    assert_eq!(
-        scan(
-            "#[cfg(test)]\nmod tests { use crate::map::Hidden; }\nuse crate::git::Shown;",
-            &["planner"]
-        ),
-        ["git::Shown"]
-    );
-}
-
-#[test]
-fn reads_paths_into_capability_crates() {
-    assert_eq!(
-        scan(
-            "use jig_map::{Level, MapView};\nfn f() { other::jig_map::x(); }",
-            &["workspace"]
-        ),
-        ["jig_map::Level", "jig_map::MapView"]
-    );
 }
