@@ -126,7 +126,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.home || self.previewing() || self.modal_open() || self.rename.read(cx).is_open() {
+        if self.home || self.previewing() || self.modal_open(cx) || self.rename.read(cx).is_open() {
             return;
         }
         let text = self.editor().text(cx);

@@ -395,9 +395,8 @@ impl Workspace {
                     // Nothing from the server: the word search stands.
                     return;
                 }
-                if let Some(open) = &this.find_in_files {
-                    open.view
-                        .update(cx, |view, cx| view.show_results(results, window, cx));
+                if let Some(view) = this.find_in_files.read(cx).panel().cloned() {
+                    view.update(cx, |view, cx| view.show_results(results, window, cx));
                 }
             })
             .ok();

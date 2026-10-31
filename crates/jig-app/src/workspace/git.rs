@@ -400,8 +400,8 @@ impl Workspace {
             return;
         };
         self.palette = None;
-        self.quick_open = None;
-        self.find_in_files = None;
+        self.close_quick_open(cx);
+        self.close_find_in_files(cx);
         let head = self.git.head.clone();
         self.branch_switcher.update(cx, |switcher, cx| {
             switcher.open(repo, head, mode, window, cx)

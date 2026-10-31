@@ -84,7 +84,7 @@ impl Render for GoToLineField {
 
 impl Workspace {
     pub(super) fn go_to_line(&mut self, _: &GoToLine, window: &mut Window, cx: &mut Context<Self>) {
-        if self.home || self.modal_open() || self.go_to_line.read(cx).is_open() {
+        if self.home || self.modal_open(cx) || self.go_to_line.read(cx).is_open() {
             return;
         }
         let anchor = self.floating_anchor(cx);

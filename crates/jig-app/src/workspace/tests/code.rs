@@ -44,8 +44,9 @@ fn f12_goes_to_a_definition_in_another_file_then_to_usages(cx: &mut TestAppConte
     let query = cx.update(|cx| {
         let this = workspace.read(cx);
         this.find_in_files
-            .as_ref()
-            .map(|open| open.view.read(cx).query(cx))
+            .read(cx)
+            .panel()
+            .map(|view| view.read(cx).query(cx))
     });
     assert_eq!(query.as_deref(), Some("alpha"));
 }
@@ -382,7 +383,9 @@ fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContex
         window.render_frame(cx);
         window.press("f12", cx);
     });
-    wait_for(cx, &|cx| workspace.read(cx).find_in_files.is_some());
+    wait_for(cx, &|cx| {
+        workspace.read(cx).find_in_files.read(cx).is_open()
+    });
     assert_eq!(
         find_results(cx, &workspace),
         [
@@ -461,7 +464,10 @@ fn cmd_click_to_definition(cx: &mut TestAppContext, padding: usize) {
     }
     cx.update(|cx| {
         let this = workspace.read(cx);
-        assert!(this.find_in_files.is_none(), "searched instead of jumping");
+        assert!(
+            !this.find_in_files.read(cx).is_open(),
+            "searched instead of jumping"
+        );
         assert!(
             this.document()
                 .path

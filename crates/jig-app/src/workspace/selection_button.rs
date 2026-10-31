@@ -39,7 +39,7 @@ impl SelectionButton {
     fn position(workspace: &Workspace, window: &Window, cx: &App) -> Option<Point<Pixels>> {
         if !jig_settings::get(cx).editor.selection_button
             || workspace.home
-            || workspace.modal_open()
+            || workspace.modal_open(cx)
             || workspace.note.is_some()
             || workspace.previewing()
         {

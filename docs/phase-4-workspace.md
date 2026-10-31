@@ -229,6 +229,24 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   comes out as `RevertHunk`, which the workspace makes as one undo step. It
   shows only while its tab is open, as before.
 
+- **Find in Files** lives in `workspace/find.rs` as `FindInFilesPanel`:
+  the panel and the last search (query and options), its drawing, and the
+  events `Open { path, range }`, `Indexed`, `Dismissed` and `Blurred`. The
+  workspace picks the query (the selection, else the last search), goes to
+  the match and remembers the place for Go Back; Go to References fills
+  the panel through `panel()`.
+- **Go to File** lives in `workspace/go_to_file.rs` as `GoToFilePanel`: the
+  panel and the files shown in this window, most recent first, which it
+  offers before the rest. Opening another project resets it, as before.
+  The project's last walk (`FileIndex`) stays on the workspace: both
+  panels and Go to Definition's guesses share it, so each panel is handed
+  it as it opens and reports a new walk back.
+- **`modal_open` asks each modal** (`modal_open(cx)`): the palette and the
+  planner's form are still fields, the two panels answer for themselves.
+  Esc's fallback, for when the keyboard went back to the code under one,
+  closes them all through `close_modals`; opening one closes the others
+  through each one's `close`, as before.
+
 ## Not every field becomes an entity
 
 An entity earns its place when a feature has state of its own and draws or

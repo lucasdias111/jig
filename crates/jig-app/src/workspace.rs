@@ -168,19 +168,18 @@ pub struct Workspace {
     palette_openings: usize,
     /// What the window keeps for the agent between conversations.
     agent: agent::AgentState,
-    quick_open: Option<go_to_file::OpenQuickOpen>,
-    find_in_files: Option<find::OpenFindInFiles>,
+    /// Go to File's panel, and the files it offers first.
+    quick_open: Entity<go_to_file::GoToFilePanel>,
+    /// Find in Files' panel, and the last search.
+    find_in_files: Entity<find::FindInFilesPanel>,
     /// Rename Symbol's field.
     rename: Entity<rename::RenameField>,
     /// Go to Line's field.
     go_to_line: Entity<go_to_line::GoToLineField>,
-    last_find: find::LastFind,
     /// Find and Replace in the current file.
     find_panel: Entity<find_panel::FindInFile>,
     /// The project's files as last walked, for Go to File to show at once.
     file_index: Option<go_to_file::FileIndex>,
-    /// Files shown in this window, most recent first, for Go to File.
-    recent_files: Vec<PathBuf>,
     /// The AI providers file, `~/.config/jig/config.toml`.
     config_path: Option<PathBuf>,
     /// The settings as last applied, to tell what a change touched.
@@ -278,6 +277,12 @@ impl Workspace {
         let hunk_popup = cx.new(|_| git::hunk::HunkPopup::default());
         cx.subscribe_in(&hunk_popup, window, Self::revert_hunk)
             .detach();
+        let quick_open = cx.new(|_| go_to_file::GoToFilePanel::default());
+        cx.subscribe_in(&quick_open, window, Self::on_go_to_file_event)
+            .detach();
+        let find_in_files = cx.new(|_| find::FindInFilesPanel::default());
+        cx.subscribe_in(&find_in_files, window, Self::on_find_in_files_event)
+            .detach();
         let status_note = cx.new(|_| status_bar::StatusMessage::default());
         // Whether the status bar has a message decides what it holds.
         cx.observe(&status_note, |_, _, cx| cx.notify()).detach();
@@ -297,14 +302,12 @@ impl Workspace {
             palette_openings: 0,
             model_defaults: None,
             agent: agent::AgentState::default(),
-            quick_open: None,
-            find_in_files: None,
+            quick_open,
+            find_in_files,
             rename,
             go_to_line,
-            last_find: Default::default(),
             find_panel,
             file_index: None,
-            recent_files: Vec::new(),
             config_path: jig_ai::Config::user_path(),
             settings,
             note: None,
@@ -548,10 +551,9 @@ impl Workspace {
             this.run_configs
                 .update(cx, |configurations, cx| configurations.reset(cx));
             this.palette = None;
-            this.quick_open = None;
-            this.find_in_files = None;
+            this.quick_open.update(cx, |panel, cx| panel.reset(cx));
+            this.close_find_in_files(cx);
             this.file_index = None;
-            this.recent_files.clear();
             let tab = this.new_tab(Document::default(), window, cx);
             this.tabs = vec![tab];
             this.active = 0;
@@ -905,8 +907,8 @@ impl Render for Workspace {
                 ))
             })
             .children(self.render_task_form(window))
-            .children(self.render_quick_open(window))
-            .children(self.render_find_in_files(window))
+            .children(self.render_quick_open(cx))
+            .children(self.render_find_in_files(cx))
             .children(self.render_rename(cx))
             .children(self.render_go_to_line(cx))
             .children(self.render_run_picker(cx))

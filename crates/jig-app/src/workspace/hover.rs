@@ -79,8 +79,8 @@ impl Workspace {
     /// Whether the palette or another sheet is open, or a change is under
     /// review, which the panels would get in the way of. The agent's
     /// conversation and a note don't: the panels show over them.
-    pub(super) fn hides_code_hover(&self) -> bool {
-        self.modal_open() || self.previewing()
+    pub(super) fn hides_code_hover(&self, cx: &App) -> bool {
+        self.modal_open(cx) || self.previewing()
     }
 
     /// Whether the pointer is over a problem or hover panel of the tab of
@@ -93,8 +93,8 @@ impl Workspace {
     }
 
     /// The tab of the editor `editor`, and its server and URI there.
-    fn hover_server(&self, editor: EntityId) -> Option<(Arc<Client>, String)> {
-        if self.modal_open() || self.previewing() {
+    fn hover_server(&self, editor: EntityId, cx: &App) -> Option<(Arc<Client>, String)> {
+        if self.modal_open(cx) || self.previewing() {
             return None;
         }
         let tab = self
@@ -116,7 +116,7 @@ impl Workspace {
         if self.home || self.keys_elsewhere(window, cx) {
             return;
         }
-        let server = self.hover_server(self.tab().id());
+        let server = self.hover_server(self.tab().id(), cx);
         let hover = self.tab().hover.clone();
         hover.update(cx, |hover, cx| hover.show_at_cursor(server, cx));
     }
@@ -158,7 +158,7 @@ impl HoverProvider for Hovers {
             .upgrade()
             .map(|workspace| workspace.read(cx))
             .filter(|workspace| !workspace.pointer_on_panel(self.editor, cx))
-            .and_then(|workspace| workspace.hover_server(self.editor))
+            .and_then(|workspace| workspace.hover_server(self.editor, cx))
         else {
             return Task::ready(Ok(None));
         };
@@ -289,7 +289,7 @@ impl CodeHover {
         self.workspace
             .upgrade()?
             .read(cx)
-            .hover_server(self.editor.entity_id())
+            .hover_server(self.editor.entity_id(), cx)
     }
 
     /// The cursor moved or the text changed: put away what no longer
@@ -585,7 +585,7 @@ impl CodeHover {
     fn hidden(&self, cx: &App) -> bool {
         self.workspace
             .upgrade()
-            .is_none_or(|workspace| workspace.read(cx).hides_code_hover())
+            .is_none_or(|workspace| workspace.read(cx).hides_code_hover(cx))
     }
 
     fn render_hover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {

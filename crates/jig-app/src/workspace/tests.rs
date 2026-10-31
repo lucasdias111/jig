@@ -161,8 +161,8 @@ fn tree_focused(cx: &mut TestAppContext, window: AnyWindowHandle, ws: &Entity<Wo
 
 fn find_results(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
     cx.update(|cx| {
-        let open = workspace.read(cx).find_in_files.as_ref().unwrap();
-        let view = open.view.read(cx);
+        let view = workspace.read(cx).find_in_files.read(cx).panel().unwrap();
+        let view = view.read(cx);
         assert!(!view.is_searching());
         view.result_lines()
     })

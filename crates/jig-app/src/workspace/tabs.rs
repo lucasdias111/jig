@@ -346,7 +346,7 @@ impl Workspace {
         self.tab_scroll.scroll_to_item(self.active);
         self.update_title(window);
         if let Some(path) = self.document().path.clone() {
-            self.note_recent_file(&path);
+            self.note_recent_file(&path, cx);
             self.show_in_tree(&path, window, cx);
         }
         self.remember_session(cx);

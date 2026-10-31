@@ -224,8 +224,8 @@ impl Workspace {
             return;
         };
         self.palette = None;
-        self.quick_open = None;
-        self.find_in_files = None;
+        self.close_quick_open(cx);
+        self.close_find_in_files(cx);
         self.run_configs.update(cx, |configurations, cx| {
             configurations.open_picker(root, debug, window, cx)
         });

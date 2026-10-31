@@ -129,7 +129,7 @@ impl Workspace {
     /// Open the panel, or go back to it. Not over the ⌘K palette or
     /// another panel: they have the keyboard.
     fn open_find_panel(&mut self, replacing: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.home || self.modal_open() {
+        if self.home || self.modal_open(cx) {
             return;
         }
         let editor = self.editor().clone();

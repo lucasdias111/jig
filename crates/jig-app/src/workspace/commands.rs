@@ -199,8 +199,8 @@ impl Workspace {
         if self.palette.is_some() {
             return self.close_palette(window, cx);
         }
-        self.quick_open = None;
-        self.find_in_files = None;
+        self.close_quick_open(cx);
+        self.close_find_in_files(cx);
         // Its matches would muddle the change's highlights.
         self.close_find_panel(cx);
         self.note = None;
@@ -341,11 +341,20 @@ impl Workspace {
     }
 
     /// The agent input or a form has the keyboard.
-    pub(super) fn modal_open(&self) -> bool {
+    pub(super) fn modal_open(&self, cx: &App) -> bool {
         self.palette.is_some()
             || self.planner.form.is_some()
-            || self.quick_open.is_some()
-            || self.find_in_files.is_some()
+            || self.quick_open.read(cx).is_open()
+            || self.find_in_files.read(cx).is_open()
+    }
+
+    /// Close the agent input and any form, e.g. once the keyboard has gone
+    /// back to the code without them.
+    fn close_modals(&mut self, cx: &mut Context<Self>) {
+        self.palette = None;
+        self.planner.form = None;
+        self.close_quick_open(cx);
+        self.close_find_in_files(cx);
     }
 
     /// The agent's edit is under review in the tab on screen. One in
@@ -398,7 +407,7 @@ impl Workspace {
     /// Whether the review keys belong to something else: a modal, or the
     /// find panel, where Enter goes to the next match and Esc closes it.
     pub(super) fn keys_elsewhere(&self, window: &Window, cx: &App) -> bool {
-        self.modal_open()
+        self.modal_open(cx)
             || self.find_panel_focused(window, cx)
             || self.planner_focused(window, cx)
             || self.map_field_focused(window, cx)
@@ -515,13 +524,10 @@ impl Workspace {
             });
             view.focus_handle(cx).focus(window, cx);
             cx.stop_propagation();
-        } else if self.modal_open() && self.editor().state().focus_handle(cx).is_focused(window) {
+        } else if self.modal_open(cx) && self.editor().state().focus_handle(cx).is_focused(window) {
             // Focus went back to the code (e.g. a click outside the form or
             // the input), so the floating window can't hear Escape.
-            self.palette = None;
-            self.planner.form = None;
-            self.quick_open = None;
-            self.find_in_files = None;
+            self.close_modals(cx);
             cx.stop_propagation();
             cx.notify();
         } else if self.keys_elsewhere(window, cx) || self.quick_fix_open(cx) {

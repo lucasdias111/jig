@@ -51,7 +51,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.home || self.modal_open() {
+        if self.home || self.modal_open(cx) {
             return;
         }
         if self.previewing() {

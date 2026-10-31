@@ -152,8 +152,8 @@ fn opening_a_folder_browses_and_opens_files(cx: &mut TestAppContext) {
 
 fn quick_open_rows(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
     cx.update(|cx| {
-        let open = workspace.read(cx).quick_open.as_ref().unwrap();
-        open.view.read(cx).row_paths()
+        let view = workspace.read(cx).quick_open.read(cx).panel().unwrap();
+        view.read(cx).row_paths()
     })
 }
 
@@ -182,7 +182,7 @@ fn go_to_file_finds_and_opens_files(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| window.input("lib", cx));
     assert_eq!(quick_open_rows(cx, &workspace), ["src/lib.rs"]);
     step(cx, window, |window, cx| window.press("enter", cx));
-    assert!(cx.update(|cx| workspace.read(cx).quick_open.is_none()));
+    assert!(cx.update(|cx| !workspace.read(cx).quick_open.read(cx).is_open()));
     assert_eq!(text(cx, &workspace), ORIGINAL);
 
     // Open a second file; the first is now the most recent other one.
@@ -200,7 +200,7 @@ fn go_to_file_finds_and_opens_files(cx: &mut TestAppContext) {
     step(cx, window, |window, cx| window.press("escape", cx));
     step(cx, window, |window, cx| {
         let this = workspace.read(cx);
-        assert!(this.quick_open.is_none());
+        assert!(!this.quick_open.read(cx).is_open());
         assert!(this.editor().state().focus_handle(cx).is_focused(window));
         assert!(
             this.document()
@@ -248,9 +248,9 @@ fn find_in_files_searches_the_project_and_opens_the_match(cx: &mut TestAppContex
         cx.update(|cx| workspace
             .read(cx)
             .find_in_files
-            .as_ref()
+            .read(cx)
+            .panel()
             .unwrap()
-            .view
             .read(cx)
             .query(cx)),
         "alpha",
@@ -271,7 +271,7 @@ fn find_in_files_searches_the_project_and_opens_the_match(cx: &mut TestAppContex
     });
     step(cx, window, |window, cx| {
         let this = workspace.read(cx);
-        assert!(this.find_in_files.is_none());
+        assert!(!this.find_in_files.read(cx).is_open());
         assert!(
             this.document()
                 .path
@@ -297,7 +297,7 @@ fn find_in_files_searches_the_project_and_opens_the_match(cx: &mut TestAppContex
     });
     assert!(find_results(cx, &workspace).is_empty(), "match case is on");
     step(cx, window, |window, cx| window.press("escape", cx));
-    assert!(cx.update(|cx| workspace.read(cx).find_in_files.is_none()));
+    assert!(cx.update(|cx| !workspace.read(cx).find_in_files.read(cx).is_open()));
 }
 
 #[gpui_kit::test]
