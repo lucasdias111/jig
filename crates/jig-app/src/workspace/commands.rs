@@ -116,7 +116,7 @@ impl Workspace {
     /// A button in the title bar that opens the agent input, for those who
     /// reach for the mouse or don't know ⌘K yet. Only with a file open.
     pub(super) fn render_command_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.home {
+        if self.home || self.mode == super::mode::Mode::Agent {
             return None;
         }
         let theme = cx.theme();
@@ -192,7 +192,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let map = self.map_showing().cloned();
-        if self.home && map.is_none() {
+        if self.home && map.is_none() && self.mode != super::mode::Mode::Agent {
             return;
         }
         // ⌘K and the Agent button toggle it.
@@ -236,6 +236,9 @@ impl Workspace {
                 match event {
                     PaletteEvent::Run(text) if this.map_showing().is_some() => {
                         this.start_map_conversation(None, text.clone(), window, cx)
+                    }
+                    PaletteEvent::Run(text) if this.mode == super::mode::Mode::Agent => {
+                        this.submit_agent_mode_prompt(text.clone(), window, cx);
                     }
                     PaletteEvent::Run(text) => {
                         this.start_conversation(Ask::new(text.clone()), window, cx)
@@ -282,6 +285,7 @@ impl Workspace {
                 cx,
             );
         }
+        self.switch_mode(super::mode::Mode::Code, cx);
         let text = self.editor().text(cx);
         let selection = self.editor().selection(cx);
         let target = if selection.is_empty() {
@@ -361,13 +365,17 @@ impl Workspace {
     /// Keep the edit on screen. It is already in the buffer as one undo
     /// step.
     pub(super) fn accept_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.agent_edit_here() && self.settle_agent_edit(true, Some(window), cx)
+        self.mode == super::mode::Mode::Code
+            && self.agent_edit_here()
+            && self.settle_agent_edit(true, Some(window), cx)
     }
 
     /// Drop the edit on screen by undoing it, which leaves no trace in the
     /// history beyond a redo step.
     fn reject_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.agent_edit_here() && self.settle_agent_edit(false, Some(window), cx)
+        self.mode == super::mode::Mode::Code
+            && self.agent_edit_here()
+            && self.settle_agent_edit(false, Some(window), cx)
     }
 
     /// Enter accepts or allows; ⌘↩ allows the agent's request always.

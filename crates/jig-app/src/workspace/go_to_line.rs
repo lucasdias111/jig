@@ -53,7 +53,7 @@ impl Workspace {
         };
         self.remember_location(cx);
         self.editor().select(offset..offset, cx);
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
     }
 
     /// The field, under the cursor.

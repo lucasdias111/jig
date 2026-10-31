@@ -24,9 +24,16 @@ impl Workspace {
         }
     }
 
-    /// Focus what is in the editor's place: the start page or the editor.
+    /// Whether the start page is in the editor's place: no file is open,
+    /// and neither the Planner nor the Map shows instead.
+    pub(super) fn start_showing(&self) -> bool {
+        self.home && self.mode == super::mode::Mode::Code
+    }
+
+    /// Focus what is in the editor's place: the start page, the Planner,
+    /// the Map or the editor.
     pub(super) fn focus_main(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.home {
+        if self.start_showing() {
             self.home_focus.focus(window, cx);
         } else {
             self.focus_code(window, cx);

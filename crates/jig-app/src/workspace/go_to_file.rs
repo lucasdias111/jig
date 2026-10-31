@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::*;
-use jig_editor::EditorHandle;
 
 use super::{GoToFile, TITLE_BAR_HEIGHT, Workspace};
 use crate::quick_open::{QuickOpen, QuickOpenEvent};
@@ -67,7 +66,7 @@ impl Workspace {
                     if this.home {
                         this.home_focus.focus(window, cx);
                     } else {
-                        this.editor().focus(window, cx);
+                        this.focus_editor(window, cx);
                     }
                 }
                 QuickOpenEvent::Blurred => this.close_quick_open(cx),

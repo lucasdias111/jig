@@ -965,7 +965,7 @@ fn escape_closes_the_docked_conversation(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     vcx.update(|window, cx| window.render_frame(cx));
     assert!(vcx.update(|_, cx| workspace.read(cx).chat.is_some()));
-    // Working in the sidebar beside it: the Tasks view has the keyboard.
+    // Planner has the keyboard beside the docked conversation.
     vcx.update(|window, cx| window.press("ctrl-shift-t", cx));
     vcx.run_until_parked();
     vcx.update(|window, cx| window.render_frame(cx));
@@ -974,7 +974,7 @@ fn escape_closes_the_docked_conversation(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert!(
         vcx.update(|_, cx| workspace.read(cx).chat.is_none()),
-        "Esc closes it, from the sidebar too"
+        "Esc closes the idle conversation when leaving Planner"
     );
     assert!(
         vcx.update(|window, cx| workspace
@@ -1395,7 +1395,10 @@ fn sending_code_to_an_open_conversation_adds_it_to_the_reply(cx: &mut TestAppCon
                 .unwrap()
                 .input
                 .clone();
-            input.update(cx, |input, cx| input.set_value("look at", window, cx));
+            input.update(cx, |input, cx| {
+                input.set_value("look at", window, cx);
+                input.set_cursor_position(lsp_types::Position::new(0, 7), window, cx);
+            });
             this.focus_code(window, cx);
             // Nothing selected: the cursor's line.
             this.editor().select(3..3, cx);

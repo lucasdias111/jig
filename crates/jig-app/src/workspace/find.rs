@@ -112,7 +112,7 @@ impl Workspace {
                         super::tabs::canonical(open) == super::tabs::canonical(path)
                     }) {
                         this.editor().select(range.clone(), cx);
-                        this.editor().focus(window, cx);
+                        this.focus_editor(window, cx);
                     }
                 }
                 FindInFilesEvent::Indexed(files) => {
@@ -123,7 +123,7 @@ impl Workspace {
                     if this.home {
                         this.home_focus.focus(window, cx);
                     } else {
-                        this.editor().focus(window, cx);
+                        this.focus_editor(window, cx);
                     }
                 }
                 FindInFilesEvent::Blurred => this.close_find_in_files(cx),

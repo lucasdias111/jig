@@ -22,6 +22,49 @@ fn language_settings_rehighlight_open_tabs(cx: &mut TestAppContext) {
     });
 }
 
+/// The keys for tab `n`: ⌃n on a Mac, Alt-n elsewhere.
+fn tab_key(n: usize) -> String {
+    if cfg!(target_os = "macos") {
+        format!("ctrl-{n}")
+    } else {
+        format!("alt-{n}")
+    }
+}
+
+#[gpui_kit::test]
+fn the_mode_keys_dont_pick_tabs_and_settings_lists_them(cx: &mut TestAppContext) {
+    let (dir, window, workspace) = three_files(cx);
+    open_file(cx, window, &workspace, &dir.path().join("b.rs"));
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-1", cx);
+    });
+    assert_eq!(
+        active_title(cx, &workspace),
+        "b.rs",
+        "⌘1 is Code, not a tab"
+    );
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press(&tab_key(1), cx);
+    });
+    assert_eq!(active_title(cx, &workspace), "a.rs");
+    let listed: Vec<&str> = crate::shortcuts::ALL
+        .iter()
+        .map(|shortcut| shortcut.id)
+        .collect();
+    for id in [
+        "show_code",
+        "show_planner",
+        "go_to_map",
+        "show_map",
+        "tab_1",
+        "tab_9",
+    ] {
+        assert!(listed.contains(&id), "{id} in Settings > Keyboard");
+    }
+}
+
 fn tab_titles(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
     cx.update(|cx| {
         let this = workspace.read(cx);
@@ -62,7 +105,7 @@ fn each_tab_keeps_its_own_buffer_and_undo(cx: &mut TestAppContext) {
     // Back to a.rs: its edit is still there and still unsaved.
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-1", cx);
+        window.press(&tab_key(1), cx);
     });
     assert_eq!(text(cx, &workspace), "x// a.rs\n");
     assert!(cx.update(|cx| workspace.read(cx).tab().dirty));
@@ -97,12 +140,12 @@ fn opening_an_open_file_switches_to_its_tab(cx: &mut TestAppContext) {
 
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-9", cx);
+        window.press(&tab_key(9), cx);
     });
     assert_eq!(
         active_title(cx, &workspace),
         "c.rs",
-        "Cmd+9 is the last tab"
+        "the ninth is the last tab"
     );
     step(cx, window, |window, cx| window.press("ctrl-tab", cx));
     assert_eq!(active_title(cx, &workspace), "a.rs", "wraps around");
@@ -136,7 +179,7 @@ fn closing_tabs(cx: &mut TestAppContext) {
     open_file(cx, window, &workspace, &dir.path().join("c.rs"));
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-2", cx);
+        window.press(&tab_key(2), cx);
     });
 
     // A clean tab closes at once; its right neighbour takes over.
@@ -180,7 +223,7 @@ fn closing_other_and_all_tabs(cx: &mut TestAppContext) {
     open_file(cx, window, &workspace, &dir.path().join("c.rs"));
     step(cx, window, |window, cx| {
         window.render_frame(cx);
-        window.press("secondary-2", cx);
+        window.press(&tab_key(2), cx);
     });
     step(cx, window, |window, cx| {
         window.render_frame(cx);

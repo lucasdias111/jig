@@ -522,9 +522,9 @@ impl Workspace {
     }
 
     /// The open tabs, in a row above the editor, even when there's only
-    /// one. None on the home page.
+    /// one. Only Code shows file tabs.
     pub(super) fn render_tab_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.home {
+        if self.home || self.mode != super::mode::Mode::Code {
             return None;
         }
         let theme = cx.theme();

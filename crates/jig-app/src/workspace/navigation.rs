@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::*;
 use jig_editor::EditorHandle as _;
 
+use super::mode::Mode;
 use super::tabs::canonical;
 use super::{GoBack, GoForward, Workspace};
 use crate::map::view::Level;
@@ -27,6 +28,9 @@ pub(super) enum Place {
     },
     /// A level of the Map.
     Map(Level),
+    /// The Planner, keeping its checklist and scroll position.
+    Planner,
+    Agent,
 }
 
 impl Place {
@@ -34,7 +38,7 @@ impl Place {
     fn exists(&self) -> bool {
         match self {
             Place::Code { path, .. } => path.is_file(),
-            Place::Map(_) => true,
+            Place::Map(_) | Place::Planner | Place::Agent => true,
         }
     }
 }
@@ -71,6 +75,12 @@ impl Workspace {
     fn here(&self, cx: &App) -> Option<Place> {
         if let Some(view) = self.map_showing() {
             return Some(Place::Map(view.read(cx).level().clone()));
+        }
+        if self.mode == Mode::Agent {
+            return Some(Place::Agent);
+        }
+        if self.mode == Mode::Planner {
+            return Some(Place::Planner);
         }
         if self.home {
             return None;
@@ -155,9 +165,15 @@ impl Workspace {
         }
         let (path, offset) = match place {
             Place::Map(level) => return self.map_at(level, window, cx),
+            Place::Planner => return self.planner_at(window, cx),
+            Place::Agent => {
+                self.switch_mode(Mode::Agent, cx);
+                return self.show_agent_mode(window, cx);
+            }
             Place::Code { path, offset } => (path, offset),
         };
         self.leave_map(window, cx);
+        self.switch_mode(Mode::Code, cx);
         self.open_file(&path, window, cx);
         if !self.showing(&path) {
             return;
@@ -168,7 +184,7 @@ impl Workspace {
             offset -= 1;
         }
         self.editor().select(offset..offset, cx);
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
         cx.notify();
     }
 

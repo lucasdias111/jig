@@ -17,14 +17,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_editor::EditorHandle;
 use serde_json::{Value, json};
 
 use super::definitions::with_timeout;
+use super::mode::Mode;
 use super::tabs::canonical;
 use super::{ExplainLevel, IndexDomains, ShowMap, UpdateDomains, Workspace};
 use crate::lsp;
@@ -45,7 +43,6 @@ const PINCH_DEPTH: f32 = 0.5;
 
 pub(super) struct MapPane {
     pub(super) view: Entity<MapView>,
-    pub(super) showing: bool,
     _events: Subscription,
 }
 
@@ -54,7 +51,7 @@ impl Workspace {
     pub(super) fn map_showing(&self) -> Option<&Entity<MapView>> {
         self.map
             .as_ref()
-            .filter(|pane| pane.showing)
+            .filter(|_| self.mode == Mode::Map)
             .map(|pane| &pane.view)
     }
 
@@ -129,13 +126,11 @@ impl Workspace {
             });
             self.map = Some(MapPane {
                 view,
-                showing: false,
                 _events: events,
             });
         }
-        let pane = self.map.as_mut().expect("made above");
-        pane.showing = true;
-        let view = pane.view.clone();
+        let view = self.map.as_ref().expect("made above").view.clone();
+        self.switch_mode(Mode::Map, cx);
         view.focus_handle(cx).focus(window, cx);
         self.sync_live_points(cx);
         self.refresh_map_debug(cx);
@@ -219,22 +214,19 @@ impl Workspace {
         }
     }
 
-    /// The Map stops showing; whether it was.
+    /// The Map stops showing, the code in its place; whether it was.
     fn hide_map(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(pane) = self.map.as_mut().filter(|pane| pane.showing) else {
+        if self.mode != Mode::Map {
             return false;
-        };
-        pane.showing = false;
-        pane.view.read(cx).save_view();
-        self.sync_live_points(cx);
-        cx.notify();
+        }
+        self.switch_mode(Mode::Code, cx);
         true
     }
 
-    /// The code got focus some other way (Go to Line, a problem): it
-    /// shows, in place of the Map.
+    /// The code got focus some other way (Go to Line, a problem, another
+    /// tab): it shows, in place of the Planner or the Map.
     pub(super) fn code_focused(&mut self, cx: &mut Context<Self>) {
-        self.hide_map(cx);
+        self.switch_mode(Mode::Code, cx);
     }
 
     /// Go Back or Forward to `level` of the Map.
@@ -285,7 +277,7 @@ impl Workspace {
                 self.open_file(&path, window, cx);
                 if self.showing(&path) {
                     self.editor().select(at..at, cx);
-                    self.editor().focus(window, cx);
+                    self.focus_editor(window, cx);
                 }
             }
             MapEvent::OpenFile(path) => {
@@ -456,82 +448,23 @@ impl Workspace {
     /// The debugger paused in `path`, the Map showing: it stays, on the
     /// Plan of where it paused.
     pub(super) fn keep_map(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(pane) = self.map.as_mut() {
-            pane.showing = true;
-            let view = pane.view.clone();
+        if let Some(view) = self.map.as_ref().map(|pane| pane.view.clone()) {
+            self.switch_mode(Mode::Map, cx);
             view.focus_handle(cx).focus(window, cx);
             self.refresh_map_debug(cx);
             cx.notify();
         }
     }
 
-    /// In the title bar, left of the Agent button: the Map, or the code
-    /// while the Map shows.
-    pub(super) fn render_map_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.home && self.map_showing().is_none() {
-            return None;
-        }
-        let theme = cx.theme();
-        let showing = self.map_showing().is_some();
-        let accent = theme.primary;
-        let shortcut = if cfg!(target_os = "macos") {
-            "⌘B"
-        } else {
-            "Ctrl B"
-        };
-        Some(
-            h_flex()
-                .id("map-toggle")
-                .debug_selector(|| "map-toggle".into())
-                .flex_none()
-                .ml_2()
-                .h(px(26.))
-                .px_2()
-                .gap_1p5()
-                .rounded(px(6.))
-                .text_size(px(12.5))
-                .text_color(theme.foreground.opacity(0.85))
-                .when(showing, |this| {
-                    this.bg(accent.opacity(0.16)).text_color(accent)
-                })
-                .when(!showing, |this| {
-                    this.hover(|style| style.bg(theme.foreground.opacity(0.08)))
-                })
-                .child(
-                    Icon::new(IconName::Map)
-                        .size(px(13.))
-                        .flex_none()
-                        .text_color(accent),
-                )
-                .child(div().flex_none().whitespace_nowrap().child(if showing {
-                    "Code"
-                } else {
-                    "Map"
-                }))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(11.))
-                        .text_color(theme.muted_foreground)
-                        .child(shortcut),
-                )
-                .tooltip(move |window, cx| {
-                    let text = if showing {
-                        "Back to the code"
-                    } else {
-                        "Zoom out to how the function at the cursor fits in"
-                    };
-                    Tooltip::new(text).build(window, cx)
-                })
-                // Otherwise the title bar takes the press as a window drag.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| this.show_map(&ShowMap, window, cx)))
-                .into_any_element(),
-        )
-    }
-
-    /// Focus the Map if it's showing, else the current tab's code.
+    /// Focus what the mode shows: the Map, the Planner, or else the
+    /// current tab's code.
     pub(super) fn focus_code(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == Mode::Agent {
+            return self.focus_agent_mode(window, cx);
+        }
+        if self.mode == Mode::Planner {
+            return self.focus_planner_mode(window, cx);
+        }
         match self.map_showing() {
             Some(view) => view.focus_handle(cx).focus(window, cx),
             None => self.editor().focus(window, cx),

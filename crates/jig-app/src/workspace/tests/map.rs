@@ -123,19 +123,19 @@ fn show_map_flies_out_of_the_function_at_the_cursor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_title_bar_button_shows_the_map_and_the_code(cx: &mut TestAppContext) {
+fn the_title_bar_switch_shows_the_map_and_the_code(cx: &mut TestAppContext) {
     let (_dir, window, workspace) = open_project(cx);
     draw(cx, window);
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
     let button = vcx
-        .debug_bounds("map-toggle")
-        .expect("the Map button")
+        .debug_bounds("mode-map")
+        .expect("the Map's segment")
         .center();
     vcx.simulate_click(button, Modifiers::none());
     read_level(cx, &workspace);
     draw(cx, window);
     let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
-    let button = vcx.debug_bounds("map-toggle").unwrap().center();
+    let button = vcx.debug_bounds("mode-code").unwrap().center();
     vcx.simulate_click(button, Modifiers::none());
     assert!(map(cx, &workspace).is_none());
 }

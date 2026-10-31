@@ -51,7 +51,7 @@ impl Workspace {
         let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
             FindPanelEvent::Dismissed => {
                 this.close_find_panel(cx);
-                this.editor().focus(window, cx);
+                this.focus_editor(window, cx);
             }
         });
         self.find_panel = Some(OpenFindPanel {

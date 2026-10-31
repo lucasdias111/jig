@@ -90,7 +90,7 @@ impl Workspace {
         if self.home || self.tab().id() != open.tab {
             return;
         }
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
         let text = self.editor().text(cx);
         let Some(lsp) = self.tab().lsp.as_ref() else {
             self.rename_in_file(open.range, &name, window, cx);
@@ -215,7 +215,7 @@ impl Workspace {
                 changed += count;
             }
         }
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
         (files, changed)
     }
 

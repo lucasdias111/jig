@@ -343,7 +343,7 @@ impl Workspace {
         let range =
             text.position_to_offset(&selection.start)..text.position_to_offset(&selection.end);
         self.editor().select(range, cx);
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
     }
 
     /// Every use of `name`, clicked at `offset` in the current tab, in Find

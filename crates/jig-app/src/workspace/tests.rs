@@ -15,6 +15,7 @@ mod home;
 mod input;
 mod lens;
 mod map;
+mod modes;
 mod occurrences;
 mod quick_fix;
 mod servers;

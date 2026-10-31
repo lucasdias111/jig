@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use futures::StreamExt as _;
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::input::{InlineToken, InputContent, InputEvent, InputState};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{InlineToken, InputContent, TextareaState};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jig_ai::agent::acp::SignInNeeded;
@@ -93,6 +94,10 @@ pub(super) struct AgentState {
     pub(super) pick: Option<crate::agent::Pick>,
     /// What the ⌘K input lists, from the last time it asked.
     catalog: Option<AgentCatalog>,
+    catalog_loading: bool,
+    catalog_error: Option<String>,
+    catalog_generation: u64,
+    recent_scroll: ScrollHandle,
     /// The docked conversation's width, when the last one was left docked:
     /// the next opens the same way.
     pub(super) dock: Option<Pixels>,
@@ -158,7 +163,8 @@ pub(super) struct AgentRun {
     project: String,
     pub(super) entries: Vec<ChatEntry>,
     /// The reply box, shown between turns.
-    pub(super) input: Entity<InputState>,
+    pub(super) input: Entity<TextareaState>,
+    page_focus: FocusHandle,
     /// The code sent over from the editor, by the id of its token in the
     /// reply box, sent with the reply that still names it.
     references: Vec<(SharedString, CodeReference)>,
@@ -181,7 +187,6 @@ pub(super) struct AgentRun {
     pub(super) proposed: Option<Value>,
     /// What it drew on the Map, by their place here.
     pub(super) drawings: Vec<super::map_agent::Drawn>,
-    _input_events: Subscription,
 }
 
 enum Pending {
@@ -472,6 +477,14 @@ impl Workspace {
     /// Set up an empty run for a conversation at the cursor. `None`, with
     /// the reason shown, when the file isn't saved anywhere yet.
     fn start_agent_run(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<u64> {
+        if self.mode == super::mode::Mode::Agent && self.agent_busy() {
+            self.show_note(
+                "Finish or stop the current conversation first.".into(),
+                window,
+                cx,
+            );
+            return None;
+        }
         self.close_chat(window, cx);
         self.next_run_id += 1;
         let id = self.next_run_id;
@@ -606,6 +619,25 @@ impl Workspace {
         };
         // The settings' own choice needs no pick.
         self.agent.pick = (pick != crate::agent::Pick::from_settings(cx)).then_some(pick);
+        if self.mode == super::mode::Mode::Agent {
+            let pick = self
+                .agent
+                .pick
+                .clone()
+                .unwrap_or_else(|| crate::agent::Pick::from_settings(cx));
+            let label = self.picked_agent(cx).name.clone();
+            if let Some(agent) = self
+                .chat
+                .as_mut()
+                .and_then(|run| run.agent.as_mut())
+                .filter(|agent| {
+                    agent.entries.is_empty() && agent.session.is_none() && agent.finished
+                })
+            {
+                agent.pick = Some(pick);
+                agent.label = label;
+            }
+        }
         // Its conversations and commands, in place of the last agent's.
         self.load_agent_catalog(Some(palette), window, cx);
         cx.notify();
@@ -759,6 +791,11 @@ impl Workspace {
         {
             show_catalog(catalog, palette, cx);
         }
+        self.agent.catalog_generation += 1;
+        let generation = self.agent.catalog_generation;
+        self.agent.catalog_loading = true;
+        self.agent.catalog_error = None;
+        cx.notify();
         let choice = crate::agent::choice_for(self.agent.pick.as_ref(), cx);
         let task = cx.background_executor().spawn({
             let directory = directory.clone();
@@ -766,17 +803,32 @@ impl Workspace {
                 let choice = choice.map_err(anyhow::Error::msg)?;
                 let backend = crate::agent::connect(&choice)?;
                 let conversations = backend.conversations(&directory)?;
-                let commands = backend.commands(&directory)?;
+                let commands = backend.commands(&directory).unwrap_or_default();
                 anyhow::Ok((conversations, commands))
             }
         });
         cx.spawn_in(window, async move |this, cx| {
-            // Without OpenCode the palette just has nothing to list; running
-            // a prompt says what's wrong.
-            let Ok((conversations, commands)) = task.await else {
-                return;
-            };
+            let result = task.await;
             this.update(cx, |this, cx| {
+                if generation != this.agent.catalog_generation {
+                    return;
+                }
+                this.agent.catalog_loading = false;
+                if this.agent_project(cx).as_ref() != Some(&directory)
+                    || this.picked_agent(cx).key != agent
+                {
+                    cx.notify();
+                    return;
+                }
+                let (conversations, commands) = match result {
+                    Ok(catalog) => catalog,
+                    Err(error) => {
+                        this.agent.catalog_error =
+                            Some(format!("Couldn't load conversations: {error:#}"));
+                        cx.notify();
+                        return;
+                    }
+                };
                 let catalog = AgentCatalog {
                     agent,
                     directory,
@@ -794,6 +846,7 @@ impl Workspace {
                     show_catalog(&catalog, palette, cx);
                 }
                 this.agent.catalog = Some(catalog);
+                cx.notify();
             })
             .ok();
         })
@@ -810,16 +863,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AgentRun {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Reply to the agent…"));
-        let input_events =
-            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = event
-                    && !this.answer_agent_question(None, window, cx)
-                    && !this.answer_task_question(window, cx)
-                {
-                    this.reply_to_agent(window, cx);
-                }
-            });
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Reply to the agent…")
+                .auto_grow(1, 8)
+                .soft_wrap(true)
+        });
         let context = self.context_names();
         let project = directory
             .file_name()
@@ -853,6 +902,7 @@ impl Workspace {
             project,
             entries: vec![ChatEntry::User(asked)],
             input,
+            page_focus: cx.focus_handle(),
             references: Vec::new(),
             scroll: ScrollHandle::new(),
             frame: match self.agent.dock {
@@ -869,7 +919,6 @@ impl Workspace {
             map_action: None,
             proposed: None,
             drawings: Vec::new(),
-            _input_events: input_events,
         }
     }
 
@@ -1220,7 +1269,7 @@ impl Workspace {
                 && let Some(input) = agent.last_input.clone()
             {
                 agent.entries.push(ChatEntry::Note("Trying again.".into()));
-                self.editor().focus(window, cx);
+                self.focus_agent_or_editor(window, cx);
                 self.start_turn(id, input, window, cx);
             }
             return;
@@ -1383,7 +1432,7 @@ impl Workspace {
                 .detach();
         }
         let id = self.chat.as_ref().map_or(0, |run| run.id);
-        self.editor().focus(window, cx);
+        self.focus_agent_or_editor(window, cx);
         self.show_next_request(id, window, cx);
         cx.notify();
         true
@@ -1431,7 +1480,7 @@ impl Workspace {
                 })
                 .detach();
         }
-        self.editor().focus(window, cx);
+        self.focus_agent_or_editor(window, cx);
         self.show_next_request(id, window, cx);
         cx.notify();
         true
@@ -1473,7 +1522,7 @@ impl Workspace {
                             .entries
                             .push(ChatEntry::Note("Not saved as a task.".into()));
                     }
-                    self.editor().focus(window, cx);
+                    self.focus_agent_or_editor(window, cx);
                 } else if !allow {
                     agent
                         .entries
@@ -1502,7 +1551,7 @@ impl Workspace {
                         })
                         .detach();
                 }
-                self.editor().focus(window, cx);
+                self.focus_agent_or_editor(window, cx);
             }
             other => {
                 agent.pending = other;
@@ -1610,7 +1659,7 @@ impl Workspace {
             (_, 1) => self.allow_agent_request_always(window, cx),
             _ => self.settle_agent_request(false, window, cx),
         };
-        self.editor().focus(window, cx);
+        self.focus_agent_or_editor(window, cx);
     }
 
     /// The file of the agent's edit under review, when it isn't the tab on
@@ -1627,6 +1676,10 @@ impl Workspace {
     /// Back to the tab where the agent's edit waits for review. False when
     /// it isn't waiting in another tab.
     pub(super) fn show_agent_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.mode == super::mode::Mode::Agent && self.agent_edit_here() {
+            self.focus_editor(window, cx);
+            return true;
+        }
         let Some(ix) = self
             .agent_edit_elsewhere()
             .and_then(|path| self.tab_for(&path))
@@ -1649,6 +1702,10 @@ impl Workspace {
         }
         if self.chat.is_none() {
             return false;
+        }
+        if self.mode == super::mode::Mode::Agent {
+            self.focus_agent_mode(window, cx);
+            return true;
         }
         self.close_chat(window, cx);
         // The agent's reply box may have had the keyboard.
@@ -1716,10 +1773,341 @@ impl Workspace {
         })
     }
 
+    /// With no conversation selected, show the project's recent conversations.
+    pub(super) fn show_agent_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_none()
+        {
+            self.load_agent_catalog(None, window, cx);
+        }
+        self.focus_agent_mode(window, cx);
+        cx.notify();
+    }
+
+    fn ensure_agent_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some()
+        {
+            return;
+        }
+        let Some(id) = self.start_agent_run(window, cx) else {
+            return;
+        };
+        let directory = self.agent_project(cx).expect("start_agent_run checked");
+        let mut agent = self.new_agent_run(None, String::new(), directory, window, cx);
+        agent.entries.clear();
+        agent.input.update(cx, |input, cx| {
+            input.set_placeholder("Ask the agent about your project…", window, cx)
+        });
+        if let Some(run) = self.chat.as_mut().filter(|run| run.id == id) {
+            run.agent = Some(agent);
+        }
+        self.focus_agent_mode(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn focus_agent_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(agent) = self.chat.as_ref().and_then(|run| run.agent.as_ref()) {
+            if agent.loading
+                || matches!(
+                    &agent.pending,
+                    Some(Pending::Permission(_)) | Some(Pending::Edit(_))
+                )
+            {
+                agent.page_focus.focus(window, cx);
+                return;
+            }
+            agent.input.update(cx, |input, cx| input.focus(window, cx));
+        } else {
+            self.home_focus.focus(window, cx);
+        }
+    }
+
+    fn focus_agent_or_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == super::mode::Mode::Agent {
+            self.focus_agent_mode(window, cx);
+        } else {
+            self.focus_editor(window, cx);
+        }
+    }
+
+    pub(super) fn submit_agent_mode_prompt(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_busy() {
+            return self.show_note(
+                "Wait for the agent, or stop its turn first.".into(),
+                window,
+                cx,
+            );
+        }
+        self.ensure_agent_conversation(window, cx);
+        if let Some(agent) = self.chat.as_ref().and_then(|run| run.agent.as_ref()) {
+            agent
+                .input
+                .update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+        self.reply_to_agent(window, cx);
+    }
+
+    fn agent_busy(&self) -> bool {
+        self.chat
+            .as_ref()
+            .and_then(|run| run.agent.as_ref())
+            .is_some_and(|agent| !agent.finished || agent.loading || agent.pending.is_some())
+    }
+
+    pub(super) fn new_agent_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent_busy() || self.chat.as_ref().is_some_and(|run| run.preview.is_some()) {
+            return self.show_note(
+                "Finish or stop the current conversation first.".into(),
+                window,
+                cx,
+            );
+        }
+        self.close_chat(window, cx);
+        self.ensure_agent_conversation(window, cx);
+    }
+
+    pub(super) fn render_agent_mode(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let busy = self.agent_busy();
+        v_flex()
+            .id("agent-mode")
+            // Keep the shared Enter/Tab/Escape review keys active when a request
+            // owns focus and the message editor is not on screen.
+            .key_context("Input")
+            .debug_selector(|| "agent-mode".into())
+            .track_focus(
+                self.chat
+                    .as_ref()
+                    .and_then(|run| run.agent.as_ref())
+                    .map_or(&self.home_focus, |agent| &agent.page_focus),
+            )
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .px_4()
+                    .py_2()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Agent"),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("agent-mode-choose")
+                            .disabled(
+                                self.chat
+                                    .as_ref()
+                                    .and_then(|run| run.agent.as_ref())
+                                    .is_some_and(|agent| {
+                                        !agent.entries.is_empty() || agent.loading
+                                    }),
+                            )
+                            .label("Choose agent")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_command(&OpenCommand, window, cx);
+                                if let Some(palette) = &this.palette {
+                                    palette.view.update(cx, |palette, cx| {
+                                        palette.start_picking(window, cx)
+                                    });
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("agent-mode-history")
+                            .label("Conversations")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_agent_conversations(&OpenAgentConversations, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("agent-mode-new")
+                            .label("New conversation")
+                            .small()
+                            .ghost()
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.new_agent_conversation(window, cx)
+                            })),
+                    )
+                    .when(busy, |this| {
+                        this.child(
+                            Button::new("agent-mode-stop")
+                                .label("Stop")
+                                .small()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.stop_agent_turn(window, cx);
+                                })),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div().h_full().w_full().max_w(px(960.)).min_w_0().child(
+                            self.render_agent_chat(cx)
+                                .unwrap_or_else(|| self.render_recent_conversations(cx)),
+                        ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_recent_conversations(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let directory = self.agent_project(cx);
+        let agent = self.picked_agent(cx);
+        let mut recent: Vec<_> = self
+            .agent
+            .catalog
+            .as_ref()
+            .filter(|catalog| {
+                Some(&catalog.directory) == directory.as_ref() && catalog.agent == agent.key
+            })
+            .into_iter()
+            .flat_map(|catalog| &catalog.conversations)
+            .collect();
+        recent.sort_by_key(|conversation| std::cmp::Reverse(conversation.updated));
+        let empty = recent.is_empty();
+        let now = SystemTime::now();
+        v_flex()
+            .id("agent-recents")
+            .debug_selector(|| "agent-recents".into())
+            .size_full()
+            .p_4()
+            .gap_3()
+            .child(div().text_size(px(20.)).child("Recent conversations"))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "{} · {}",
+                        agent.name,
+                        directory
+                            .as_ref()
+                            .and_then(|path| path.file_name())
+                            .map(|name| name.to_string_lossy())
+                            .unwrap_or_default()
+                    )),
+            )
+            .when(self.agent.catalog_loading, |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Loading conversations…"),
+                )
+            })
+            .when_some(self.agent.catalog_error.as_ref(), |this, error| {
+                this.child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(error.clone()),
+                        )
+                        .child(
+                            Button::new("agent-recents-retry")
+                                .label("Try again")
+                                .small()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.load_agent_catalog(None, window, cx)
+                                })),
+                        ),
+                )
+            })
+            .when(
+                empty && !self.agent.catalog_loading && self.agent.catalog_error.is_none(),
+                |this| {
+                    this.child(div().text_sm().text_color(theme.muted_foreground).child(
+                        "No conversations yet. Start a new conversation to work on this project.",
+                    ))
+                },
+            )
+            .child(
+                v_flex()
+                    .id("agent-recents-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.agent.recent_scroll)
+                    .gap_1()
+                    .children(recent.into_iter().take(30).enumerate().map(
+                        |(index, conversation)| {
+                            let id = conversation.id.clone();
+                            let title = conversation_title(conversation);
+                            div()
+                                .debug_selector(move || format!("agent-recent-{index}"))
+                                .child(
+                                    Button::new(("agent-recent", index))
+                                        .label(format!(
+                                            "{title} · {}",
+                                            ago(now, conversation.updated)
+                                        ))
+                                        .w_full()
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.resume_agent(id.clone(), window, cx)
+                                        })),
+                                )
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_recent_conversations(
+        &mut self,
+        conversations: Vec<jig_ai::agent::Conversation>,
+        cx: &mut Context<Self>,
+    ) {
+        self.agent.catalog_generation += 1;
+        self.agent.catalog_loading = false;
+        self.agent.catalog_error = None;
+        self.agent.catalog = Some(AgentCatalog {
+            agent: self.picked_agent(cx).key.clone(),
+            directory: self.agent_project(cx).unwrap(),
+            conversations,
+            commands: Vec::new(),
+        });
+        cx.notify();
+    }
+
     /// The conversation docked to the window's right edge, while pinned.
     pub(super) fn render_pinned_agent_chat(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let agent = self.chat.as_ref()?.agent.as_ref()?;
-        if !agent.frame.pinned {
+        if self.mode == super::mode::Mode::Agent || !agent.frame.pinned {
             return None;
         }
         // Opaque like the code beside it: the window behind is translucent.
@@ -1765,6 +2153,9 @@ impl Workspace {
 
     /// How much of the window's right a docked conversation takes.
     pub(super) fn docked_chat_width(&self) -> Pixels {
+        if self.mode == super::mode::Mode::Agent {
+            return px(0.);
+        }
         self.chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
@@ -1774,6 +2165,9 @@ impl Workspace {
 
     /// The conversation floating at the code, unless it's pinned.
     pub(super) fn floating_agent_chat_pinned(&self) -> bool {
+        if self.mode == super::mode::Mode::Agent {
+            return true;
+        }
         self.chat
             .as_ref()
             .and_then(|run| run.agent.as_ref())
@@ -1998,6 +2392,14 @@ impl Workspace {
                 agent.scroll.clone(),
                 agent.frame.clone(),
             )
+            .full_page(self.mode == super::mode::Mode::Agent)
+            .on_submit(cx.listener(|this, _, window, cx| {
+                if !this.answer_agent_question(None, window, cx)
+                    && !this.answer_task_question(window, cx)
+                {
+                    this.reply_to_agent(window, cx);
+                }
+            }))
             .on_grab(cx.listener(|this, event, _, cx| this.grab_agent_chat(event, cx)))
             .on_resize_grab(
                 cx.listener(|this, event, _, cx| this.grab_agent_chat_corner(event, cx)),
@@ -2281,7 +2683,7 @@ impl Workspace {
             Some(Request::Permission(request)) => {
                 agent.pending = Some(Pending::Permission(request));
                 agent.scroll.scroll_to_bottom();
-                self.editor().focus(window, cx);
+                self.focus_agent_or_editor(window, cx);
                 cx.notify();
             }
             // Answered in the reply box.
@@ -2361,6 +2763,10 @@ impl Workspace {
             self.refresh_tree(cx);
         }
 
+        let from_agent = self.mode == super::mode::Mode::Agent;
+        if from_agent {
+            self.remember_location(cx);
+        }
         // Show the file, keeping the run alive across the tab switch.
         let on_screen = self
             .document()
@@ -2416,6 +2822,9 @@ impl Workspace {
         self.editor().select(range.start..range.start, cx);
         if let Some(preview) = self.chat.as_mut().and_then(|run| run.preview.as_mut()) {
             preview.range = range.clone();
+        }
+        if from_agent {
+            self.focus_editor(window, cx);
         }
         // The bubble follows the change once it's scrolled into view.
         cx.on_next_frame(window, move |this, window, cx| {

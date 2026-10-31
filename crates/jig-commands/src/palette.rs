@@ -216,7 +216,7 @@ impl CommandPalette {
 
     /// ⌥M or the chip: list the agents in place of the conversations, then
     /// the one picked's models. With only one, its models.
-    fn start_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start_picking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.picking.is_some() || self.models().choices.is_empty() {
             return;
         }

@@ -1,4 +1,4 @@
-//! The Tasks view of the sidebar (⌃⇧T): the project's tasks, each a
+//! Planner mode (⌘2 or ⌃⇧T): the project's tasks, each a
 //! title, a description and a todo list, from `.jig/tasks/`. Click a task
 //! to fold it open, check its todos off, add one, or edit and delete it.
 //! Code in a task is linked; clicking a link opens the code, and Go Back
@@ -23,7 +23,7 @@ use jig_ai::tasks::{self, Task, Todo};
 use crate::git_panel::PLUS;
 use links::{CodeLink, Target};
 
-/// Lucide "list-todo", for the activity bar.
+/// Lucide "list-todo", for Planner navigation.
 pub const TASKS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>"#;
 /// Lucide "chevron-right".
 const CHEVRON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>"#;

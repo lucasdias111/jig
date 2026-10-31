@@ -25,6 +25,7 @@ mod live;
 mod lsp;
 mod map;
 mod map_agent;
+mod mode;
 mod navigation;
 mod occurrences;
 mod planner;
@@ -53,6 +54,7 @@ use crate::file_tree::FileTree;
 use crate::settings::{self, Settings};
 use crate::theme;
 use commands::{CommandRun, Note};
+use mode::Mode;
 use tabs::Tab;
 
 actions!(
@@ -120,18 +122,22 @@ actions!(
         GoBack,
         GoForward,
         ShowMap,
+        ShowCode,
+        ShowAgent,
+        ShowPlanner,
+        GoToMap,
         IndexDomains,
         UpdateDomains,
         ExplainLevel
     ]
 );
 
-/// Switch to the tab at this index (Cmd+1…9).
+/// Switch to the tab at this index (⌃1…9, Alt-1…9 off macOS).
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = jig, no_json)]
 pub struct ActivateTab(pub usize);
 
-const CONTEXT: &str = "Workspace";
+pub(crate) const CONTEXT: &str = "Workspace";
 
 /// Sidebar widths the user can drag between.
 const MIN_SIDEBAR_WIDTH: f32 = 160.;
@@ -200,6 +206,8 @@ pub struct Workspace {
     /// The logpoints that light the Map's functions up as the program
     /// runs.
     live: live::LivePoints,
+    /// What shows in the editor's place: the code, the Planner or the Map.
+    mode: Mode,
     /// The Map, once it has shown.
     map: Option<map::MapPane>,
     /// How far a pinch in the code has gone out, towards the Map.
@@ -277,6 +285,7 @@ impl Workspace {
             git: Default::default(),
             planner: Default::default(),
             history: Default::default(),
+            mode: Mode::Code,
             map: None,
             pinched: 0.,
             live: Default::default(),
@@ -616,12 +625,6 @@ impl Workspace {
 pub fn key_bindings() -> Vec<KeyBinding> {
     crate::shortcuts::bindings(&Default::default())
         .into_iter()
-        // Scoped to the workspace so that forms using Cmd+digits keep them.
-        .chain(
-            (1..=9).map(|n| {
-                KeyBinding::new(&format!("secondary-{n}"), ActivateTab(n - 1), Some(CONTEXT))
-            }),
-        )
         .chain(run::key_bindings())
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
@@ -631,8 +634,18 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 }
 
 impl Workspace {
-    /// The current tab's code, or the Map in its place.
+    /// The current tab's code, or the Planner or the Map in its place.
     fn render_code(&self, cx: &Context<Self>) -> AnyElement {
+        if self.mode == Mode::Agent {
+            return self.render_agent_mode(cx);
+        }
+        if self.mode == Mode::Planner {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .child(self.render_planner_mode(cx))
+                .into_any_element();
+        }
         if let Some(view) = self.map_showing() {
             return div()
                 .flex_1()
@@ -746,6 +759,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(cx.listener(Self::show_map))
+            .on_action(cx.listener(Self::show_code))
+            .on_action(cx.listener(Self::show_agent))
+            .on_action(cx.listener(Self::show_planner))
+            .on_action(cx.listener(Self::go_to_map))
             .on_action(cx.listener(Self::index_domains))
             .on_action(cx.listener(Self::explain_level))
             .on_action(cx.listener(Self::update_domains))
@@ -770,15 +787,30 @@ impl Render for Workspace {
                     .child(
                         h_flex()
                             .size_full()
-                            .pl(px(TRAFFIC_LIGHTS_WIDTH))
-                            .pr_2()
                             .bg(theme::editor_surface(cx))
                             .border_b_1()
                             .border_color(theme.title_bar_border)
-                            .child(title)
-                            .children(self.render_map_button(cx))
-                            .children(self.render_command_button(cx))
-                            .children(self.render_run_controls(cx)),
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .flex_basis(px(0.))
+                                    .min_w_0()
+                                    .child(div().flex_none().w(px(TRAFFIC_LIGHTS_WIDTH)))
+                                    .child(title),
+                            )
+                            .children(self.render_mode_switch(cx))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .flex_basis(px(0.))
+                                    .min_w_0()
+                                    .justify_end()
+                                    .children(self.render_command_button(cx))
+                                    .when(self.mode != Mode::Agent, |this| {
+                                        this.children(self.render_run_controls(cx))
+                                    })
+                                    .child(div().flex_none().w(px(8.))),
+                            ),
                     ),
             )
             .child(
@@ -786,18 +818,20 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .children(self.render_activity_bar(cx))
-                    .children(sidebar)
+                    .when(self.mode != Mode::Agent, |this| {
+                        this.children(self.render_activity_bar(cx))
+                            .children(sidebar)
+                    })
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .bg(theme::editor_surface(cx))
                             .children(tab_bar)
-                            .when(self.home, |this| {
+                            .when(self.start_showing(), |this| {
                                 this.child(div().flex_1().min_h_0().child(self.render_start(cx)))
                             })
-                            .when(!self.home, |this| {
+                            .when(!self.start_showing(), |this| {
                                 this.child(
                                     // The find panel floats over the code,
                                     // outside its key context.
@@ -811,12 +845,18 @@ impl Render for Workspace {
                                         .children(self.render_find_panel()),
                                 )
                             })
-                            .children(self.render_run_panel(cx))
-                            .when(!self.home, |this| this.child(self.render_status_bar(cx))),
+                            .when(self.mode != Mode::Agent, |this| {
+                                this.children(self.render_run_panel(cx))
+                            })
+                            .when(!self.home && self.mode != Mode::Agent, |this| {
+                                this.child(self.render_status_bar(cx))
+                            }),
                     )
                     .children(self.render_pinned_agent_chat(cx)),
             )
-            .children(self.render_sidebar_handle(cx))
+            .when(self.mode != Mode::Agent, |this| {
+                this.children(self.render_sidebar_handle(cx))
+            })
             .children(self.render_floating_settings(cx))
             .when_some(self.palette.as_ref(), |this, palette| {
                 this.child(deferred(
@@ -834,11 +874,13 @@ impl Render for Workspace {
             .children(self.render_run_picker(window))
             .children(self.render_branch_picker(window))
             .children(self.render_hunk_popup(cx))
-            .when(!self.home, |this| {
+            .when(self.mode == Mode::Code && !self.home, |this| {
                 this.child(self.tab().problems.hover.clone())
                     .child(self.tab().hover.clone())
             })
-            .child(self.selection_button.clone())
+            .when(self.mode == Mode::Code, |this| {
+                this.child(self.selection_button.clone())
+            })
             // The agent conversation, unless it's docked, and a note.
             .when_some(
                 self.chat

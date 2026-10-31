@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Enter, Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
@@ -200,6 +200,7 @@ const CHEVRON_DOWN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox=
 const GRIP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><path d="M20 11 11 20"/><path d="M20 17 17 20"/></svg>"#;
 
 type GrabHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
+type SubmitHandler = Rc<dyn Fn(&Enter, &mut Window, &mut App)>;
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type OptionHandler = Rc<dyn Fn(&usize, &mut Window, &mut App)>;
 type DrawingHandler = Rc<dyn Fn(&(usize, DrawingAction), &mut Window, &mut App)>;
@@ -213,9 +214,11 @@ pub struct Conversation {
     label: String,
     entries: Vec<ChatEntry>,
     status: ChatStatus,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     scroll: ScrollHandle,
     frame: ChatFrame,
+    full_page: bool,
+    on_submit: Option<SubmitHandler>,
     on_grab: Option<GrabHandler>,
     on_resize_grab: Option<GrabHandler>,
     on_pin: Option<ClickHandler>,
@@ -235,7 +238,7 @@ impl Conversation {
         label: String,
         entries: Vec<ChatEntry>,
         status: ChatStatus,
-        input: Entity<InputState>,
+        input: Entity<TextareaState>,
         scroll: ScrollHandle,
         frame: ChatFrame,
     ) -> Self {
@@ -246,6 +249,8 @@ impl Conversation {
             input,
             scroll,
             frame,
+            full_page: false,
+            on_submit: None,
             on_grab: None,
             on_resize_grab: None,
             on_pin: None,
@@ -259,6 +264,18 @@ impl Conversation {
             on_drawing: None,
             on_link: None,
         }
+    }
+
+    /// Send a message with Enter; Shift-Enter keeps writing on a new line.
+    pub fn on_submit(mut self, handler: impl Fn(&Enter, &mut Window, &mut App) + 'static) -> Self {
+        self.on_submit = Some(Rc::new(handler));
+        self
+    }
+
+    /// Fill the workspace with the same transcript and approval controls.
+    pub fn full_page(mut self, full_page: bool) -> Self {
+        self.full_page = full_page;
+        self
     }
 
     /// Called when a drawing's row is asked to show or hide it, pin it or
@@ -354,6 +371,9 @@ impl Conversation {
 
 impl RenderOnce for Conversation {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let empty = self.entries.is_empty();
+        let working = matches!(&self.status, ChatStatus::Working { .. });
+        let full_page = self.full_page;
         let entries = transcript_rows(
             self.entries,
             self.on_drawing.clone(),
@@ -363,7 +383,7 @@ impl RenderOnce for Conversation {
         );
         let theme = cx.theme();
         let accent = crate::surface::agent_accent(cx);
-        let pinned = self.frame.pinned;
+        let pinned = self.frame.pinned || full_page;
         let on_grab = self.on_grab.filter(|_| !pinned);
         let header_button =
             |id: &'static str, icon: &'static [u8], active: bool, handler: Option<ClickHandler>| {
@@ -448,7 +468,7 @@ impl RenderOnce for Conversation {
             }))
             .child(crate::surface::agent_tag(cx))
             .child(history)
-            .child(pin);
+            .when(!full_page, |this| this.child(pin));
         // The models, under the header while their list is open.
         let model_list = self.models.filter(|models| models.open).map(|models| {
             let on_pick = self.on_model.clone();
@@ -495,6 +515,31 @@ impl RenderOnce for Conversation {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .gap_2()
+            .when(full_page && empty, |this| {
+                this.child(
+                    v_flex()
+                        .flex_1()
+                        .justify_center()
+                        .items_center()
+                        .gap_3()
+                        .py_8()
+                        .child(
+                            crate::surface::agent_icon()
+                                .size(px(32.))
+                                .text_color(accent),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(22.))
+                                .child("What would you like to build?"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.muted_foreground)
+                                .child("Ask about your project, plan a change, or start coding."),
+                        ),
+                )
+            })
             .children(entries);
         let more_below = follow_the_end(&self.scroll);
         let transcript_bounds = self.frame.transcript_bounds.clone();
@@ -670,7 +715,7 @@ impl RenderOnce for Conversation {
                             cx,
                         )),
                 )
-                .child(reply_box(&self.input, accent, cx))
+                .child(reply_box(&self.input, self.on_submit.clone(), accent, cx))
                 .child(crate::surface::hint(
                     "enter to save, or say what to change · esc not to save",
                     cx,
@@ -710,7 +755,7 @@ impl RenderOnce for Conversation {
                                 })
                         }),
                     ))
-                    .child(reply_box(&self.input, accent, cx))
+                    .child(reply_box(&self.input, self.on_submit.clone(), accent, cx))
                     .child(crate::surface::hint(
                         "a number or your own answer · enter to answer · esc to decline",
                         cx,
@@ -744,7 +789,7 @@ impl RenderOnce for Conversation {
                             })),
                     )
                     .when(opened, |this| {
-                        this.child(reply_box(&self.input, accent, cx))
+                        this.child(reply_box(&self.input, self.on_submit.clone(), accent, cx))
                     })
                     .child(crate::surface::hint(
                         if opened {
@@ -762,25 +807,45 @@ impl RenderOnce for Conversation {
                 .child("Loading the conversation…"),
             ChatStatus::Waiting => v_flex()
                 .gap_1p5()
-                .child(reply_box(&self.input, accent, cx))
-                .child(crate::surface::hint("enter to reply · esc to close", cx)),
+                .child(reply_box(&self.input, self.on_submit.clone(), accent, cx))
+                .child(crate::surface::hint(
+                    if full_page {
+                        "enter to send · shift-enter for a new line · esc to stop"
+                    } else {
+                        "enter to reply · shift-enter for a new line · esc to close"
+                    },
+                    cx,
+                )),
         };
-        let panel = crate::surface::panel(cx)
-            .flex()
-            .flex_col()
-            .w(self.frame.width)
-            // Pinned, it fills the height its owner gives it.
-            .when(pinned, |this| this.h_full())
-            .px_3p5()
-            .py_2p5()
-            .gap_2p5()
-            .text_size(px(13.))
-            .border_color(accent.opacity(0.45))
-            .child(header)
-            .children(model_list)
-            .child(transcript)
-            .child(div().h(px(1.)).bg(theme.foreground.opacity(0.08)))
-            .child(status);
+        let panel = if full_page {
+            div().text_color(theme.foreground)
+        } else {
+            crate::surface::panel(cx)
+        }
+        .flex()
+        .flex_col()
+        .map(|this| {
+            if full_page {
+                this.w_full()
+            } else {
+                this.w(self.frame.width)
+            }
+        })
+        // Pinned, it fills the height its owner gives it.
+        .when(pinned, |this| this.h_full())
+        .px_3p5()
+        .py_2p5()
+        .gap_2p5()
+        .text_size(px(13.))
+        .border_color(accent.opacity(0.45))
+        .child(header)
+        .children(model_list)
+        .child(transcript)
+        .child(div().h(px(1.)).bg(theme.foreground.opacity(0.08)))
+        .child(status)
+        .when(full_page && working, |this| {
+            this.child(reply_box(&self.input, self.on_submit.clone(), accent, cx))
+        });
         // Remember where it's drawn, outside the panel's slide-in, so a drag
         // starts from there even when it was nudged to fit the window.
         let bounds = self.frame.bounds;
@@ -806,8 +871,13 @@ impl RenderOnce for Conversation {
             );
         div()
             .relative()
+            .when(full_page, |this| this.w_full())
             .when(pinned, |this| this.h_full())
-            .child(crate::motion::pop_in(panel, "jig-agent-chat"))
+            .child(if full_page {
+                panel.into_any_element()
+            } else {
+                crate::motion::pop_in(panel, "jig-agent-chat").into_any_element()
+            })
             .child(
                 canvas(move |drawn, _, _| bounds.set(drawn), |_, _, _, _| {})
                     .absolute()
@@ -910,11 +980,24 @@ fn more_below_button(scroll: &ScrollHandle, accent: Hsla, cx: &App) -> impl Into
 
 /// The box the user replies or answers in. The whole box takes the click,
 /// not just the text.
-fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div> {
+fn reply_box(
+    input: &Entity<TextareaState>,
+    on_submit: Option<SubmitHandler>,
+    accent: Hsla,
+    cx: &App,
+) -> Stateful<Div> {
     let theme = cx.theme();
     div()
         .id("jig-agent-reply")
         .debug_selector(|| "agent-reply-box".into())
+        .when_some(on_submit, |this, submit| {
+            this.capture_action(move |action: &Enter, window, cx| {
+                if !action.shift {
+                    cx.stop_propagation();
+                    submit(action, window, cx);
+                }
+            })
+        })
         .cursor_text()
         .on_mouse_down(MouseButton::Left, {
             let input = input.clone();
@@ -928,17 +1011,7 @@ fn reply_box(input: &Entity<InputState>, accent: Hsla, cx: &App) -> Stateful<Div
         .border_1()
         .border_color(accent.opacity(0.35))
         .bg(theme.foreground.opacity(0.03))
-        .child(
-            Input::new(input)
-                .w_full()
-                .appearance(false)
-                .cleanable(false)
-                .prefix(
-                    crate::surface::agent_icon()
-                        .size(px(13.))
-                        .text_color(accent),
-                ),
-        )
+        .child(Textarea::new(input).w_full().appearance(false))
 }
 
 /// The transcript's rows. A run of two or more tool calls folds into one

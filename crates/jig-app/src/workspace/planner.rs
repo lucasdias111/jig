@@ -1,6 +1,6 @@
-//! The sidebar's Tasks view: the project's task planner, kept current by
+//! Planner mode: the project's task planner, kept current by
 //! watching `.jig/tasks/`, where agents add tasks too. A task arriving
-//! while the view is hidden puts a dot on its activity bar button.
+//! while the view is hidden puts a dot on the title-bar Planner segment.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use jig_editor::EditorHandle as _;
 use notify::Watcher as _;
 
 use super::commands::Ask;
-use super::sidebar::SidebarView;
+use super::mode::Mode;
 use super::{NewTask, ToggleTaskPlanner, Workspace};
 use crate::planner::form::{TaskForm, TaskFormEvent};
 use crate::planner::links::{self, CodeLink};
@@ -129,7 +129,10 @@ impl Workspace {
                 let task = task.clone();
                 this.implement_task(&task, window, cx);
             }
-            TaskPlannerEvent::Dismissed => this.leave_sidebar(window, cx),
+            TaskPlannerEvent::Dismissed => {
+                this.set_mode(Mode::Code, window, cx);
+                this.leave_sidebar(window, cx);
+            }
         });
         self.planner = PlannerState {
             view: Some(view),
@@ -143,7 +146,7 @@ impl Workspace {
     /// The planner's task `id` shown, from a sketch's bar.
     pub(super) fn show_task(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if !self.planner_shown() {
-            self.toggle_sidebar_view(super::sidebar::SidebarView::Tasks, window, cx);
+            self.set_mode(Mode::Planner, window, cx);
         }
         if let Some(view) = self.planner.view.clone() {
             view.update(cx, |planner, cx| planner.reveal(id, cx));
@@ -156,7 +159,7 @@ impl Workspace {
     }
 
     pub(super) fn planner_shown(&self) -> bool {
-        self.sidebar_shown() && self.sidebar.view == SidebarView::Tasks
+        self.mode == Mode::Planner
     }
 
     pub(super) fn planner_focused(&self, window: &Window, cx: &App) -> bool {
@@ -190,8 +193,8 @@ impl Workspace {
         }
     }
 
-    /// The sidebar has just switched to Tasks.
-    pub(super) fn show_planner_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Planner has just shown.
+    pub(super) fn show_planner_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.planner.unseen = false;
         if let Some(view) = self.planner.view.clone() {
             view.update(cx, |planner, cx| {
@@ -208,7 +211,31 @@ impl Workspace {
         }
     }
 
-    /// ⌃⇧T: the sidebar's Tasks view, or collapsing the sidebar.
+    /// Restore Planner when returning from a linked file.
+    pub(super) fn planner_at(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tree.is_some() {
+            self.leave_tab(cx);
+            self.switch_mode(Mode::Planner, cx);
+            self.show_planner_mode(window, cx);
+        }
+    }
+
+    pub(super) fn focus_planner_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = &self.planner.view {
+            view.update(cx, |planner, cx| planner.focus(window, cx));
+        }
+    }
+
+    pub(super) fn render_planner_mode(&self, _: &Context<Self>) -> AnyElement {
+        div()
+            .id("planner-mode")
+            .debug_selector(|| "planner-mode".into())
+            .size_full()
+            .child(self.render_planner_view())
+            .into_any_element()
+    }
+
+    /// ⌃⇧T: toggle between Planner and Code.
     pub(super) fn toggle_task_planner(
         &mut self,
         _: &ToggleTaskPlanner,
@@ -219,10 +246,15 @@ impl Workspace {
             self.show_error("Open a project first, to plan its tasks.", window, cx);
             return;
         }
-        self.toggle_sidebar_view(SidebarView::Tasks, window, cx);
+        let mode = if self.planner_shown() {
+            Mode::Code
+        } else {
+            Mode::Planner
+        };
+        self.set_mode(mode, window, cx);
     }
 
-    /// The Tasks view, with a new task's form open.
+    /// A new task's form over the window.
     pub(super) fn new_task(&mut self, _: &NewTask, window: &mut Window, cx: &mut Context<Self>) {
         if self.tree.is_none() {
             self.show_error("Open a project first, to plan its tasks.", window, cx);
@@ -266,7 +298,7 @@ impl Workspace {
                 let id = id.clone();
                 this.close_task_form(window, cx);
                 if !this.planner_shown() {
-                    this.toggle_sidebar_view(SidebarView::Tasks, window, cx);
+                    this.set_mode(Mode::Planner, window, cx);
                 }
                 if let Some(view) = this.planner.view.clone() {
                     view.update(cx, |planner, cx| {
@@ -412,7 +444,7 @@ impl Workspace {
         if let Some(range) = links::locate(&text, link) {
             self.editor().select(range, cx);
         }
-        self.editor().focus(window, cx);
+        self.focus_editor(window, cx);
         cx.notify();
     }
 }

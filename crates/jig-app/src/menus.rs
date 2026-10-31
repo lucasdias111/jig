@@ -9,12 +9,12 @@ use crate::workspace::{
     ChooseRunConfiguration, CloseTab, CloseWindow, DebugSelected, DeleteLine, DuplicateLine,
     EditAgents, EditAgentsFile, EditDebuggers, EditRunConfigurations, ExplainLevel, Find,
     FindAndReplace, FindInFiles, FindReferences, FocusFileTree, FormatDocument, GoBack, GoForward,
-    GoToFile, GoToLine, IndexDomains, MoveLineDown, MoveLineUp, NewBranch, NewFile, NewTask,
-    NextProblem, NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem, PreviousTab,
-    Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine,
-    SendSelectionToAgent, ShowMap, StepInto, StepOut, StepOver, StopRun, SwitchBranch,
-    ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel, ToggleSidebar,
-    ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
+    GoToFile, GoToLine, GoToMap, IndexDomains, MoveLineDown, MoveLineUp, NewBranch, NewFile,
+    NewTask, NextProblem, NextTab, Open, OpenAgentConversations, OpenCommand, PreviousProblem,
+    PreviousTab, Quit, RenameSymbol, ResetZoom, Resume, RunSelected, Save, SaveAs, SelectLine,
+    SendSelectionToAgent, ShowAgent, ShowCode, ShowMap, ShowPlanner, StepInto, StepOut, StepOver,
+    StopRun, SwitchBranch, ToggleBreakpoint, ToggleGitPanel, ToggleLineComment, ToggleRunPanel,
+    ToggleSidebar, ToggleTaskPlanner, UpdateDomains, ZoomIn, ZoomOut,
 };
 
 actions!(jig, [About, Hide, HideOthers, ShowAll]);
@@ -108,6 +108,11 @@ pub fn set(cx: &mut App) {
         menu(
             "View",
             vec![
+                MenuItem::action("Code", ShowCode),
+                MenuItem::action("Planner", ShowPlanner),
+                MenuItem::action("Map", GoToMap),
+                MenuItem::action("Agent", ShowAgent),
+                MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Show Files", FocusFileTree),
                 MenuItem::action("Show Tasks", ToggleTaskPlanner),

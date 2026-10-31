@@ -2,7 +2,7 @@
 //! default; a change is kept in `settings.toml` under `[shortcuts]` as
 //! GPUI writes keystrokes (`cmd-shift-d`), `""` for none, and the keymap
 //! is rebuilt on the spot. Bindings that aren't listed here (the editor's
-//! own, the file tree's, ⌘1…9) stay as they are.
+//! own, the file tree's) stay as they are.
 
 use std::collections::BTreeMap;
 
@@ -68,6 +68,52 @@ fn boxed<A: Action + Default>() -> Box<dyn Action> {
 const ANYWHERE: &[Option<&str>] = &[None];
 const IN_CODE: &[Option<&str>] = &[Some(CODE)];
 const IN_INPUT: &[Option<&str>] = &[Some("Input")];
+/// The workspace, and not the other windows' fields.
+const IN_WORKSPACE: &[Option<&str>] = &[Some(crate::workspace::CONTEXT)];
+
+/// ⌃1…9 on a Mac, where ⌘1…4 are the modes; Alt-1…9 elsewhere, where
+/// Ctrl is the secondary key.
+const TAB_KEYS: [&[&str]; 9] = if cfg!(target_os = "macos") {
+    [
+        &["ctrl-1"],
+        &["ctrl-2"],
+        &["ctrl-3"],
+        &["ctrl-4"],
+        &["ctrl-5"],
+        &["ctrl-6"],
+        &["ctrl-7"],
+        &["ctrl-8"],
+        &["ctrl-9"],
+    ]
+} else {
+    [
+        &["alt-1"],
+        &["alt-2"],
+        &["alt-3"],
+        &["alt-4"],
+        &["alt-5"],
+        &["alt-6"],
+        &["alt-7"],
+        &["alt-8"],
+        &["alt-9"],
+    ]
+};
+
+fn tab<const N: usize>() -> Box<dyn Action> {
+    Box::new(ActivateTab(N))
+}
+
+/// The shortcut to show tab `N + 1`.
+const fn tab_shortcut<const N: usize>(id: &'static str, label: &'static str) -> Shortcut {
+    Shortcut {
+        id,
+        label,
+        group: Group::File,
+        keys: TAB_KEYS[N],
+        contexts: IN_WORKSPACE,
+        action: tab::<N>,
+    }
+}
 
 macro_rules! shortcut {
     ($id:literal, $label:literal, $group:ident, [$($keys:expr),+], $contexts:expr, $action:ty) => {
@@ -382,6 +428,15 @@ pub const ALL: &[Shortcut] = &[
         OpenSettings
     ),
     shortcut!("quit", "Quit", File, ["secondary-q"], ANYWHERE, Quit),
+    tab_shortcut::<0>("tab_1", "Tab 1"),
+    tab_shortcut::<1>("tab_2", "Tab 2"),
+    tab_shortcut::<2>("tab_3", "Tab 3"),
+    tab_shortcut::<3>("tab_4", "Tab 4"),
+    tab_shortcut::<4>("tab_5", "Tab 5"),
+    tab_shortcut::<5>("tab_6", "Tab 6"),
+    tab_shortcut::<6>("tab_7", "Tab 7"),
+    tab_shortcut::<7>("tab_8", "Tab 8"),
+    tab_shortcut::<8>("tab_9", "Tab 9"),
     // Agent.
     shortcut!(
         // Named before jigs went, so changed keys carry over.
@@ -418,6 +473,38 @@ pub const ALL: &[Shortcut] = &[
     ),
     // View.
     shortcut!(
+        "show_agent",
+        "Agent",
+        View,
+        ["secondary-4"],
+        IN_WORKSPACE,
+        ShowAgent
+    ),
+    shortcut!(
+        "show_code",
+        "Code",
+        View,
+        ["secondary-1"],
+        IN_WORKSPACE,
+        ShowCode
+    ),
+    shortcut!(
+        "show_planner",
+        "Planner",
+        View,
+        ["secondary-2"],
+        IN_WORKSPACE,
+        ShowPlanner
+    ),
+    shortcut!(
+        "go_to_map",
+        "Map",
+        View,
+        ["secondary-3"],
+        IN_WORKSPACE,
+        GoToMap
+    ),
+    shortcut!(
         "toggle_sidebar",
         "Toggle sidebar",
         View,
@@ -453,7 +540,7 @@ pub const ALL: &[Shortcut] = &[
     ),
     shortcut!(
         "show_map",
-        "Show Map",
+        "Map, or back to the code from the Map",
         View,
         ["secondary-b"],
         ANYWHERE,
