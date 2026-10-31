@@ -17,7 +17,7 @@ use serde::Deserialize;
 const BUILT_IN: &str = include_str!("../../../assets/default-agents.toml");
 
 /// The agent used when the settings name none, or one that's gone.
-pub const DEFAULT: &str = "opencode";
+pub const DEFAULT: &str = crate::settings::DEFAULT_AGENT;
 
 /// A starter for the user's `agents.toml`.
 pub const USER_TEMPLATE: &str = r#"# Your agents for Jig. Any agent that speaks the Agent Client

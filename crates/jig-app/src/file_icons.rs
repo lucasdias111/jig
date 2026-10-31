@@ -61,12 +61,8 @@ mod tests {
 
     #[test]
     fn every_starter_language_has_a_logo() {
-        for language in languages::bundled()
-            .iter()
-            .filter(|language| language.starter)
-        {
-            let logo =
-                logo(language.name).unwrap_or_else(|| panic!("{} has no logo", language.name));
+        for name in crate::settings::LanguageSettings::default().added {
+            let logo = logo(&name).unwrap_or_else(|| panic!("{name} has no logo"));
             assert!(std::str::from_utf8(logo.svg).unwrap().starts_with("<svg"));
             assert!(
                 theme::parse_hex(logo.light).is_some() && theme::parse_hex(logo.dark).is_some()

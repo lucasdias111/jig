@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result};
 use gpui_kit::{App, Global};
@@ -120,6 +121,32 @@ impl Default for UpdateSettings {
     }
 }
 
+/// The agent used when the settings name none, or one that's gone.
+pub const DEFAULT_AGENT: &str = "opencode";
+
+/// The languages every list starts with: those the built-in languages file
+/// marks `starter`. Read from the file here, as `languages` reads its own
+/// settings from this module.
+static STARTER_LANGUAGES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    #[derive(Deserialize)]
+    struct File {
+        language: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        name: String,
+        #[serde(default)]
+        starter: bool,
+    }
+    let file: File = toml::from_str(include_str!("../../../assets/default-languages.toml"))
+        .expect("default-languages.toml parses");
+    file.language
+        .into_iter()
+        .filter(|language| language.starter)
+        .map(|language| language.name)
+        .collect()
+});
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LanguageSettings {
@@ -137,11 +164,7 @@ impl Default for LanguageSettings {
     /// The starters added, the rest left to add.
     fn default() -> Self {
         Self {
-            added: crate::languages::bundled()
-                .iter()
-                .filter(|language| language.starter)
-                .map(|language| language.name.to_string())
-                .collect(),
+            added: STARTER_LANGUAGES.clone(),
             off: Vec::new(),
             extensions: BTreeMap::new(),
         }
@@ -228,7 +251,7 @@ pub struct AgentSettings {
 impl Default for AgentSettings {
     fn default() -> Self {
         Self {
-            using: crate::agents::DEFAULT.into(),
+            using: DEFAULT_AGENT.into(),
             models: BTreeMap::new(),
             permissions: Default::default(),
         }

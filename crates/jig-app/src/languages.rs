@@ -29,9 +29,6 @@ pub struct Language {
     /// Whole file names it applies to, for files like `Makefile` that
     /// have no extension to go by.
     pub filenames: Vec<&'static str>,
-    /// Whether it's in the list from the start; the rest are added from
-    /// Settings.
-    pub starter: bool,
     /// What starts a line comment, if it has them.
     pub line_comment: Option<&'static str>,
     /// The protocol's languageId.
@@ -53,7 +50,9 @@ struct LanguageEntry {
     extensions: Vec<String>,
     #[serde(default)]
     filenames: Vec<String>,
+    // Read by `settings`, which starts every list with the starters.
     #[serde(default)]
+    #[allow(dead_code)]
     starter: bool,
     line_comment: Option<String>,
     lsp_id: Option<String>,
@@ -113,7 +112,6 @@ fn load(user: Option<&str>) -> Table {
                 label: leak(entry.label),
                 extensions: entry.extensions.into_iter().map(leak).collect(),
                 filenames: entry.filenames.into_iter().map(leak).collect(),
-                starter: entry.starter,
                 line_comment: entry.line_comment.map(leak),
                 lsp_id: entry.lsp_id.map_or(name, leak),
             }
@@ -333,6 +331,18 @@ pub fn is_installed(server: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_start_with_bundled_languages() {
+        let starters = crate::settings::LanguageSettings::default().added;
+        assert!(starters.contains(&"rust".to_string()));
+        for name in &starters {
+            assert!(
+                get(name).is_some(),
+                "{name} is a starter but not a language"
+            );
+        }
+    }
 
     #[test]
     fn defaults_cover_the_bundled_languages() {
