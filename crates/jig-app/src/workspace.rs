@@ -175,10 +175,8 @@ pub struct Workspace {
     /// Go to Line's field.
     go_to_line: Entity<go_to_line::GoToLineField>,
     last_find: find::LastFind,
-    /// Find and Replace in the current file, while it's open.
-    find_panel: Option<find_panel::OpenFindPanel>,
-    /// The panel's last query, to start the next ⌘F from.
-    last_find_query: String,
+    /// Find and Replace in the current file.
+    find_panel: Entity<find_panel::FindInFile>,
     /// The project's files as last walked, for Go to File to show at once.
     file_index: Option<go_to_file::FileIndex>,
     /// Files shown in this window, most recent first, for Go to File.
@@ -258,6 +256,9 @@ impl Workspace {
         let rename = cx.new(|_| rename::RenameField::default());
         cx.subscribe_in(&rename, window, Self::on_rename_event)
             .detach();
+        let find_panel = cx.new(|_| find_panel::FindInFile::default());
+        cx.subscribe_in(&find_panel, window, Self::on_find_dismissed)
+            .detach();
         let mut this = Self {
             selection_button,
             tabs: Vec::new(),
@@ -276,8 +277,7 @@ impl Workspace {
             rename,
             go_to_line,
             last_find: Default::default(),
-            find_panel: None,
-            last_find_query: String::new(),
+            find_panel,
             file_index: None,
             recent_files: Vec::new(),
             config_path: jig_ai::Config::user_path(),
@@ -847,7 +847,7 @@ impl Render for Workspace {
                                         .flex()
                                         .flex_col()
                                         .child(self.render_code(cx))
-                                        .children(self.render_find_panel()),
+                                        .children(self.render_find_panel(cx)),
                                 )
                             })
                             .when(self.mode != Mode::Agent, |this| {

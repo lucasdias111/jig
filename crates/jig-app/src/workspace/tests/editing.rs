@@ -72,8 +72,9 @@ fn find_query(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Option<
         workspace
             .read(cx)
             .find_panel
-            .as_ref()
-            .map(|open| open.view.read(cx).query(cx))
+            .read(cx)
+            .panel()
+            .map(|view| view.read(cx).query(cx))
     })
 }
 
@@ -153,9 +154,9 @@ fn find_and_replace_replaces_every_match_as_one_step(cx: &mut TestAppContext) {
         workspace
             .read(cx)
             .find_panel
-            .as_ref()
+            .read(cx)
+            .panel()
             .unwrap()
-            .view
             .read(cx)
             .is_replacing()
     }));

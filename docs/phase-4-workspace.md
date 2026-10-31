@@ -162,3 +162,10 @@ for paths (`workspace.read(cx).x.is_some()` becoming
   `Rename { name, tab, range }` or `Closed { refocus }`. Renaming (the
   server's edits, or this file's whole-word uses) stays on the workspace,
   since it edits tabs.
+- **Find and Replace in the file** lives in `workspace/find_panel.rs` as
+  `FindInFile`: the panel, its last query, and the editor it searches, so
+  closing drops the highlights there without the workspace walking every
+  tab. It emits `FindDismissed` when closed from inside; the Esc chain,
+  switching tabs and modes, and the palette close it through
+  `Workspace::close_find_panel`, as before. The workspace places it at the
+  top right of the code.
