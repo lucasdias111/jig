@@ -16,9 +16,7 @@ use serde_json::Value;
 use super::Workspace;
 use super::agent::TurnInput;
 use super::commands::CommandRun;
-use crate::map::{
-    Call, Drawing, DrawingKind, DrawingSource, MapView, ProposalChoice, drawing_call,
-};
+use jig_map::{Call, Drawing, DrawingKind, DrawingSource, MapView, ProposalChoice, drawing_call};
 
 /// A drawing of the conversation's, and whether it shows on the Map.
 #[derive(Clone, Debug)]
@@ -145,7 +143,7 @@ impl Workspace {
             "{}\n\n{}\n\nThe task was made from my sketch on Jig's Map ({}): build what it shows, naming new code as its boxes are labelled, and check each todo off with update_task as it's done.",
             ask.instruction,
             task.context(),
-            crate::map::sketch_link(sketch)
+            jig_map::sketch_link(sketch)
         );
         self.start_map_run(ask.name, ask.instruction, prompt, None, window, cx);
     }

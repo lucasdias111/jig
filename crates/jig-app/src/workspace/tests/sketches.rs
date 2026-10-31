@@ -9,9 +9,9 @@ use jig_ai::agent::AgentEvent;
 use serde_json::json;
 
 use super::*;
-use crate::map::sketch::{Match, ShapeKind, ShapeRef};
-use crate::map::view::sketch::Tool;
-use crate::map::view::{Level, MapView};
+use jig_map::SketchTool as Tool;
+use jig_map::{Level, MapView};
+use jig_map::{ShapeKind, ShapeRef, SketchMatch as Match};
 
 const STORE: &str = "//! Keeps what's sent.\n\npub fn save(item: u8) -> bool {\n    check(item);\n    write(item)\n}\n\nfn check(item: u8) {}\n\nfn write(item: u8) -> bool {\n    true\n}\n";
 
@@ -415,7 +415,7 @@ fn read_again(cx: &mut TestAppContext, view: &Entity<MapView>, dir: &tempfile::T
     let root = dir.path().to_path_buf();
     view.update(cx, |view, cx| {
         let before = view.project().cloned();
-        let project = crate::map::index::Project::read_again(&root, before.as_deref());
+        let project = jig_map::Project::read_again(&root, before.as_deref());
         view.set_project(std::sync::Arc::new(project), cx);
     });
 }
@@ -551,7 +551,7 @@ fn sketch_pictures_live(cx: &mut TestAppContext) {
     let out = std::path::PathBuf::from(std::env::var("JIG_PICTURES").unwrap());
     std::fs::create_dir_all(&out).unwrap();
     let name = sketch.file_stem().unwrap().to_string_lossy().into_owned();
-    let folder = root.join(crate::map::sketch::DIR);
+    let folder = root.join(jig_map::SKETCH_DIR);
     let had_folder = folder.exists();
     std::fs::create_dir_all(&folder).unwrap();
     let placed = folder.join(format!("{name}.toml"));
@@ -602,9 +602,9 @@ fn sketch_pictures_live(cx: &mut TestAppContext) {
         let drawings = calls
             .iter()
             .filter_map(|call| {
-                match crate::map::lens::call(call["tool"].as_str()?, &call["input"]).ok()? {
-                    crate::map::lens::Call::Draw(drawing) => Some(drawing),
-                    crate::map::lens::Call::Clear => None,
+                match jig_map::drawing_call(call["tool"].as_str()?, &call["input"]).ok()? {
+                    jig_map::Call::Draw(drawing) => Some(drawing),
+                    jig_map::Call::Clear => None,
                 }
             })
             .enumerate()
@@ -690,7 +690,7 @@ fn sketch_agent_live(cx: &mut TestAppContext) {
     let jig = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/Jig");
     jig_ai::tasks::mcp::set_command(jig.canonicalize().unwrap());
     let name = sketch.file_stem().unwrap().to_string_lossy().into_owned();
-    let folder = root.join(crate::map::sketch::DIR);
+    let folder = root.join(jig_map::SKETCH_DIR);
     let had_folder = folder.exists();
     std::fs::create_dir_all(&folder).unwrap();
     let placed = folder.join(format!("{name}.toml"));

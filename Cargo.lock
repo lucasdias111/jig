@@ -3601,6 +3601,7 @@ dependencies = [
  "jig-ai",
  "jig-commands",
  "jig-editor",
+ "jig-map",
  "jig-process",
  "libc",
  "lsp-types",
@@ -3608,7 +3609,6 @@ dependencies = [
  "notify 8.2.0",
  "proc-macro2",
  "regex",
- "resvg 0.46.0",
  "serde",
  "serde_json",
  "similar",
@@ -3617,8 +3617,6 @@ dependencies = [
  "trash",
  "tree-sitter",
  "tree-sitter-ada",
- "tree-sitter-c",
- "tree-sitter-cpp",
  "tree-sitter-d",
  "tree-sitter-dart",
  "tree-sitter-dockerfile-updated",
@@ -3629,11 +3627,8 @@ dependencies = [
  "tree-sitter-gdscript",
  "tree-sitter-gleam",
  "tree-sitter-glsl",
- "tree-sitter-go",
  "tree-sitter-haskell",
  "tree-sitter-ini",
- "tree-sitter-java",
- "tree-sitter-javascript",
  "tree-sitter-julia",
  "tree-sitter-less",
  "tree-sitter-matlab",
@@ -3643,18 +3638,13 @@ dependencies = [
  "tree-sitter-pascal",
  "tree-sitter-powershell",
  "tree-sitter-prisma-io",
- "tree-sitter-python",
  "tree-sitter-r",
  "tree-sitter-racket",
- "tree-sitter-rust",
  "tree-sitter-scss",
  "tree-sitter-starlark",
- "tree-sitter-swift",
- "tree-sitter-typescript",
  "tree-sitter-vim",
  "tree-sitter-vue-next",
  "tree-sitter-xml",
- "tree-sitter-zig",
  "ureq",
 ]
 
@@ -3674,6 +3664,33 @@ name = "jig-editor"
 version = "0.5.0"
 dependencies = [
  "gpui-kit",
+]
+
+[[package]]
+name = "jig-map"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "jig-ai",
+ "jig-commands",
+ "regex",
+ "resvg 0.46.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "tree-sitter-zig",
 ]
 
 [[package]]

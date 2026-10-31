@@ -6,8 +6,9 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 
 use gpui_kit::component::highlighter::HighlightThemeStyle;
-use gpui_kit::component::{ActiveTheme as _, Theme, ThemeConfig, ThemeMode, ThemeSet};
+use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeSet};
 use gpui_kit::{App, Global, Hsla, Rgba, SharedString, Window};
+use jig_commands::surface::EditorOpacity;
 use serde_json::Value;
 
 use crate::settings::{self, ColorSettings, ThemeChoice};
@@ -204,6 +205,7 @@ pub fn init(cx: &mut App) {
         colors,
         see_through,
     });
+    cx.set_global(EditorOpacity(see_through.opacity));
     cx.observe_global::<settings::AppSettings>(|cx| {
         let colors = settings::get(cx).colors;
         let see_through = SeeThrough::from_settings(cx);
@@ -214,6 +216,7 @@ pub fn init(cx: &mut App) {
             let built = cx.global_mut::<Built>();
             built.colors = colors;
             built.see_through = see_through;
+            cx.set_global(EditorOpacity(see_through.opacity));
         }
         apply(None, cx)
     })
@@ -231,14 +234,7 @@ fn editor_opacity(cx: &App) -> f32 {
     }
 }
 
-/// The background of the editor and the bars around it, letting the
-/// window's blur through as far as the settings ask.
-pub fn editor_surface(cx: &App) -> Hsla {
-    let opacity = cx
-        .try_global::<Built>()
-        .map_or(1., |built| built.see_through.opacity);
-    cx.theme().background.opacity(opacity)
-}
+pub use jig_commands::surface::editor_surface;
 
 /// Build both variants and make them the themes for light and dark mode.
 /// They take effect at the next `apply`.

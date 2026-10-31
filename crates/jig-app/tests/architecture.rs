@@ -27,9 +27,22 @@ struct Architecture {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Capability {
+    /// The crate it lives in, when it has one of its own. Its contract is
+    /// then what the crate makes public, which the compiler keeps to.
+    #[serde(rename = "crate")]
+    krate: Option<String>,
+    #[serde(default)]
     modules: Vec<String>,
+    #[serde(default)]
     contract: Vec<String>,
     uses: Vec<String>,
+}
+
+impl Capability {
+    /// Its crate as code names it: `jig_map` for `jig-map`.
+    fn crate_name(&self) -> Option<String> {
+        self.krate.as_ref().map(|name| name.replace('-', "_"))
+    }
 }
 
 fn repository() -> PathBuf {
@@ -98,6 +111,11 @@ fn capabilities_cross_only_through_their_contracts() {
     let architecture = architecture();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let files = source_files(&source);
+    let crates: Vec<String> = architecture
+        .capability
+        .values()
+        .filter_map(Capability::crate_name)
+        .collect();
 
     let mut modules = BTreeSet::new();
     let mut references = Vec::new();
@@ -109,6 +127,7 @@ fn capabilities_cross_only_through_their_contracts() {
             .unwrap_or_else(|e| panic!("{}: {e:?}", file.display()));
         let mut scan = Scan {
             root: here.is_empty(),
+            crates: crates.clone(),
             ..Scan::default()
         };
         scan.tokens(tokens, here);
@@ -219,6 +238,8 @@ fn source_files(source: &Path) -> Vec<(PathBuf, Vec<String>)> {
 struct Scan {
     /// The crate root's own file, where `map::X` means `crate::map::X`.
     root: bool,
+    /// The crates of capabilities that have their own, as code names them.
+    crates: Vec<String>,
     modules: Vec<Vec<String>>,
     paths: Vec<Vec<String>>,
 }
@@ -252,7 +273,9 @@ impl Scan {
                     let start = match word.to_string().as_str() {
                         "crate" => Some(Vec::new()),
                         "super" => Some(here[..here.len().saturating_sub(1)].to_vec()),
-                        name if self.root && is_separator(&tokens, at + 1) => {
+                        name if (self.root || self.crates.iter().any(|c| c == name))
+                            && is_separator(&tokens, at + 1) =>
+                        {
                             Some(vec![name.to_string()])
                         }
                         _ => None,
@@ -366,27 +389,41 @@ fn after_item(tokens: &[TokenTree], mut at: usize) -> usize {
 /// The capabilities, and what each module belongs to.
 struct Map<'a> {
     architecture: &'a Architecture,
-    owner: BTreeMap<&'a str, &'a str>,
+    owner: BTreeMap<String, &'a str>,
     modules: &'a BTreeSet<Vec<String>>,
+    crates: BTreeSet<String>,
 }
 
 impl<'a> Map<'a> {
     fn new(architecture: &'a Architecture, modules: &'a BTreeSet<Vec<String>>) -> Self {
         let mut owner = BTreeMap::new();
+        let mut crates = BTreeSet::new();
         let mut problems = Vec::new();
         for (name, capability) in &architecture.capability {
-            for module in &capability.modules {
-                if let Some(other) = owner.insert(module.as_str(), name.as_str()) {
+            let crate_name = capability.crate_name();
+            for module in capability.modules.iter().chain(&crate_name) {
+                if let Some(other) = owner.insert(module.clone(), name.as_str()) {
                     problems.push(format!("{module} is in both {other} and {name}"));
                 }
             }
+            if let Some(krate) = &capability.krate {
+                if !architecture.crates.contains_key(krate) {
+                    problems.push(format!("{name}'s crate {krate} isn't in [crates]"));
+                }
+                if !capability.modules.is_empty() || !capability.contract.is_empty() {
+                    problems.push(format!(
+                        "{name} has a crate of its own, so its modules and contract are the crate's"
+                    ));
+                }
+            }
+            crates.extend(crate_name);
         }
         let tops: BTreeSet<String> = modules
             .iter()
             .map(|m| m.first().cloned().unwrap_or_else(|| "main".into()))
             .collect();
         for top in &tops {
-            if !owner.contains_key(top.as_str()) {
+            if !owner.contains_key(top) {
                 problems.push(format!("module {top} isn't in any capability"));
             }
         }
@@ -404,7 +441,7 @@ impl<'a> Map<'a> {
             for path in &capability.contract {
                 let segments: Vec<String> = path.split("::").map(String::from).collect();
                 let known = path == "main" || modules.contains(&segments);
-                if !known || owner.get(segments[0].as_str()) != Some(&name.as_str()) {
+                if !known || owner.get(&segments[0]) != Some(&name.as_str()) {
                     problems.push(format!(
                         "{name}'s contract names {path}, a module not its own"
                     ));
@@ -423,11 +460,17 @@ impl<'a> Map<'a> {
             architecture,
             owner,
             modules,
+            crates,
         }
     }
 
     /// The deepest module along `path`, as `a::b`; `main` for the crate root.
     fn module_of(&self, path: &[String]) -> String {
+        if let Some(first) = path.first()
+            && self.crates.contains(first)
+        {
+            return first.clone();
+        }
         let mut depth = 0;
         while depth < path.len() && self.modules.contains(&path[..=depth].to_vec()) {
             depth += 1;
@@ -458,8 +501,8 @@ impl<'a> Map<'a> {
         if !capability.uses.iter().any(|used| used == to) {
             return Some((key, format!("{from} doesn't use {to}")));
         }
-        let contract = &self.architecture.capability[to].contract;
-        if !contract.contains(&to_module) {
+        let target = &self.architecture.capability[to];
+        if target.krate.is_none() && !target.contract.contains(&to_module) {
             return Some((key, format!("{to_module} isn't in {to}'s contract")));
         }
         None
@@ -506,6 +549,7 @@ fn scan(source: &str, here: &[&str]) -> Vec<String> {
     let here: Vec<String> = here.iter().map(|s| s.to_string()).collect();
     let mut scan = Scan {
         root: here.is_empty(),
+        crates: vec!["jig_map".into()],
         ..Scan::default()
     };
     scan.tokens(source.parse().unwrap(), &here);
@@ -547,5 +591,16 @@ fn leaves_out_test_code() {
             &["planner"]
         ),
         ["git::Shown"]
+    );
+}
+
+#[test]
+fn reads_paths_into_capability_crates() {
+    assert_eq!(
+        scan(
+            "use jig_map::{Level, MapView};\nfn f() { other::jig_map::x(); }",
+            &["workspace"]
+        ),
+        ["jig_map::Level", "jig_map::MapView"]
     );
 }

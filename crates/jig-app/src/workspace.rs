@@ -628,7 +628,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .chain(crate::file_tree::key_bindings())
         .chain(crate::find_in_files::key_bindings())
         .chain(crate::find_panel::key_bindings())
-        .chain(crate::map::key_bindings())
+        .chain(jig_map::key_bindings())
         .collect()
 }
 

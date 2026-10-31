@@ -8,9 +8,9 @@
 use gpui_kit::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
 
 use super::*;
-use crate::map::plan::Focus;
-use crate::map::site::Show;
-use crate::map::view::{Level, MapView};
+use jig_map::Focus;
+use jig_map::SiteShows as Show;
+use jig_map::{Level, MapView};
 
 const SAVED: &str = r#"[[domain]]
 name = "Bookings"

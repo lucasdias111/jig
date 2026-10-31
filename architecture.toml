@@ -8,6 +8,9 @@
 #   capabilities reach it only through its `contract`, the module paths whose
 #   items they may name (`map` means what `map.rs` itself declares, not
 #   `map::view`), and only if they list it in `uses`. `uses` must not loop.
+# - A capability with a `crate` of its own lists no modules: its contract is
+#   what that crate makes public, which the compiler enforces, and the test
+#   only checks that jig-app's capabilities reaching it list it in `uses`.
 # - Test code (any module path with a `tests` segment, and anything marked
 #   `#[cfg(test)]`) is left out.
 #
@@ -23,7 +26,8 @@ jig-process = []
 jig-editor = []
 jig-commands = []
 jig-ai = ["jig-process"]
-jig-app = ["jig-ai", "jig-commands", "jig-editor", "jig-process"]
+jig-map = ["jig-ai", "jig-commands"]
+jig-app = ["jig-ai", "jig-commands", "jig-editor", "jig-map", "jig-process"]
 
 # Settings files and what's remembered between launches.
 [capability.settings]
@@ -123,11 +127,10 @@ modules = ["planner"]
 contract = ["planner"]
 uses = ["kit", "git", "search"]
 
-# The Map.
+# The Map, in its own crate.
 [capability.map]
-modules = ["map"]
-contract = ["map"]
-uses = ["kit", "git"]
+crate = "jig-map"
+uses = []
 
 # Checking for and installing updates, and the About window.
 [capability.updates]

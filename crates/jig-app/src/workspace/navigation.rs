@@ -13,7 +13,7 @@ use jig_editor::EditorHandle as _;
 use super::mode::Mode;
 use super::tabs::canonical;
 use super::{GoBack, GoForward, Workspace};
-use crate::map::Level;
+use jig_map::Level;
 
 /// More than anyone goes back through.
 const MAX_PLACES: usize = 100;

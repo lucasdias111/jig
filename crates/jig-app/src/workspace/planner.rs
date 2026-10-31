@@ -423,7 +423,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // A sketch on the Map, not its file.
-        if let Some(sketch) = crate::map::sketch_of_link(&link.path) {
+        if let Some(sketch) = jig_map::sketch_of_link(&link.path) {
             return self.show_sketch(&sketch, window, cx);
         }
         if !path.is_file() {

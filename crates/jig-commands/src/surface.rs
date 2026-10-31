@@ -9,6 +9,20 @@ use gpui_kit::*;
 
 pub const RADIUS: f32 = 12.;
 
+/// How opaque the editor's surfaces are, from 0 to 1, as the theme last set
+/// it from the settings.
+pub struct EditorOpacity(pub f32);
+
+impl Global for EditorOpacity {}
+
+/// The background of the editor and the bars around it, letting the
+/// window's blur through as far as the settings ask. Canvases shown in the
+/// editor's place, such as the Map, draw on it too.
+pub fn editor_surface(cx: &App) -> Hsla {
+    let opacity = cx.try_global::<EditorOpacity>().map_or(1., |o| o.0);
+    cx.theme().background.opacity(opacity)
+}
+
 /// A floating panel's surface. Callers add size, padding and content.
 /// It takes the mouse: clicks and hovers don't reach the code behind it.
 pub fn panel(cx: &App) -> Div {

@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::Workspace;
 use super::tabs::canonical;
-use crate::map::MapView;
+use jig_map::MapView;
 
 /// What each logpoint's message starts with, then its place's id. No
 /// braces: LLDB reads those as expressions to print.

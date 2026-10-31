@@ -5,7 +5,7 @@
 use gpui_kit::{Modifiers, MouseButton, point};
 
 use super::*;
-use crate::map::view::{Level, MapView};
+use jig_map::{Level, MapView};
 
 const SAVED: &str = r#"[[domain]]
 name = "Bookings"
@@ -652,9 +652,7 @@ fn index_domains_live(cx: &mut TestAppContext) {
         map(cx, &workspace).is_some_and(|view| cx.update(|cx| view.read(cx).project().is_some()))
     });
     let view = map(cx, &workspace).unwrap();
-    view.update(cx, |view, cx| {
-        view.start_action(crate::map::domains::actions::Action::Index, cx)
-    });
+    view.update(cx, |view, cx| view.start_action(jig_map::Action::Index, cx));
     let started = std::time::Instant::now();
     let mut asked = 0;
     loop {

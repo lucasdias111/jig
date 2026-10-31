@@ -9,7 +9,7 @@ use jig_commands::DrawingAction;
 use serde_json::json;
 
 use super::*;
-use crate::map::view::{Level, MapView};
+use jig_map::{Level, MapView};
 
 const STORE: &str = "//! Keeps what's sent.\n\npub fn save(item: u8) -> bool {\n    check(item);\n    write(item)\n}\n\nfn check(item: u8) {}\n\nfn write(item: u8) -> bool {\n    true\n}\n";
 
@@ -242,7 +242,7 @@ fn arrows_tour_a_trace_and_the_camera_follows(cx: &mut TestAppContext) {
     press(cx, window, "right");
     press(cx, window, "right");
     // Step 4 is send, not on save's Plan: the tour goes to its Plan.
-    let send = |level: &Level| matches!(level, Level::Plan(crate::map::plan::Focus::Function(s)) if s.name == "send");
+    let send = |level: &Level| matches!(level, Level::Plan(jig_map::Focus::Function(s)) if s.name == "send");
     assert!(
         send(&read_level(cx, &workspace)),
         "{:?}",
@@ -297,8 +297,7 @@ fn a_pinned_drawing_is_saved_and_listed_when_orphaned(cx: &mut TestAppContext) {
     .unwrap();
     let path = dir.path().join("src/store.rs");
     view.update(cx, |view, cx| {
-        let project =
-            crate::map::index::Project::read_again(path.parent().unwrap().parent().unwrap(), None);
+        let project = jig_map::Project::read_again(path.parent().unwrap().parent().unwrap(), None);
         view.set_project(std::sync::Arc::new(project), cx);
     });
     let orphans = cx.update(|cx| view.read(cx).orphaned_pins());
@@ -361,7 +360,7 @@ fn a_proposal_is_dismissed(cx: &mut TestAppContext) {
     let ws = workspace.clone();
     step(cx, window, move |window, cx| {
         ws.update(cx, |this, cx| {
-            this.proposal_chosen(0, crate::map::view::ProposalChoice::Dismiss, window, cx)
+            this.proposal_chosen(0, jig_map::ProposalChoice::Dismiss, window, cx)
         })
     });
     assert_eq!(cx.update(|cx| view.read(cx).drawings_shown()), 0);

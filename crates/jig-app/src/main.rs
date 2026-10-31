@@ -33,7 +33,6 @@ mod languages;
 mod lines;
 mod lsp;
 mod lsp_debug;
-mod map;
 mod menus;
 mod planner;
 mod project;
@@ -204,8 +203,8 @@ pub fn open_window(
 /// the agent hangs up.
 /// `Jig --map-mcp`: the Map's drawing tools, for an agent.
 fn serve_map(args: &[String]) {
-    let served = map::project_from_args(args).and_then(|project| {
-        map::serve_drawing_tools(&project, std::io::stdin().lock(), std::io::stdout().lock())
+    let served = jig_map::project_from_args(args).and_then(|project| {
+        jig_map::serve_drawing_tools(&project, std::io::stdin().lock(), std::io::stdout().lock())
     });
     if let Err(error) = served {
         eprintln!("jig: {error:#}");

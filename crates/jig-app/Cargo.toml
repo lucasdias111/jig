@@ -20,6 +20,7 @@ gpui-kit.workspace = true
 jig-editor.workspace = true
 jig-commands.workspace = true
 jig-ai.workspace = true
+jig-map.workspace = true
 jig-process.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
@@ -35,9 +36,6 @@ lsp-types = "0.97"
 similar = "3"
 # Reloading open files changed outside Jig. GPUI already builds this version.
 notify = "8"
-# The Map's Export Image: its SVG drawn to a PNG. GPUI already builds this
-# version, with these features.
-resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # Deleting from the file tree moves to the Trash (Recycle Bin), so it can be undone.
 trash = "5"
 # Updates: the latest release from GitHub, and the check that a download
@@ -48,18 +46,6 @@ minisign-verify = "0.3"
 # `languages::gdscript`. `tree-sitter` is GPUI Kit's, for its `Language`.
 tree-sitter-gdscript = "6"
 tree-sitter = "0.26"
-# Grammars already linked for highlighting through GPUI Kit (the same
-# versions), read directly by `blueprint` to draw a function's flow.
-tree-sitter-rust = "0.24"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-go = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-c = "0.24"
-tree-sitter-cpp = "0.23"
-tree-sitter-swift = "0.7"
-tree-sitter-zig = "1.1"
 # More grammars GPUI Kit has no feature for, registered in
 # `languages::grammars`. Each must build on `tree-sitter-language` (or
 # tree-sitter >= 0.21), so it links against the one tree-sitter above.
@@ -99,6 +85,7 @@ snapshots = ["gpui-kit/test-support"]
 
 [dev-dependencies]
 tempfile.workspace = true
+jig-map = { workspace = true, features = ["testing"] }
 # Reads the source as tokens for the architecture test.
 proc-macro2 = "1"
 gpui-kit = { workspace = true, features = ["test-support"] }

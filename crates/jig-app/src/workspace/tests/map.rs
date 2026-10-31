@@ -5,8 +5,8 @@
 use gpui_kit::{Modifiers, PinchEvent, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
 
 use super::*;
-use crate::map::plan::Focus;
-use crate::map::view::{Level, MapView};
+use jig_map::Focus;
+use jig_map::{Level, MapView};
 
 const GO_BACK: &str = if cfg!(target_os = "macos") {
     "ctrl--"
@@ -855,9 +855,9 @@ fn map_pictures_live(cx: &mut TestAppContext) {
         let drawings = calls
             .iter()
             .filter_map(|call| {
-                match crate::map::lens::call(call["tool"].as_str()?, &call["input"]).ok()? {
-                    crate::map::lens::Call::Draw(drawing) => Some(drawing),
-                    crate::map::lens::Call::Clear => None,
+                match jig_map::drawing_call(call["tool"].as_str()?, &call["input"]).ok()? {
+                    jig_map::Call::Draw(drawing) => Some(drawing),
+                    jig_map::Call::Clear => None,
                 }
             })
             .enumerate()
