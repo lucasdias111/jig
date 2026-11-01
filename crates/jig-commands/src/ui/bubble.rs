@@ -1,7 +1,6 @@
 //! The small floating window that shows the agent's progress, an edit up
 //! for review, a note or an error.
 
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::shimmer::ShimmerText;
@@ -9,6 +8,8 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+use crate::domain::transcript::LiveStep;
 
 /// Lines of removed code shown before the rest is elided.
 const REMOVED_LINES: usize = 6;
@@ -40,32 +41,6 @@ pub enum Bubble {
     Error(String),
 }
 
-/// Text shared with a background request, read on every frame.
-#[derive(Clone, Default)]
-pub struct LiveStep(Arc<Mutex<String>>);
-
-impl LiveStep {
-    pub fn set(&self, text: String) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = text;
-    }
-
-    pub fn get(&self) -> String {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-}
-
-impl PartialEq for LiveStep {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl std::fmt::Debug for LiveStep {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("LiveStep").field(&self.get()).finish()
-    }
-}
-
 impl Bubble {
     pub fn is_running(&self) -> bool {
         matches!(self, Bubble::Running { .. })
@@ -79,7 +54,7 @@ impl Bubble {
 impl RenderOnce for Bubble {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let container = crate::surface::panel(cx)
+        let container = crate::ui::surface::panel(cx)
             .flex()
             .flex_col()
             .max_w(px(MAX_WIDTH))
@@ -88,7 +63,7 @@ impl RenderOnce for Bubble {
             .py_2p5()
             .gap_2()
             .text_size(px(13.));
-        let hint = |text: &'static str| crate::surface::hint(text, cx);
+        let hint = |text: &'static str| crate::ui::surface::hint(text, cx);
 
         let bubble = match self {
             Bubble::Running {
@@ -97,7 +72,7 @@ impl RenderOnce for Bubble {
                 context,
                 step,
             } => {
-                let accent = crate::surface::agent_accent(cx);
+                let accent = crate::ui::surface::agent_accent(cx);
                 let elapsed = started.elapsed().as_secs();
                 let step = step.get();
                 container
@@ -112,7 +87,7 @@ impl RenderOnce for Bubble {
                                     .font_weight(FontWeight::MEDIUM),
                             )
                             .child(div().flex_1())
-                            .child(crate::surface::agent_tag(cx))
+                            .child(crate::ui::surface::agent_tag(cx))
                             // The spinner animates every frame, so this stays current.
                             .child(
                                 div()
@@ -135,7 +110,7 @@ impl RenderOnce for Bubble {
                     .child(progress_bar(accent, theme.muted))
                     .child({
                         let cancel = "esc to stop the agent";
-                        crate::surface::hint(
+                        crate::ui::surface::hint(
                             if context.is_empty() {
                                 cancel.to_string()
                             } else {
@@ -150,7 +125,7 @@ impl RenderOnce for Bubble {
             }
             Bubble::Message(message) => container.child(message).child(hint("esc to close")),
             Bubble::AgentDone(message) => {
-                let accent = crate::surface::agent_accent(cx);
+                let accent = crate::ui::surface::agent_accent(cx);
                 container
                     .border_color(accent.opacity(0.45))
                     .child(
@@ -160,13 +135,13 @@ impl RenderOnce for Bubble {
                             .text_color(theme.muted_foreground)
                             .child("Agent finished")
                             .child(div().flex_1())
-                            .child(crate::surface::agent_tag(cx)),
+                            .child(crate::ui::surface::agent_tag(cx)),
                     )
                     .child(message)
                     .child(hint("esc to close"))
             }
             Bubble::Preview { message, removed } => {
-                let accent = crate::surface::agent_accent(cx);
+                let accent = crate::ui::surface::agent_accent(cx);
                 container
                     // Which file, so an edit in another tab isn't a surprise.
                     .border_color(accent.opacity(0.45))
@@ -184,7 +159,7 @@ impl RenderOnce for Bubble {
                                     .child(message.clone()),
                             )
                             .child(div().flex_1())
-                            .child(crate::surface::agent_tag(cx)),
+                            .child(crate::ui::surface::agent_tag(cx)),
                     )
                     .when(!removed.trim().is_empty(), |this| {
                         this.child(removed_lines(&removed, cx))
@@ -194,7 +169,7 @@ impl RenderOnce for Bubble {
                     ))
             }
         };
-        crate::motion::pop_in(bubble, "jig-bubble")
+        crate::ui::motion::pop_in(bubble, "jig-bubble")
     }
 }
 

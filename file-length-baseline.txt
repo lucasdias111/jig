@@ -23,15 +23,10 @@ crates/jig-app/src/workspace/tests/lens.rs 542
 crates/jig-app/src/workspace/tests/map.rs 918
 crates/jig-app/src/workspace/tests/sketches.rs 797
 crates/jig-app/tests/architecture.rs 562
-crates/jig-commands/src/chat.rs 1546
-crates/jig-commands/src/palette.rs 954
 crates/jig-debuggers/src/lib.rs 735
-crates/jig-editing/src/find_panel.rs 575
 crates/jig-files/src/file_tree.rs 1529
 crates/jig-git/src/lib.rs 574
 crates/jig-git/src/panel.rs 783
 crates/jig-lsp/src/lsp/client.rs 852
 crates/jig-preferences/src/settings_window.rs 626
 crates/jig-preferences/src/settings_window/languages_page.rs 711
-crates/jig-search/src/find_in_files.rs 769
-crates/jig-search/src/quick_open.rs 513
