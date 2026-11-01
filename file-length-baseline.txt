@@ -1,25 +1,3 @@
 # Source files over 500 lines, kept until they're split. Each line is `path lines`,
 # and a file's length may only come down.
 # Written by JIG_LENGTH_BLESS=1 cargo test -p jig-app --test file_length.
-crates/jig-app/src/shortcuts.rs 649
-crates/jig-app/src/workspace.rs 964
-crates/jig-app/src/workspace/commands.rs 600
-crates/jig-app/src/workspace/debug.rs 1446
-crates/jig-app/src/workspace/definitions.rs 510
-crates/jig-app/src/workspace/diagnostics.rs 580
-crates/jig-app/src/workspace/git.rs 636
-crates/jig-app/src/workspace/hover.rs 740
-crates/jig-app/src/workspace/map.rs 548
-crates/jig-app/src/workspace/planner.rs 539
-crates/jig-app/src/workspace/run.rs 746
-crates/jig-app/src/workspace/tabs.rs 692
-crates/jig-app/src/workspace/tests/agent.rs 1415
-crates/jig-app/src/workspace/tests/code.rs 722
-crates/jig-app/src/workspace/tests/debug.rs 762
-crates/jig-app/src/workspace/tests/diagnostics.rs 520
-crates/jig-app/src/workspace/tests/domains.rs 693
-crates/jig-app/src/workspace/tests/files.rs 586
-crates/jig-app/src/workspace/tests/lens.rs 542
-crates/jig-app/src/workspace/tests/map.rs 918
-crates/jig-app/src/workspace/tests/sketches.rs 797
-crates/jig-app/tests/architecture.rs 562
