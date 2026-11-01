@@ -27,7 +27,13 @@ impl DebugSession {
         self.request_to(self.active, command, arguments, pending);
     }
 
-    pub(super) fn request_to(&mut self, id: usize, command: &'static str, arguments: Value, pending: Pending) {
+    pub(super) fn request_to(
+        &mut self,
+        id: usize,
+        command: &'static str,
+        arguments: Value,
+        pending: Pending,
+    ) {
         if let Some(client) = self.clients.get(id) {
             let seq = client.request(command, arguments);
             self.pending.insert((id, seq), pending);
