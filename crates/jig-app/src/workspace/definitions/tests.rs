@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::reference_results;
+use super::usages::reference_results;
 use jig_lsp::lsp::Encoding;
 
 #[test]

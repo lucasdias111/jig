@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{Texts, package_of, targets};
+use super::calls::{Texts, package_of, targets};
 use jig_lsp::lsp;
 use jig_map::{Project, Target};
 
