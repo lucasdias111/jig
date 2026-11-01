@@ -165,7 +165,6 @@ impl Config {
             ..provider.clone()
         })
     }
-
 }
 
 impl ProviderConfig {

@@ -172,14 +172,16 @@ impl Session {
     /// Turn one server event into something the UI cares about, turning
     /// down what Jig can't show so the agent moves on.
     fn interpret(&self, event: &Value, sessions: &mut Sessions) -> Result<Option<AgentEvent>> {
-        Ok(match opencode::interpret(event, sessions, &self.id, &self.directory)? {
-            Some(Heard::Event(event)) => Some(event),
-            Some(Heard::Unavailable(id)) => {
-                self.reply(&id, false, Some("That isn't available inside Jig."))?;
-                None
-            }
-            None => None,
-        })
+        Ok(
+            match opencode::interpret(event, sessions, &self.id, &self.directory)? {
+                Some(Heard::Event(event)) => Some(event),
+                Some(Heard::Unavailable(id)) => {
+                    self.reply(&id, false, Some("That isn't available inside Jig."))?;
+                    None
+                }
+                None => None,
+            },
+        )
     }
 
     /// The agent's closing words: the text of its last message.

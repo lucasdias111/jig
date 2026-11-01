@@ -4,9 +4,7 @@
 
 use serde_json::Value;
 
-use crate::domain::agent::{
-    Asking, PermissionRequest, TaskDraft, Turn, asked, relative,
-};
+use crate::domain::agent::{Asking, PermissionRequest, TaskDraft, Turn, asked, relative};
 use crate::domain::map;
 
 /// The text a message says, paragraph by paragraph.

@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 
 use super::{Session, Waiting};
 use crate::domain::acp::{TurnState, outcome, pick};
-use crate::domain::agent::{Access, AgentEvent, EditChange, EditRequest, PermissionRequest, TaskDraft};
+use crate::domain::agent::{
+    Access, AgentEvent, EditChange, EditRequest, PermissionRequest, TaskDraft,
+};
 use crate::store::acp::lock;
 
 impl Session {

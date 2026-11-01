@@ -49,14 +49,12 @@ impl Target {
         let id = format!("jig-{}", provider.name);
         Self {
             model: format!("{id}/{model}"),
-            config: Some(
-                json!({ "provider": { id: opencode::opencode_provider(
+            config: Some(json!({ "provider": { id: opencode::opencode_provider(
                     provider,
                     model,
                     api_key,
                     session_id(),
-                ) } }),
-            ),
+                ) } })),
         }
     }
 }

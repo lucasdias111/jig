@@ -69,9 +69,7 @@ pub(crate) fn interpret(
             Some(AgentEvent::Edit(EditRequest {
                 id: properties["id"].as_str().unwrap_or_default().to_string(),
                 path: PathBuf::from(metadata["filepath"].as_str().unwrap_or_default()),
-                change: EditChange::Diff(
-                    metadata["diff"].as_str().unwrap_or_default().to_string(),
-                ),
+                change: EditChange::Diff(metadata["diff"].as_str().unwrap_or_default().to_string()),
             }))
         }
         "permission.asked" => {
@@ -79,9 +77,9 @@ pub(crate) fn interpret(
             return Ok(Some(match permission(properties, draft) {
                 Some(request) => Heard::Event(AgentEvent::Permission(request)),
                 // Anything else Jig can't show: say no, so the agent moves on.
-                None => Heard::Unavailable(
-                    properties["id"].as_str().unwrap_or_default().to_string(),
-                ),
+                None => {
+                    Heard::Unavailable(properties["id"].as_str().unwrap_or_default().to_string())
+                }
             }));
         }
         "question.asked" => Some(AgentEvent::Question(QuestionRequest {
@@ -110,24 +108,22 @@ pub(crate) fn interpret(
             let child = state["metadata"]["sessionId"].as_str();
             sessions.keep_draft(part);
             match (state["status"].as_str(), child) {
-                (Some("running"), Some(child)) if tool == "task" => {
-                    Some(AgentEvent::Subagent {
-                        id: child.to_string(),
-                        description: state["input"]["description"]
-                            .as_str()
-                            .unwrap_or("Subagent")
-                            .to_string(),
-                    })
-                }
+                (Some("running"), Some(child)) if tool == "task" => Some(AgentEvent::Subagent {
+                    id: child.to_string(),
+                    description: state["input"]["description"]
+                        .as_str()
+                        .unwrap_or("Subagent")
+                        .to_string(),
+                }),
                 (Some("completed" | "error"), Some(child)) if tool == "task" => {
                     Some(AgentEvent::SubagentDone {
                         id: child.to_string(),
                         report: task_report(state),
                     })
                 }
-                (Some("running"), _) if part["type"] == "tool" => Some(AgentEvent::Step(
-                    describe(tool, &state["input"], directory),
-                )),
+                (Some("running"), _) if part["type"] == "tool" => {
+                    Some(AgentEvent::Step(describe(tool, &state["input"], directory)))
+                }
                 (Some("completed"), None) if map::tool_of(tool).is_some() => {
                     Some(AgentEvent::Drew {
                         tool: map::tool_of(tool).unwrap_or_default().to_string(),
