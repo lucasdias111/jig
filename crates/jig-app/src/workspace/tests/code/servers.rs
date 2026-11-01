@@ -1,0 +1,427 @@
+//! What a language server answers: definitions, references, ⌘-click and renames, or why it couldn't start.
+
+use super::*;
+
+/// A rustup proxy with no rust-analyzer for the toolchain exits at once:
+/// the status bar says so, rather than hover and the rest quietly not
+/// working.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_server_that_cant_start_says_why(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    let client = jig_lsp::lsp::Client::start(
+        "rust-analyzer",
+        root.clone(),
+        serde_json::Value::Null,
+        || {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "echo \"error: Unknown binary 'rust-analyzer'\" >&2"]);
+            Some(command)
+        },
+    );
+    let (window, workspace) = open(cx, dir.path());
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
+    open_file(cx, window, &workspace, &path);
+    let note = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let workspace = workspace.read(cx);
+            workspace
+                .status_note
+                .read(cx)
+                .message()
+                .map(|note| note.to_string())
+        })
+    };
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if note(cx).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        note(cx).as_deref(),
+        Some("rust-analyzer didn't start: Unknown binary 'rust-analyzer'")
+    );
+}
+
+#[gpui_kit::test]
+fn the_language_server_completes_after_a_dot(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let path = dir.path().join("src/main.rs");
+    std::fs::write(&path, "fn main() {\n    v\n}\n").unwrap();
+    let (client, seen) =
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+            "textDocument/completion" => json!({"isIncomplete": false, "items": [
+                {"label": "pop", "kind": 2},
+                {"label": "push", "kind": 2, "detail": "fn(&mut self, T)"},
+            ]}),
+            _ => serde_json::Value::Null,
+        });
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
+
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &path);
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        editor.select(17..17, cx);
+    });
+
+    let wait_for = |cx: &mut TestAppContext, done: &dyn Fn(&mut TestAppContext) -> bool| {
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    type_slowly(cx, window, ".");
+    wait_for(cx, &|cx| completion_labels(cx, &workspace).len() > 2);
+    // The server's, then Jig's postfix snippets.
+    let labels = completion_labels(cx, &workspace);
+    assert_eq!(labels[..3], ["pop", "push", "for"]);
+    assert!(labels.contains(&"var".to_string()));
+    type_slowly(cx, window, "pu");
+    wait_for(cx, &|cx| completion_labels(cx, &workspace).len() == 1);
+    assert_eq!(completion_labels(cx, &workspace), ["push"]);
+
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    });
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        assert_eq!(editor.text(cx), "fn main() {\n    v.push\n}\n");
+    });
+
+    // Each request saw the text it was made for.
+    let messages: Vec<serde_json::Value> = seen.try_iter().collect();
+    let mut text = String::new();
+    for message in &messages {
+        match message["method"].as_str() {
+            Some("textDocument/didChange") => {
+                text = message["params"]["contentChanges"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+            }
+            Some("textDocument/completion") => {
+                let offset = jig_lsp::lsp::offset(
+                    &text,
+                    serde_json::from_value(message["params"]["position"].clone()).unwrap(),
+                    jig_lsp::lsp::Encoding::Utf8,
+                );
+                assert!(
+                    text[..offset].ends_with(['.', 'p', 'u']),
+                    "{text:?} at {offset}"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["params"]["context"] == json!({"triggerKind": 2, "triggerCharacter": "."}))
+    );
+}
+
+#[gpui_kit::test]
+fn the_language_server_answers_definitions_and_references(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    // The fake server runs on real threads.
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    // Not where a guess would go: only the server knows.
+    std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    std::fs::write(
+        dir.path().join("src/main.rs"),
+        "fn main() {\n    renamed();\n}\n",
+    )
+    .unwrap();
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let main = jig_lsp::lsp::file_uri(&dir.path().join("src/main.rs"));
+    let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
+    let (client, _seen) =
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+            "textDocument/definition" => json!({"uri": lib, "range": at(0, 7, 12)}),
+            "textDocument/references" => json!([
+                {"uri": lib, "range": at(0, 7, 12)},
+                {"uri": main, "range": at(1, 4, 11)},
+            ]),
+            _ => serde_json::Value::Null,
+        });
+    let main_path = dir.path().join("src/main.rs");
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
+
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &main_path);
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        editor.select(18..18, cx);
+    });
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("f12", cx);
+    });
+    // The server answers on its own thread.
+    let wait_for = |cx: &mut TestAppContext, done: &dyn Fn(&gpui_kit::App) -> bool| {
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if cx.update(|cx| done(cx)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    wait_for(cx, &|cx| {
+        workspace
+            .read(cx)
+            .document()
+            .path
+            .as_ref()
+            .unwrap()
+            .ends_with("src/lib.rs")
+    });
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert!(
+            this.document()
+                .path
+                .as_ref()
+                .unwrap()
+                .ends_with("src/lib.rs")
+        );
+        assert_eq!(this.editor().selection(cx), 7..12);
+    });
+
+    // The server says this is the declaration: its references.
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("f12", cx);
+    });
+    wait_for(cx, &|cx| {
+        workspace.read(cx).find_in_files.read(cx).is_open()
+    });
+    assert_eq!(
+        find_results(cx, &workspace),
+        [
+            "src/lib.rs:1: pub fn alpha() {}",
+            "src/main.rs:2: renamed();"
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn cmd_click_goes_to_the_definition(cx: &mut TestAppContext) {
+    cmd_click_to_definition(cx, 0);
+}
+
+#[gpui_kit::test]
+fn cmd_click_works_after_scrolling(cx: &mut TestAppContext) {
+    // Far enough down that the editor must scroll more than a screen.
+    cmd_click_to_definition(cx, 200);
+}
+
+/// Cmd+hover then Cmd+click a call `padding` lines down main.rs; it
+/// should land on the function in lib.rs.
+fn cmd_click_to_definition(cx: &mut TestAppContext, padding: usize) {
+    use serde_json::json;
+
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    let main = format!(
+        "fn main() {{\n{}    renamed();\n}}\n",
+        "    // filler\n".repeat(padding)
+    );
+    let call = main.find("renamed").unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), &main).unwrap();
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let (client, _seen) =
+        jig_lsp::lsp::fake_server(dir.path().to_path_buf(), move |method, _| match method {
+            "textDocument/definition" => json!({"uri": lib, "range": {
+                    "start": {"line": 0, "character": 7}, "end": {"line": 0, "character": 12}}}),
+            _ => serde_json::Value::Null,
+        });
+    let main_path = dir.path().join("src/main.rs");
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
+
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &main_path);
+    // Scroll the call into view.
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        editor.select(call..call, cx);
+    });
+    step(cx, window, |window, cx| window.render_frame(cx));
+    step(cx, window, |window, cx| window.render_frame(cx));
+    let point = cx.update(|cx| {
+        let state = workspace.read(cx).editor().state().clone();
+        let bounds = state
+            .read(cx)
+            .range_to_bounds(&(call + 1..call + 2))
+            .unwrap();
+        bounds.center()
+    });
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window, cx);
+    vcx.simulate_mouse_move(point, None, gpui_kit::Modifiers::secondary_key());
+    for _ in 0..100 {
+        vcx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.simulate_click(point, gpui_kit::Modifiers::secondary_key());
+    for _ in 0..50 {
+        vcx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        assert!(
+            !this.find_in_files.read(cx).is_open(),
+            "searched instead of jumping"
+        );
+        assert!(
+            this.document()
+                .path
+                .as_ref()
+                .unwrap()
+                .ends_with("src/lib.rs"),
+            "Cmd+click at {point:?} didn't jump"
+        );
+        assert_eq!(this.editor().selection(cx), 7..12);
+    });
+}
+
+#[gpui_kit::test]
+fn rename_symbol_without_a_server_renames_in_the_file(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.rs");
+    let source = "fn main() {\n    let total = 1;\n    use_it(total, subtotal);\n}\n";
+    std::fs::write(&path, source).unwrap();
+    let (window, workspace) = open(cx, &path);
+    let at = source.find("total").unwrap() + 2;
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        editor.select(at..at, cx);
+    });
+    step(cx, window, |window, cx| window.press("f2", cx));
+    assert!(workspace.read_with(cx, |this, cx| this.rename.read(cx).is_open()));
+    // The old name is selected, so typing replaces it.
+    cx.simulate_input(window, "sum");
+    cx.simulate_keystrokes(window, "enter");
+    cx.run_until_parked();
+    assert!(workspace.read_with(cx, |this, cx| !this.rename.read(cx).is_open()));
+    assert_eq!(
+        text(cx, &workspace),
+        "fn main() {\n    let sum = 1;\n    use_it(sum, subtotal);\n}\n"
+    );
+    // In the buffer only, until it's saved.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    assert!(workspace.read_with(cx, |this, _| this.tab().dirty));
+
+    // Esc leaves it be.
+    step(cx, window, |window, cx| window.press("f2", cx));
+    cx.simulate_input(window, "other");
+    cx.simulate_keystrokes(window, "escape");
+    cx.run_until_parked();
+    assert!(workspace.read_with(cx, |this, cx| !this.rename.read(cx).is_open()));
+    assert!(text(cx, &workspace).contains("let sum = 1;"));
+}
+
+#[gpui_kit::test]
+fn rename_symbol_with_a_server_edits_every_file(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let lib_source = "pub fn alpha() {}\n";
+    std::fs::write(dir.path().join("src/lib.rs"), lib_source).unwrap();
+    std::fs::write(
+        dir.path().join("src/main.rs"),
+        "fn main() {\n    alpha();\n}\n",
+    )
+    .unwrap();
+    let lib = jig_lsp::lsp::file_uri(&dir.path().join("src/lib.rs"));
+    let main = jig_lsp::lsp::file_uri(&dir.path().join("src/main.rs"));
+    let at = |line: u32, start: u32, end: u32| json!({"start": {"line": line, "character": start}, "end": {"line": line, "character": end}});
+    let (client, _seen) = jig_lsp::lsp::fake_server(
+        dir.path().to_path_buf(),
+        move |method, params| match method {
+            "textDocument/rename" => {
+                let name = params["newName"].clone();
+                json!({"changes": {
+                    lib.clone(): [{"range": at(0, 7, 12), "newText": name}],
+                    main.clone(): [{"range": at(1, 4, 9), "newText": name}],
+                }})
+            }
+            _ => serde_json::Value::Null,
+        },
+    );
+    let main_path = dir.path().join("src/main.rs");
+    let server = jig_lsp::lsp::server_for("rust").unwrap();
+    let root = jig_lsp::lsp::root_for(server, &main_path);
+    cx.update(|cx| jig_lsp::lsp::register(&server.name, root, client, cx));
+
+    let (window, workspace) = open(cx, dir.path());
+    open_file(cx, window, &workspace, &main_path);
+    cx.update(|cx| {
+        let editor = workspace.read(cx).editor().clone();
+        editor.select(18..18, cx);
+    });
+    step(cx, window, |window, cx| {
+        window.render_frame(cx);
+        window.press("f2", cx);
+    });
+    cx.simulate_input(window, "beta");
+    cx.simulate_keystrokes(window, "enter");
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if text(cx, &workspace).contains("beta") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(text(cx, &workspace), "fn main() {\n    beta();\n}\n");
+    cx.update(|cx| {
+        let this = workspace.read(cx);
+        // Still on main.rs, with lib.rs changed in a tab behind it.
+        assert!(
+            this.document()
+                .path
+                .as_ref()
+                .unwrap()
+                .ends_with("src/main.rs")
+        );
+        let lib = this
+            .tab_for(&dir.path().join("src/lib.rs"))
+            .expect("lib.rs opens");
+        assert_eq!(this.tabs[lib].editor.text(cx), "pub fn beta() {}\n");
+        assert!(this.tabs[lib].dirty);
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+        lib_source
+    );
+}
