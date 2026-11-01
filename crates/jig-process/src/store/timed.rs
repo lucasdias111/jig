@@ -74,7 +74,7 @@ fn stop(child: &mut Child) {
     }
     #[cfg(windows)]
     {
-        use crate::NoWindow as _;
+        use crate::store::no_window::NoWindow as _;
         let _ = Command::new("taskkill")
             .no_window()
             .args(["/T", "/F", "/PID", &child.id().to_string()])

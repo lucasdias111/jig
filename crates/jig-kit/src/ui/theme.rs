@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use jig_settings::{self as settings, ColorSettings, ThemeChoice};
 
-const EMBER: &str = include_str!("../../../assets/themes/ember.json");
+const EMBER: &str = include_str!("../../../../assets/themes/ember.json");
 
 static BUNDLED: LazyLock<Value> =
     LazyLock::new(|| serde_json::from_str(EMBER).expect("bundled ember.json is valid"));

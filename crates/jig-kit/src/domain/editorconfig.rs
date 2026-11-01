@@ -8,13 +8,14 @@
 //! reads and writes UTF-8 only and draws no ruler.
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use gpui_kit::component::input::TabSize;
 use regex::Regex;
 
-const FILE_NAME: &str = ".editorconfig";
+use super::indentation::Indent;
+
+/// The name of the file this reads.
+pub const FILE_NAME: &str = ".editorconfig";
 
 /// The properties that apply to one file, lowercased, `unset` ones gone.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -39,22 +40,10 @@ impl LineEnding {
 }
 
 impl EditorConfig {
-    /// What the `.editorconfig` files above `path` say about it. Files that
-    /// can't be read count as not there.
-    pub fn for_file(path: &Path) -> Self {
-        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let mut found = Vec::new();
-        for dir in path.ancestors().skip(1) {
-            let Ok(text) = fs::read_to_string(dir.join(FILE_NAME)) else {
-                continue;
-            };
-            let file = parse(&text);
-            let root = file.root;
-            found.push((dir.to_path_buf(), file));
-            if root {
-                break;
-            }
-        }
+    /// What `found` says about the file at `path`: the `.editorconfig`
+    /// files above it, nearest first, each with its folder. Nearer files and
+    /// later sections win.
+    pub fn merged(path: &Path, found: &[(PathBuf, File)]) -> Self {
         let mut config = Self::default();
         for (dir, file) in found.iter().rev() {
             let Ok(relative) = path.strip_prefix(dir) else {
@@ -77,7 +66,7 @@ impl EditorConfig {
     }
 
     /// `detected` with whatever the file sets of its style and size.
-    pub fn tab_size(&self, detected: TabSize) -> TabSize {
+    pub fn indent(&self, detected: Indent) -> Indent {
         let hard_tabs = match self.get("indent_style") {
             Some("tab") => true,
             Some("space") => false,
@@ -96,8 +85,8 @@ impl EditorConfig {
         } else {
             indent_size.or(tab_width)
         };
-        TabSize {
-            tab_size: size.filter(|&size| size > 0).unwrap_or(detected.tab_size),
+        Indent {
+            width: size.filter(|&size| size > 0).unwrap_or(detected.width),
             hard_tabs,
         }
     }
@@ -132,8 +121,10 @@ impl EditorConfig {
     }
 }
 
-struct File {
-    root: bool,
+/// One `.editorconfig` file, read.
+pub struct File {
+    /// Whether it says `root = true`: no file above it counts.
+    pub root: bool,
     sections: Vec<Section>,
 }
 
@@ -149,7 +140,7 @@ impl Section {
     }
 }
 
-fn parse(text: &str) -> File {
+pub fn parse(text: &str) -> File {
     let mut file = File {
         root: false,
         sections: Vec::new(),
@@ -375,83 +366,5 @@ mod tests {
         assert!(matches("[unclosed.x", "[unclosed.x"));
         assert!(matches(r"a\*.x", "a*.x"));
         assert!(!matches(r"a\*.x", "ab.x"));
-    }
-
-    fn write(dir: &Path, name: &str, text: &str) {
-        let path = dir.join(name);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    }
-
-    #[test]
-    fn nearer_files_and_later_sections_win() {
-        let dir = tempfile::tempdir().unwrap();
-        write(
-            dir.path(),
-            ".editorconfig",
-            "root = true\n\n[*]\nindent_style = space\nindent_size = 4\n\
-             trim_trailing_whitespace = true\n\n[*.md]\nindent_size = 2\n\
-             trim_trailing_whitespace = false\n",
-        );
-        write(
-            dir.path(),
-            "web/.editorconfig",
-            "# Not root: the one above still counts.\n[*.md]\nindent_style = TAB\n",
-        );
-        write(
-            dir.path(),
-            "vendor/.editorconfig",
-            "[*]\nindent_size = unset\nend_of_line = crlf\n",
-        );
-        let detected = TabSize {
-            tab_size: 8,
-            hard_tabs: false,
-        };
-
-        let rust = EditorConfig::for_file(&dir.path().join("src/main.rs"));
-        assert_eq!(rust.tab_size(detected).tab_size, 4);
-        assert_eq!(rust.trim_trailing_whitespace(), Some(true));
-        assert_eq!(rust.insert_final_newline(), None);
-
-        let readme = EditorConfig::for_file(&dir.path().join("README.md"));
-        assert_eq!(readme.tab_size(detected).tab_size, 2);
-        assert_eq!(readme.trim_trailing_whitespace(), Some(false));
-
-        let docs = EditorConfig::for_file(&dir.path().join("web/docs.md"));
-        let tab = docs.tab_size(detected);
-        assert!(tab.hard_tabs, "values are case-insensitive");
-        assert_eq!(tab.tab_size, 2, "a tab's width follows indent_size");
-
-        let vendored = EditorConfig::for_file(&dir.path().join("vendor/lib.c"));
-        assert_eq!(vendored.tab_size(detected).tab_size, 8, "unset: detected");
-        assert_eq!(vendored.end_of_line(), Some(LineEnding::CrLf));
-    }
-
-    #[test]
-    fn root_stops_the_search() {
-        let dir = tempfile::tempdir().unwrap();
-        write(
-            dir.path(),
-            ".editorconfig",
-            "root = true\n[*]\nindent_size = 3\n",
-        );
-        write(dir.path(), "inner/.editorconfig", "root = true\n");
-        let config = EditorConfig::for_file(&dir.path().join("inner/a.rs"));
-        assert_eq!(config, EditorConfig::default());
-    }
-
-    #[test]
-    fn indent_size_tab_means_the_tab_width() {
-        let dir = tempfile::tempdir().unwrap();
-        write(
-            dir.path(),
-            ".editorconfig",
-            "root = true\n[*.go]\nindent_style = tab\nindent_size = tab\ntab_width = 8\n",
-        );
-        let tab = EditorConfig::for_file(&dir.path().join("main.go")).tab_size(TabSize {
-            tab_size: 4,
-            hard_tabs: false,
-        });
-        assert_eq!((tab.tab_size, tab.hard_tabs), (8, true));
     }
 }

@@ -3,11 +3,16 @@
 
 use std::ops::Range;
 
-use gpui_kit::component::input::TabSize;
+/// How a file is indented: with tabs or with spaces, and how wide a step is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Indent {
+    pub width: usize,
+    pub hard_tabs: bool,
+}
 
 /// Used for new files and files with no indented lines.
-pub const DEFAULT: TabSize = TabSize {
-    tab_size: 4,
+pub const DEFAULT: Indent = Indent {
+    width: 4,
     hard_tabs: false,
 };
 
@@ -20,7 +25,7 @@ const MAX_LINES: usize = 10_000;
 /// Guess `text`'s indentation: tabs if most indented lines start with one,
 /// otherwise spaces, as many as the most common step from one line's
 /// indentation to the next.
-pub fn detect(text: &str) -> TabSize {
+pub fn detect(text: &str) -> Indent {
     let mut tab_lines = 0;
     let mut space_lines = 0;
     // How often each step of 1–8 spaces appears between consecutive lines.
@@ -47,8 +52,8 @@ pub fn detect(text: &str) -> TabSize {
     }
 
     if tab_lines > space_lines {
-        return TabSize {
-            tab_size: TAB_WIDTH,
+        return Indent {
+            width: TAB_WIDTH,
             hard_tabs: true,
         };
     }
@@ -58,8 +63,8 @@ pub fn detect(text: &str) -> TabSize {
         .filter(|&step| steps[step] > 0)
         .max_by_key(|&step| (steps[step], std::cmp::Reverse(step)));
     match common {
-        Some(tab_size) => TabSize {
-            tab_size,
+        Some(width) => Indent {
+            width,
             hard_tabs: false,
         },
         None => DEFAULT,
@@ -67,11 +72,11 @@ pub fn detect(text: &str) -> TabSize {
 }
 
 /// As the status bar shows it: `"Spaces: 4"` or `"Tab Size: 4"`.
-pub fn label(tab: TabSize) -> String {
-    if tab.hard_tabs {
-        format!("Tab Size: {}", tab.tab_size)
+pub fn label(indent: Indent) -> String {
+    if indent.hard_tabs {
+        format!("Tab Size: {}", indent.width)
     } else {
-        format!("Spaces: {}", tab.tab_size)
+        format!("Spaces: {}", indent.width)
     }
 }
 
@@ -155,7 +160,7 @@ mod tests {
 
     fn detected(text: &str) -> (usize, bool) {
         let tab = detect(text);
-        (tab.tab_size, tab.hard_tabs)
+        (tab.width, tab.hard_tabs)
     }
 
     #[test]
