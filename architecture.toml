@@ -105,14 +105,23 @@ jig-app = [
     "jig-updates",
 ]
 
+# Starting other programs: without a console window, and not forever, in
+# its own crate.
+[capability.process]
+crate = "jig-process"
+layered = true
+uses = []
+
 # Settings files and what's remembered between launches, in their own crate.
 [capability.settings]
 crate = "jig-settings"
+layered = true
 uses = []
 
 # Small shared pieces with no feature of their own, in its own crate.
 [capability.kit]
 crate = "jig-kit"
+layered = true
 uses = ["settings"]
 
 # Where Jig's tools live and installing them: the PATH programs are found
@@ -156,11 +165,13 @@ uses = ["settings", "kit", "languages"]
 # The file tree and its icons, in its own crate.
 [capability.files]
 crate = "jig-files"
+layered = true
 uses = ["settings", "kit", "languages", "search"]
 
 # The git command line, the Git view and the branch picker, in their own crate.
 [capability.git]
 crate = "jig-git"
+layered = true
 uses = []
 
 # Run configurations and their output, in its own crate.
@@ -198,11 +209,13 @@ uses = []
 # Checking for and installing updates, in their own crate.
 [capability.updates]
 crate = "jig-updates"
+layered = true
 uses = []
 
 # The Settings and About windows, in its own crate.
 [capability.preferences]
 crate = "jig-preferences"
+layered = true
 uses = [
     "settings",
     "kit",
@@ -220,6 +233,7 @@ uses = [
 modules = ["main", "workspace", "menus", "shortcuts"]
 contract = ["main", "workspace", "menus", "shortcuts"]
 uses = [
+    "process",
     "settings",
     "kit",
     "tools",

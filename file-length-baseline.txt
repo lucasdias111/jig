@@ -30,9 +30,6 @@ crates/jig-commands/src/chat.rs 1546
 crates/jig-commands/src/palette.rs 954
 crates/jig-debuggers/src/lib.rs 735
 crates/jig-editing/src/find_panel.rs 575
-crates/jig-files/src/file_tree.rs 1529
-crates/jig-git/src/lib.rs 574
-crates/jig-git/src/panel.rs 783
 crates/jig-lsp/src/lsp/client.rs 852
 crates/jig-map/src/domains/grouping.rs 583
 crates/jig-map/src/domains/tools.rs 616
@@ -51,7 +48,5 @@ crates/jig-map/src/view/lens_draw.rs 1029
 crates/jig-map/src/view/scene.rs 510
 crates/jig-map/src/view/sketch_draw.rs 918
 crates/jig-map/src/view/zoom.rs 662
-crates/jig-preferences/src/settings_window.rs 626
-crates/jig-preferences/src/settings_window/languages_page.rs 711
 crates/jig-search/src/find_in_files.rs 769
 crates/jig-search/src/quick_open.rs 513
