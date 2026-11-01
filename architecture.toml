@@ -194,6 +194,7 @@ uses = []
 [capability.map]
 crate = "jig-map"
 uses = []
+layered = true
 
 # Checking for and installing updates, in their own crate.
 [capability.updates]
