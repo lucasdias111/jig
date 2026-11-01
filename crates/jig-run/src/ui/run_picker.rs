@@ -9,7 +9,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::run_configs::RunConfig;
+use crate::domain::run_configs::RunConfig;
 use jig_commands::fuzzy;
 
 pub const WIDTH: f32 = 560.;
@@ -234,7 +234,7 @@ impl RunPicker {
             Row::Edit => (
                 GEAR,
                 StyledText::new("Edit run.toml…"),
-                crate::run_configs::FILE.to_string(),
+                crate::domain::run_configs::FILE.to_string(),
                 String::new(),
             ),
         };

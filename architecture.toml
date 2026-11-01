@@ -120,27 +120,32 @@ uses = ["settings"]
 # crate.
 [capability.tools]
 crate = "jig-tools"
+layered = true
 uses = []
 
 # The languages and the language servers serving them, as data, and finding
 # a server's program, in its own crate.
 [capability.languages]
 crate = "jig-languages"
+layered = true
 uses = ["settings", "tools"]
 
 # Formatters as data, and running one, in its own crate.
 [capability.formatters]
 crate = "jig-formatters"
+layered = true
 uses = ["kit", "tools"]
 
 # Debuggers as data: which runs what, and installing them, in its own crate.
 [capability.debuggers]
 crate = "jig-debuggers"
+layered = true
 uses = ["languages", "tools"]
 
 # Running language servers, and guessing definitions without one, in its own crate.
 [capability.language_servers]
 crate = "jig-lsp"
+layered = true
 uses = ["kit", "languages", "debuggers", "tools"]
 
 # find in the file, in its own crate.
@@ -166,11 +171,13 @@ uses = []
 # Run configurations and their output, in its own crate.
 [capability.run]
 crate = "jig-run"
+layered = true
 uses = ["kit", "tools"]
 
 # Debug sessions over the Debug Adapter Protocol, in its own crate.
 [capability.debug]
 crate = "jig-debug"
+layered = true
 uses = [
     "kit",
     "debuggers",

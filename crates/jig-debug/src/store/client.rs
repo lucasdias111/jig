@@ -8,11 +8,9 @@
 //! runs the program in a child session of its own. The debug session is a
 //! state machine over those messages, so nothing waits on a reply.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, mpsc};
@@ -25,37 +23,13 @@ use serde_json::{Value, json};
 
 use jig_debuggers::AdapterCommand;
 
+use crate::domain::messages::{Incoming, Message, frame, parse, read_message};
+
 /// Where a client's messages go: `(connection id, message)`.
 pub type Inbox = UnboundedSender<(usize, Message)>;
 
 /// How long a starting adapter server gets to start listening.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Message {
-    Response {
-        /// The `seq` [`Client::request`] returned.
-        request_seq: i64,
-        success: bool,
-        body: Value,
-        /// Why it failed, in the adapter's words.
-        message: Option<String>,
-    },
-    Event {
-        event: String,
-        body: Value,
-    },
-    /// The adapter asking for a child session, which [`Client::respond`]
-    /// answers. Other requests from the adapter are declined for it.
-    StartDebugging {
-        seq: i64,
-        configuration: Value,
-    },
-    /// The adapter couldn't be reached, and why.
-    Failed(String),
-    /// The adapter exited or hung up.
-    Closed,
-}
 
 pub struct Client {
     writer: mpsc::Sender<Vec<u8>>,
@@ -259,70 +233,19 @@ fn spawn_writer(mut writer: impl Write + Send + 'static, queue: mpsc::Receiver<V
 fn read_messages(id: usize, reader: impl Read, replies: mpsc::Sender<Vec<u8>>, inbox: Inbox) {
     let mut reader = BufReader::new(reader);
     while let Some(message) = read_message(&mut reader) {
-        let parsed = match message["type"].as_str() {
-            Some("response") => Message::Response {
-                request_seq: message["request_seq"].as_i64().unwrap_or(-1),
-                success: message["success"].as_bool().unwrap_or(false),
-                body: message.get("body").cloned().unwrap_or(Value::Null),
-                message: message["message"].as_str().map(str::to_string),
-            },
-            Some("event") => Message::Event {
-                event: message["event"].as_str().unwrap_or_default().to_string(),
-                body: message.get("body").cloned().unwrap_or(Value::Null),
-            },
-            Some("request") if message["command"] == "startDebugging" => Message::StartDebugging {
-                seq: message["seq"].as_i64().unwrap_or(-1),
-                configuration: message["arguments"]["configuration"].clone(),
-            },
-            // Anything else the adapter asks, such as to run the program in
-            // a terminal: decline, so it doesn't wait.
-            Some("request") => {
-                let reply = json!({
-                    "seq": 0,
-                    "type": "response",
-                    "request_seq": message["seq"],
-                    "command": message["command"],
-                    "success": false,
-                    "message": "Jig doesn't support this request.",
-                });
+        let parsed = match parse(&message) {
+            Incoming::Message(parsed) => parsed,
+            Incoming::Decline(reply) => {
                 let _ = replies.send(frame(&reply));
                 continue;
             }
-            _ => continue,
+            Incoming::Ignored => continue,
         };
         if inbox.unbounded_send((id, parsed)).is_err() {
             return;
         }
     }
     let _ = inbox.unbounded_send((id, Message::Closed));
-}
-
-pub fn frame(message: &Value) -> Vec<u8> {
-    let body = message.to_string();
-    format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
-}
-
-/// The next message, or `None` once the stream ends or breaks.
-pub fn read_message(reader: &mut impl BufRead) -> Option<Value> {
-    let mut length = None;
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).ok()? == 0 {
-            return None;
-        }
-        let header = header.trim_end();
-        if header.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':')
-            && name.eq_ignore_ascii_case("content-length")
-        {
-            length = value.trim().parse::<usize>().ok();
-        }
-    }
-    let mut body = vec![0; length?];
-    reader.read_exact(&mut body).ok()?;
-    serde_json::from_slice(&body).ok()
 }
 
 /// Two connected sockets, standing in for a client and its adapter in
@@ -334,6 +257,3 @@ pub fn socket_pair() -> (std::net::TcpStream, std::net::TcpStream) {
     let (theirs, _) = listener.accept().unwrap();
     (ours, theirs)
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,6 +1,9 @@
 use std::fs;
 
 use super::*;
+use std::path::Path;
+
+use crate::domain::run_configs::{Metadata, cargo_configs, config, dedupe_names};
 
 #[test]
 fn reads_the_file_relative_to_the_root() {
