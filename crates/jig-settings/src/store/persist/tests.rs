@@ -1,4 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use super::*;
+use crate::domain::settings::*;
 
 #[test]
 fn missing_file_gives_defaults() {
@@ -74,4 +77,52 @@ fn bad_file_is_an_error() {
     let path = dir.path().join("settings.toml");
     std::fs::write(&path, "[appearance]\ntheme = \"purple\"\n").unwrap();
     assert!(Settings::load(&path).is_err());
+}
+
+#[test]
+fn round_trips_and_drops_missing_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jig").join("recent.toml");
+    let mut recent = RecentProjects::default();
+    recent.push(&dir.path().join("gone"));
+    recent.push(dir.path());
+    recent.save(&path).unwrap();
+    assert_eq!(
+        RecentProjects::load(&path).unwrap().projects,
+        [dir.path().to_path_buf()]
+    );
+}
+
+#[test]
+fn skips_missing_files_and_follows_the_active_one() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.rs", "c.rs"] {
+        std::fs::write(dir.path().join(name), "").unwrap();
+    }
+    let session = Session {
+        root: dir.path().to_path_buf(),
+        files: ["a.rs", "gone.rs", "c.rs"].map(PathBuf::from).to_vec(),
+        active: 2,
+    };
+    let (files, active) = session.existing_files();
+    assert_eq!(files, [dir.path().join("a.rs"), dir.path().join("c.rs")]);
+    assert_eq!(active, 1);
+}
+
+#[test]
+fn newest_first_one_per_project_and_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jig").join("sessions.toml");
+    let mut sessions = Sessions::default();
+    for (root, active) in [("a", 0), ("b", 0), ("a", 1)] {
+        sessions.put(Session {
+            root: root.into(),
+            files: vec!["x.rs".into(), "y.rs".into()],
+            active,
+        });
+    }
+    assert_eq!(sessions.projects.len(), 2);
+    assert_eq!(sessions.get(Path::new("a")).unwrap().active, 1);
+    sessions.save(&path).unwrap();
+    assert_eq!(Sessions::load(&path).unwrap(), sessions);
 }
