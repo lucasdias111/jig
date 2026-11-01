@@ -3,18 +3,19 @@
 //!
 //! They come from language servers, in the LSP snippet syntax, and from Jig,
 //! which reads `assets/default-snippets.toml` and
-//! `~/.config/jig/snippets.toml` (a user snippet replaces a built-in with the
-//! same name). Prefix snippets are typed by name (`for`). Postfix ones go
+//! `~/.config/jig/snippets.toml` (`store::cache`; a user snippet replaces a
+//! built-in with the same name). Prefix snippets are typed by name (`for`). Postfix ones go
 //! after an expression (`users.var`) and wrap it: `$EXPR` is the expression,
 //! `$NAME` a name guessed from it.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
 
 use serde::Deserialize;
+
+mod postfix;
+
+pub use postfix::{name_for, receiver};
 
 /// A snippet with its places filled by their defaults, and where those
 /// places are, in the order Tab visits them. The last is where the cursor
@@ -50,11 +51,10 @@ impl Snippet {
     }
 }
 
-/// Jig's snippets for `language`, the user's replacing built-ins of the same
-/// name.
-pub fn for_language(language: &str) -> Vec<Snippet> {
-    let user = user_snippets();
-    let mut snippets: Vec<Snippet> = builtin()
+/// Jig's snippets for `language` from the built-in ones and the user's,
+/// the user's replacing built-ins of the same name.
+pub fn merge(builtin: &[Snippet], user: Vec<Snippet>, language: &str) -> Vec<Snippet> {
+    let mut snippets: Vec<Snippet> = builtin
         .iter()
         .filter(|s| s.is_for(language))
         .filter(|s| {
@@ -68,54 +68,9 @@ pub fn for_language(language: &str) -> Vec<Snippet> {
     snippets
 }
 
-fn builtin() -> &'static [Snippet] {
-    static BUILTIN: OnceLock<Vec<Snippet>> = OnceLock::new();
-    BUILTIN.get_or_init(|| {
-        toml::from_str::<SnippetFile>(include_str!("../../../assets/default-snippets.toml"))
-            .expect("the built-in snippets parse")
-            .snippets
-    })
-}
-
-/// `~/.config/jig/snippets.toml`, honouring `XDG_CONFIG_HOME`.
-pub fn user_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("jig").join("snippets.toml"))
-}
-
-/// The user's snippets, read again only when the file changes, as this is
-/// asked on every keystroke.
-fn user_snippets() -> Vec<Snippet> {
-    static CACHE: Mutex<Option<(SystemTime, Vec<Snippet>)>> = Mutex::new(None);
-    if cfg!(any(test, feature = "testing")) {
-        return Vec::new();
-    }
-    let Some(path) = user_path() else {
-        return Vec::new();
-    };
-    let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
-        return Vec::new();
-    };
-    let mut cache = CACHE.lock().unwrap();
-    if let Some((when, snippets)) = cache.as_ref()
-        && *when == modified
-    {
-        return snippets.clone();
-    }
-    let snippets = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| match toml::from_str::<SnippetFile>(&text) {
-            Ok(file) => Some(file.snippets),
-            Err(error) => {
-                eprintln!("jig: {}: {error}", path.display());
-                None
-            }
-        })
-        .unwrap_or_default();
-    *cache = Some((modified, snippets.clone()));
-    snippets
+/// The snippets in a snippets file's text.
+pub fn from_toml(text: &str) -> Result<Vec<Snippet>, toml::de::Error> {
+    toml::from_str::<SnippetFile>(text).map(|file| file.snippets)
 }
 
 /// `body` ready to insert on a line indented by `line_indent`: each new
@@ -277,214 +232,6 @@ impl Parser {
             }
         }
     }
-}
-
-/// The expression a postfix snippet typed at `dot` (the `.`) wraps: back
-/// over names, calls, indexing, strings and `.`/`::` chains.
-pub fn receiver(text: &str, dot: usize) -> Option<Range<usize>> {
-    let bytes = text.as_bytes();
-    if bytes.get(dot) != Some(&b'.') {
-        return None;
-    }
-    // Where the expression starts, as far as it's been read.
-    let mut start = dot;
-    let mut at = dot;
-    loop {
-        // Calls, indexing, strings, `!` and `?`, right to left.
-        while at > 0 {
-            match bytes[at - 1] {
-                close @ (b')' | b']' | b'}') => {
-                    let open = match close {
-                        b')' => b'(',
-                        b']' => b'[',
-                        _ => b'{',
-                    };
-                    at = matching_open(&bytes[..at], open, close)?;
-                }
-                quote @ (b'"' | b'\'' | b'`') => at = matching_quote(&bytes[..at - 1], quote)?,
-                b'!' | b'?'
-                    if at > 1
-                        && (is_name_byte(bytes[at - 2]) || b")]".contains(&bytes[at - 2])) =>
-                {
-                    at -= 1
-                }
-                _ => break,
-            }
-        }
-        while at > 0 && is_name_byte(bytes[at - 1]) {
-            at -= 1;
-        }
-        if at == start || (at < start && bytes[at..start].iter().all(|b| b".?:".contains(b))) {
-            break;
-        }
-        start = at;
-        // On over a chain: `a.b`, `a?.b`, `A::b`.
-        if at > 1 && bytes[at - 1] == b'.' {
-            at -= 1;
-            if bytes[at - 1] == b'?' {
-                at -= 1;
-            }
-        } else if at > 2 && &bytes[at - 2..at] == b"::" {
-            at -= 2;
-        } else {
-            break;
-        }
-    }
-    (start < dot && text.is_char_boundary(start)).then_some(start..dot)
-}
-
-fn is_name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
-}
-
-/// Where the bracket closing `bytes` opens.
-fn matching_open(bytes: &[u8], open: u8, close: u8) -> Option<usize> {
-    let mut depth = 0;
-    for ix in (0..bytes.len()).rev() {
-        if bytes[ix] == close {
-            depth += 1;
-        } else if bytes[ix] == open {
-            depth -= 1;
-            if depth == 0 {
-                return Some(ix);
-            }
-        }
-    }
-    None
-}
-
-/// Where the string whose closing `quote` follows `bytes` opens.
-fn matching_quote(bytes: &[u8], quote: u8) -> Option<usize> {
-    (0..bytes.len())
-        .rev()
-        .find(|&ix| bytes[ix] == quote && (ix == 0 || bytes[ix - 1] != b'\\'))
-}
-
-/// Calls whose result is best named after what they were called on:
-/// `user.clone()` is a `user`, `Vec::new()` a `vec`.
-const PASS_THROUGH: &[&str] = &[
-    "new",
-    "default",
-    "from",
-    "clone",
-    "unwrap",
-    "expect",
-    "to_owned",
-    "iter",
-    "into_iter",
-    "collect",
-    "await",
-    "build",
-    "parse",
-    "as_ref",
-    "borrow",
-    "ok",
-    "lock",
-    "read",
-    "get",
-];
-const VERB_PREFIXES: &[&str] = &[
-    "get", "fetch", "load", "find", "read", "create", "make", "build", "compute", "to", "as",
-    "into",
-];
-const RESERVED: &[&str] = &[
-    "self", "this", "type", "match", "fn", "let", "const", "var", "class", "def", "for", "if",
-    "in", "is", "return", "new", "loop", "while", "impl", "mod", "use", "struct", "enum",
-];
-
-/// A variable name for `expr`: `getUser(id)` is `user`, `HttpClient::new()`
-/// is `http_client` (or `httpClient`, depending on `language`).
-pub fn name_for(expr: &str, language: &str) -> String {
-    // Only what's outside brackets names the result.
-    let outer = outer_text(expr);
-    let mut names: Vec<&str> = outer
-        .split(['.', ':', '!', '?'])
-        .map(|s| s.trim_matches(|c: char| !(c.is_alphanumeric() || c == '_')))
-        .filter(|s| !s.is_empty() && !s.starts_with(|c: char| c.is_ascii_digit()))
-        .collect();
-    while names.len() > 1 && PASS_THROUGH.contains(&names[names.len() - 1].to_lowercase().as_str())
-    {
-        names.pop();
-    }
-    let Some(last) = names.last() else {
-        return "value".into();
-    };
-    let words = words_of(last);
-    let words = match words.split_first() {
-        Some((first, rest)) if !rest.is_empty() && VERB_PREFIXES.contains(&first.as_str()) => {
-            rest.to_vec()
-        }
-        _ => words,
-    };
-    let name = match language {
-        "rust" | "python" => words.join("_"),
-        _ => words
-            .iter()
-            .enumerate()
-            .map(|(ix, word)| {
-                if ix == 0 {
-                    word.clone()
-                } else {
-                    let mut chars = word.chars();
-                    chars
-                        .next()
-                        .map(|c| c.to_uppercase().chain(chars).collect())
-                        .unwrap_or_default()
-                }
-            })
-            .collect(),
-    };
-    if name.is_empty() || RESERVED.contains(&name.as_str()) {
-        "value".into()
-    } else {
-        name
-    }
-}
-
-/// `expr` without anything inside brackets or quotes.
-fn outer_text(expr: &str) -> String {
-    let mut depth = 0usize;
-    let mut quote = None;
-    let mut out = String::new();
-    for c in expr.chars() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'' | '`') => quote = Some(c),
-            (None, '(' | '[' | '{') => depth += 1,
-            (None, ')' | ']' | '}') => depth = depth.saturating_sub(1),
-            (None, c) if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// The lowercase words of a snake_case or camelCase name.
-fn words_of(name: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let chars: Vec<char> = name.chars().collect();
-    for (ix, &c) in chars.iter().enumerate() {
-        if c == '_' || c == '$' {
-            if !word.is_empty() {
-                words.push(std::mem::take(&mut word));
-            }
-            continue;
-        }
-        let starts_word = c.is_uppercase()
-            && !word.is_empty()
-            && (chars[ix - 1].is_lowercase()
-                || chars.get(ix + 1).is_some_and(|next| next.is_lowercase()));
-        if starts_word {
-            words.push(std::mem::take(&mut word));
-        }
-        word.extend(c.to_lowercase());
-    }
-    if !word.is_empty() {
-        words.push(word);
-    }
-    words
 }
 
 #[cfg(test)]

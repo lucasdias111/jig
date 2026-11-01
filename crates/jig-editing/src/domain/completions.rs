@@ -1,6 +1,6 @@
 //! What to suggest while typing a name: the language server's completions,
 //! narrowed to what's been typed, or without a server, other words in the
-//! file; and Jig's [`crate::snippets`] for the language.
+//! file; and Jig's [`crate::domain::snippets`] for the language.
 //!
 //! Positions here are byte offsets; the editor's own are worked out by the
 //! caller.
@@ -12,7 +12,8 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, InsertTextFormat,
 };
 
-use crate::snippets::{self, Snippet};
+use self::ranking::{SUBSEQUENCE, match_tier, words};
+use crate::domain::snippets::{self, Snippet};
 use jig_lsp::lsp::{self, Encoding};
 
 /// Most suggestions shown at once.
@@ -354,51 +355,7 @@ fn line_indent(text: &str, offset: usize) -> &str {
     &line[..end]
 }
 
-/// The names in `text`, with where each starts.
-fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut chars = text.char_indices().peekable();
-    std::iter::from_fn(move || {
-        loop {
-            let (start, first) = chars.next()?;
-            if !is_name_char(first) {
-                continue;
-            }
-            let mut end = start + first.len_utf8();
-            while let Some(&(ix, c)) = chars.peek() {
-                if !is_name_char(c) {
-                    break;
-                }
-                end = ix + c.len_utf8();
-                chars.next();
-            }
-            if !first.is_ascii_digit() {
-                return Some((start, &text[start..end]));
-            }
-        }
-    })
-}
-
-const EXACT_PREFIX: u8 = 0;
-const PREFIX: u8 = 1;
-const SUBSEQUENCE: u8 = 2;
-
-/// How well `candidate` matches what was `typed`, lower being better, or
-/// `None` if it doesn't.
-fn match_tier(candidate: &str, typed: &str) -> Option<u8> {
-    if candidate.starts_with(typed) {
-        return Some(EXACT_PREFIX);
-    }
-    let fold = |s: &str| s.to_lowercase();
-    let (candidate, typed) = (fold(candidate), fold(typed));
-    if candidate.starts_with(&typed) {
-        return Some(PREFIX);
-    }
-    let mut rest = candidate.chars();
-    typed
-        .chars()
-        .all(|c| rest.any(|other| other == c))
-        .then_some(SUBSEQUENCE)
-}
+mod ranking;
 
 #[cfg(test)]
 mod tests;
