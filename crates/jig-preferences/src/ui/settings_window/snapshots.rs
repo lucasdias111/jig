@@ -13,17 +13,17 @@ use gpui_kit::{
 };
 
 use super::{Detail, Nav, Page, START, SettingsWindow};
+use crate::store::scratch;
 use jig_settings::{self as settings, ThemeChoice};
 
 pub fn run(dir: &Path) {
-    std::fs::create_dir_all(dir).expect("making the snapshots folder");
+    scratch::make_folder(dir);
     // Taller pictures show more of a long page.
     let height: f32 = std::env::var("JIG_SNAPSHOT_HEIGHT")
         .ok()
         .and_then(|height| height.parse().ok())
         .unwrap_or(600.);
-    let config = std::env::temp_dir().join(format!("jig-snapshots-{}", std::process::id()));
-    std::fs::create_dir_all(&config).expect("making a scratch config folder");
+    let config = scratch::scratch_config();
     // Each page, then a search.
     let shown = Page::ALL
         .into_iter()
@@ -103,7 +103,7 @@ pub fn run(dir: &Path) {
     for dark in [false, true] {
         about(dir, dark);
     }
-    std::fs::remove_dir_all(&config).ok();
+    scratch::remove_folder(&config);
     START.set(Nav::page(Page::Appearance));
 }
 
@@ -139,7 +139,7 @@ fn about(dir: &Path, dark: bool) {
                     ..Default::default()
                 },
                 cx,
-                |window, cx| cx.new(|cx| crate::about_window::AboutWindow::new(window, cx)),
+                |window, cx| cx.new(|cx| crate::ui::about_window::AboutWindow::new(window, cx)),
             )
         })
         .expect("opening About Jig");

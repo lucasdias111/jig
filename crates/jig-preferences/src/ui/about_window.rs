@@ -9,7 +9,7 @@ use gpui_kit::*;
 
 use jig_updates as update;
 
-const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/jig-1024.png");
+const ICON_PNG: &[u8] = include_bytes!("../../../../assets/app-icon/jig-1024.png");
 
 /// Decoded once, the first time the window opens.
 static ICON: LazyLock<Arc<Image>> =
