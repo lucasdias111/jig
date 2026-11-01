@@ -112,8 +112,14 @@ impl DebugPlan {
     }
 }
 
-/// How to debug `config`: the plan, or why there's none.
-pub fn plan_for(config: &RunConfig, registry: &Registry) -> Result<DebugPlan, String> {
+/// How to debug `config`: the plan, or why there's none. `exists` says
+/// whether a file is there, so a `program` named relative to the
+/// configuration's folder is found in it.
+pub fn plan_in(
+    config: &RunConfig,
+    registry: &Registry,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<DebugPlan, String> {
     let named = match &config.debugger {
         Some(key) => Some(
             registry
@@ -195,7 +201,7 @@ pub fn plan_for(config: &RunConfig, registry: &Registry) -> Result<DebugPlan, St
     }
     let program = rest.first().map(|first| {
         let path = config.cwd.join(first);
-        if path.exists() {
+        if exists(&path) {
             path
         } else {
             PathBuf::from(first)
@@ -233,6 +239,10 @@ pub fn cargo_executable(line: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use jig_run::run_configs::{DebugProgram, Source};
+
+    fn plan_for(config: &RunConfig, registry: &Registry) -> Result<DebugPlan, String> {
+        plan_in(config, registry, Path::exists)
+    }
 
     fn registry() -> Arc<Registry> {
         jig_debuggers::registry()

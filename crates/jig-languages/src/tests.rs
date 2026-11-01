@@ -1,4 +1,6 @@
 use super::*;
+use crate::domain::languages::load;
+use crate::ui::{gdscript, grammars};
 
 #[test]
 fn settings_start_with_bundled_languages() {

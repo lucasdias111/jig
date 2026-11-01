@@ -2,330 +2,39 @@
 //! `assets/default-languages.toml`, which also lists the language servers.
 //!
 //! Grammars are compiled in (the `gpui-kit` features in the workspace
-//! `Cargo.toml`, and the crates in [`grammars`]); Settings adds languages to
-//! the list from its Library, turns them on or off and changes their
-//! extensions.
+//! `Cargo.toml`, and the crates in `ui/grammars.rs`); Settings adds
+//! languages to the list from its Library, turns them on or off and changes
+//! their extensions.
+//!
+//! This file is the crate's facade. The work is in its layers:
+//!
+//! - [`ui`]: registering the grammars with the highlighter.
+//! - [`domain`]: the table of languages and servers, and matching files.
+//! - [`store`]: the table as read at startup, and servers' programs on disk.
 
-pub mod gdscript;
-pub mod grammars;
+mod domain;
+mod store;
+mod ui;
 
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-
-use serde::Deserialize;
+use std::path::Path;
 
 use jig_settings::LanguageSettings;
 
-const BUILT_IN: &str = include_str!("../../../assets/default-languages.toml");
-
-/// A language with a bundled tree-sitter grammar.
-#[derive(Debug)]
-pub struct Language {
-    /// The highlighter's name for it.
-    pub name: &'static str,
-    pub label: &'static str,
-    /// File extensions it applies to unless Settings says otherwise.
-    pub extensions: Vec<&'static str>,
-    /// Whole file names it applies to, for files like `Makefile` that
-    /// have no extension to go by.
-    pub filenames: Vec<&'static str>,
-    /// What starts a line comment, if it has them.
-    pub line_comment: Option<&'static str>,
-    /// The protocol's languageId.
-    pub lsp_id: &'static str,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LanguageFile {
-    language: Vec<LanguageEntry>,
-    server: Vec<Server>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LanguageEntry {
-    name: String,
-    label: String,
-    extensions: Vec<String>,
-    #[serde(default)]
-    filenames: Vec<String>,
-    // Read by `settings`, which starts every list with the starters.
-    #[serde(default)]
-    #[allow(dead_code)]
-    starter: bool,
-    line_comment: Option<String>,
-    lsp_id: Option<String>,
-}
-
-/// A starter for the user's `language-servers.toml`.
-pub const USER_TEMPLATE: &str = r#"# Your language servers. One with the same name as a built-in replaces it;
-# others are added, and a server here for a language wins over the built-in
-# one. Restart Jig after changing this file. The fields are the ones in
-# assets/default-languages.toml in Jig's source, which lists the built-ins.
-#
-# [[server]]
-# name = "pylsp"
-# languages = ["python"]
-# commands = [["pylsp"]]
-# root_markers = ["pyproject.toml", "setup.py"]
-#
-# A server with no commands turns a language's server off:
-#
-# [[server]]
-# name = "none"
-# languages = ["markdown"]
-# commands = []
-"#;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct UserFile {
-    #[serde(default)]
-    server: Vec<Server>,
-}
-
-/// The languages and servers, read once at startup with the user's
-/// servers, and what was wrong with the user's file if anything. Kept for
-/// the life of the app, so its text is handed out as `&'static str`.
-struct Table {
-    languages: Vec<Language>,
-    servers: Vec<Server>,
-    user_error: Option<String>,
-}
-
-static TABLE: LazyLock<Table> = LazyLock::new(|| {
-    let user = user_path().and_then(|path| std::fs::read_to_string(path).ok());
-    load(user.as_deref())
-});
-
-fn load(user: Option<&str>) -> Table {
-    let file: LanguageFile = toml::from_str(BUILT_IN).expect("default-languages.toml parses");
-    let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
-    let languages = file
-        .language
-        .into_iter()
-        .map(|entry| {
-            let name = leak(entry.name);
-            Language {
-                name,
-                label: leak(entry.label),
-                extensions: entry.extensions.into_iter().map(leak).collect(),
-                filenames: entry.filenames.into_iter().map(leak).collect(),
-                line_comment: entry.line_comment.map(leak),
-                lsp_id: entry.lsp_id.map_or(name, leak),
-            }
-        })
-        .collect();
-    let mut servers = file.server;
-    let mut user_error = None;
-    match user.map(toml::from_str::<UserFile>) {
-        None => {}
-        Some(Ok(own)) => {
-            // The user's come first, so theirs for a language wins.
-            servers.retain(|built_in| own.server.iter().all(|s| s.name != built_in.name));
-            servers.splice(0..0, own.server);
-        }
-        Some(Err(error)) => {
-            user_error = Some(format!(
-                "language-servers.toml isn't valid: {}",
-                error.message()
-            ))
-        }
-    }
-    Table {
-        languages,
-        servers,
-        user_error,
-    }
-}
-
-/// Registers the grammars GPUI Kit has no feature for, before any file opens.
-pub fn register_grammars() {
-    gdscript::register();
-    grammars::register();
-}
-
-/// The user's `language-servers.toml`; `None` in tests.
-pub fn user_path() -> Option<std::path::PathBuf> {
-    jig_tools::user_file("language-servers.toml")
-}
-
-/// Every bundled language: the starters, then the ones to add from
-/// Settings. Where two claim an extension, the first wins.
-pub fn bundled() -> &'static [Language] {
-    &TABLE.languages
-}
-
-/// Every language server Jig knows how to run, the user's first.
-pub fn servers() -> &'static [Server] {
-    &TABLE.servers
-}
-
-/// What was wrong with the user's `language-servers.toml` at startup.
-pub fn user_error() -> Option<&'static str> {
-    TABLE.user_error.as_deref()
-}
-
-/// A bundled language by name.
-pub fn get(name: &str) -> Option<&'static Language> {
-    bundled().iter().find(|language| language.name == name)
-}
-
-/// What starts a line comment in `language`, Jig's name for it. `None` for
-/// languages without one, such as JSON.
-pub fn line_comment(language: &str) -> Option<&'static str> {
-    get(language)?.line_comment
-}
-
-/// Extensions as Settings shows them: `"ts, mts, cts"`.
-pub fn format_extensions(extensions: &[&'static str]) -> String {
-    extensions.join(", ")
-}
-
-/// Extensions as typed in Settings: separated by commas or spaces, with or
-/// without a leading dot, in any case.
-pub fn parse_extensions(text: &str) -> Vec<String> {
-    text.split([',', ' '])
-        .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
-        .filter(|ext| !ext.is_empty())
-        .collect()
-}
+pub use domain::languages::{Language, format_extensions, parse_extensions};
+pub use domain::servers::{Server, USER_TEMPLATE};
+pub use store::persist::{is_installed, program_for, server_dir, user_path};
+pub use store::session::{bundled, get, line_comment, server_named, servers, user_error};
+pub use ui::register_grammars;
 
 /// The language to highlight `path` with, or `"text"` for none.
 pub fn language_for(path: &Path, settings: &LanguageSettings) -> &'static str {
-    matching(path, settings)
-        .find(|language| !settings.is_off(language.name))
-        .map_or("text", |language| language.name)
+    domain::languages::language_for(bundled(), path, settings)
 }
 
 /// The language `path` is written in, whether or not it's highlighted.
 /// `None` for a language that isn't added.
 pub fn written_in(path: &Path, settings: &LanguageSettings) -> Option<&'static Language> {
-    matching(path, settings).next()
-}
-
-/// The added languages claiming `path`'s extension, first first.
-fn matching<'a>(
-    path: &Path,
-    settings: &'a LanguageSettings,
-) -> impl Iterator<Item = &'static Language> + 'a {
-    let ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase);
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    bundled().iter().filter(move |language| {
-        if !settings.is_added(language.name) {
-            return false;
-        }
-        if file_name
-            .as_deref()
-            .is_some_and(|name| language.filenames.contains(&name))
-        {
-            return true;
-        }
-        let Some(ext) = ext.as_deref() else {
-            return false;
-        };
-        match settings.extensions.get(language.name) {
-            Some(text) => parse_extensions(text).iter().any(|own| own == ext),
-            None => language.extensions.contains(&ext),
-        }
-    })
-}
-
-/// A language server, as `assets/default-languages.toml` describes it.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Server {
-    pub name: String,
-    /// Jig's names for the languages it serves.
-    pub languages: Vec<String>,
-    /// Commands to try, in order; the first installed one is run.
-    pub commands: Vec<Vec<String>>,
-    /// Files whose folder is the project root; `*.ext` matches any file
-    /// with that extension.
-    #[serde(default)]
-    pub root_markers: Vec<String>,
-    /// Take the outermost folder with a marker rather than the nearest: a
-    /// Cargo or Go workspace contains its members' manifests.
-    #[serde(default)]
-    pub outermost: bool,
-    /// A shell command installing it into `${dir}`, its own folder.
-    pub install: Option<String>,
-    help: Option<jig_tools::Help>,
-}
-
-impl Server {
-    pub fn installable(&self) -> bool {
-        self.install.is_some()
-    }
-
-    /// How to get it, for when it isn't installed.
-    pub fn help(&self) -> String {
-        self.help.as_ref().map_or_else(
-            || format!("Install {} and put it on the PATH.", self.name),
-            jig_tools::Help::text,
-        )
-    }
-
-    /// Whether `dir` holds one of the markers.
-    pub fn marks(&self, dir: &Path) -> bool {
-        self.root_markers
-            .iter()
-            .any(|marker| match marker.strip_prefix("*.") {
-                Some(extension) => std::fs::read_dir(dir).is_ok_and(|entries| {
-                    entries.flatten().any(|entry| {
-                        Path::new(&entry.file_name())
-                            .extension()
-                            .is_some_and(|ext| ext == extension)
-                    })
-                }),
-                None => dir.join(marker).exists(),
-            })
-    }
-}
-
-/// A server by name.
-pub fn server_named(name: &str) -> Option<&'static Server> {
-    servers().iter().find(|s| s.name == name)
-}
-
-/// `server`'s own folder in the servers folder, whether or not it's there.
-pub fn server_dir(server: &Server) -> Option<PathBuf> {
-    jig_tools::servers_dir().map(|dir| dir.join(&server.name))
-}
-
-/// The first of `server`'s commands that's installed, as its program and
-/// arguments.
-pub fn program_for(server: &Server) -> Option<(PathBuf, &[String])> {
-    let path = jig_tools::search_path();
-    let own = server_dir(server);
-    server.commands.iter().find_map(|argv| {
-        let (name, args) = argv.split_first()?;
-        let program = jig_tools::find_program(name, path)
-            .or_else(|| {
-                jig_tools::bin_dirs(own.as_ref()?)
-                    .iter()
-                    .find_map(|dir| jig_tools::executable_in(dir, name))
-            })
-            // Debuggers' installers may have put it with them.
-            .or_else(|| {
-                jig_tools::debuggers_dir()
-                    .map(|dir| dir.join("bin").join(name))
-                    .filter(|program| program.is_file())
-            })?;
-        Some((program, args))
-    })
-}
-
-/// Whether `server`, by name, is installed.
-pub fn is_installed(server: &str) -> bool {
-    server_named(server).is_some_and(|s| program_for(s).is_some())
+    domain::languages::written_in(bundled(), path, settings)
 }
 
 #[cfg(test)]

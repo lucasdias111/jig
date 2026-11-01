@@ -1,6 +1,13 @@
 use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use jig_kit::editorconfig::LineEnding;
 
 use super::*;
+use crate::domain::formatters::parse;
+use crate::store::cache::load;
 
 #[test]
 fn every_formatter_names_known_languages() {

@@ -1,6 +1,12 @@
 use std::fs;
+use std::path::Path;
+
+use serde_json::json;
 
 use super::*;
+use crate::domain::debuggers::parse;
+use crate::store::cache::load;
+use crate::store::persist::{glob, install_into, installed_in};
 
 #[test]
 fn every_debugger_names_known_languages() {

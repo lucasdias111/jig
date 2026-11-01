@@ -1,7 +1,9 @@
 use std::io::{BufReader, Write};
+use std::path::PathBuf;
 
 use futures::StreamExt as _;
-use serde_json::json;
+use jig_debuggers::AdapterCommand;
+use serde_json::{Value, json};
 
 use super::*;
 

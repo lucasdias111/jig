@@ -1,4 +1,7 @@
 use std::fs;
+use std::path::Path;
+
+use crate::run_configs::RunConfig;
 
 use super::*;
 
@@ -76,7 +79,7 @@ fn existing_files_are_linked_with_line_and_column() {
     fs::write(root.join("app.py"), "").unwrap();
     let bases = [root.join("sub"), root.clone()];
 
-    let links = find_links("  --> src/main.rs:12:5", &bases);
+    let links = find_links("  --> src/main.rs:12:5", &bases, Path::is_file);
     assert_eq!(
         links,
         [Link {
@@ -86,11 +89,15 @@ fn existing_files_are_linked_with_line_and_column() {
             column: Some(5),
         }]
     );
-    let links = find_links(r#"  File "app.py", line 3, in <module>"#, &bases);
+    let links = find_links(
+        r#"  File "app.py", line 3, in <module>"#,
+        &bases,
+        Path::is_file,
+    );
     assert_eq!(links[0].path, root.join("app.py"));
     assert_eq!(links[0].line, 3);
 
-    assert!(find_links("src/missing.rs:1:1 at 12:30:01", &bases).is_empty());
+    assert!(find_links("src/missing.rs:1:1 at 12:30:01", &bases, Path::is_file).is_empty());
 }
 
 #[test]
