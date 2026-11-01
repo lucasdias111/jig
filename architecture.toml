@@ -166,6 +166,7 @@ uses = ["settings", "kit", "language_servers", "languages"]
 # Go to File and Find in Files, in its own crate.
 [capability.search]
 crate = "jig-search"
+layered = true
 uses = ["settings", "kit", "languages"]
 
 # The file tree and its icons, in its own crate.

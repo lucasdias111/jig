@@ -1,18 +1,16 @@
-//! Searching the text of every file in a project, for Find in Files.
+//! Searching the text of every file in a project, for Find in Files. The
+//! files are read through [`ProjectText`], which the store implements.
 //!
 //! One result per matching line, in path then line order. Binary files,
 //! huge files and anything `.gitignore` excludes are skipped.
 
 use std::ops::Range;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use regex::{Regex, RegexBuilder};
 
 /// Lines listed at most; the rest are only counted.
 pub const MAX_RESULTS: usize = 2000;
-/// Files larger than this are skipped: likely generated, and slow to show.
-const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Longest line text kept for display, in bytes.
 const MAX_LINE_BYTES: usize = 240;
 /// Shown before the match when a long line is cut on the left.
@@ -71,10 +69,16 @@ pub fn pattern(query: &str, options: SearchOptions) -> Result<Regex, String> {
         })
 }
 
-/// Search `files` (relative to `root`) for `pattern`. Stops early, with what
-/// it has, once `cancel` is set.
+/// Where [`search`] reads a file's text: `None` for a file to skip
+/// (binary, huge, or unreadable).
+pub trait ProjectText {
+    fn text(&self, path: &str) -> Option<String>;
+}
+
+/// Search `files` (relative to the project) for `pattern`. Stops early,
+/// with what it has, once `cancel` is set.
 pub fn search(
-    root: &Path,
+    project: &impl ProjectText,
     files: &[String],
     pattern: &Regex,
     cancel: &AtomicBool,
@@ -84,21 +88,11 @@ pub fn search(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let full = root.join(path);
-        if std::fs::metadata(&full).map_or(true, |m| m.len() > MAX_FILE_BYTES) {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&full) else {
-            continue;
-        };
-        if bytes[..bytes.len().min(8192)].contains(&0) {
-            continue;
-        }
-        let Ok(text) = std::str::from_utf8(&bytes) else {
+        let Some(text) = project.text(path) else {
             continue;
         };
         let lines_before = results.total_lines;
-        search_text(path, text, pattern, &mut results);
+        search_text(path, &text, pattern, &mut results);
         if results.total_lines > lines_before {
             results.files += 1;
         }
@@ -197,8 +191,6 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     fn find(text: &str, query: &str, options: SearchOptions) -> Vec<(usize, String, Vec<String>)> {
@@ -302,19 +294,5 @@ mod tests {
         assert!(text.starts_with('…') && text.ends_with('…'));
         assert!(text.len() <= MAX_LINE_BYTES + 2 * '…'.len_utf8());
         assert_eq!(marked, &["needle"]);
-    }
-
-    #[test]
-    fn search_skips_binary_and_counts_files() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("a.rs"), TEXT).unwrap();
-        fs::write(dir.path().join("b.bin"), b"tab\0tab").unwrap();
-        fs::write(dir.path().join("c.md"), "tab here\n").unwrap();
-        let files = ["a.rs", "b.bin", "c.md"].map(String::from);
-        let regex = pattern("tab", SearchOptions::default()).unwrap();
-        let results = search(dir.path(), &files, &regex, &AtomicBool::new(false));
-        assert_eq!(results.files, 2);
-        assert_eq!(results.total_lines, 3);
-        assert_eq!(results.matches[2].path, "c.md");
     }
 }

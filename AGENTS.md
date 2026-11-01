@@ -49,7 +49,7 @@ Each capability is a crate (`architecture.toml` lists them and what each may use
 - `jig-settings`: `settings.toml` (the crate's root), `keyboard`, `recent`, `session`. `jig-tools`: installing tools, the PATH, Jig's folders.
 - `jig-languages`, `jig-formatters`, `jig-debuggers`: each the module of that name, as the crate's root (`languages::get` reads the same).
 - `jig-lsp`: `lsp`, `definitions`. `jig-editing` (layered; the same module paths through its facade): `domain/` `text_edits`, `snippets`, `completions`, `hover`; `store/` `persist` (`document`) and `cache` (snippets as read); `ui/` `find_panel`.
-- `jig-search`: `quick_open`, `find_in_files`, `project_search`. `jig-files`: `file_tree`, `file_icons`. `jig-run`: `run_configs`, `run_output`, `run_picker`.
+- `jig-search` (layered; the same module paths through its facade): `ui/` `quick_open`, `find_in_files`; `domain/` `files` (Go to File's list) and `text_search` (`project_search`, reading through `ProjectText`); `store/persist` (the files' text and the walk). `jig-files`: `file_tree`, `file_icons`. `jig-run`: `run_configs`, `run_output`, `run_picker`.
 - `jig-debug`: `dap`, `debug_target`, `lsp_debug`. `jig-agent`: `agent`, `agents`, `providers`. `jig-preferences`: `settings_window`, `about_window`.
 - `jig-git`, `jig-map`, `jig-planner`, `jig-updates`, and `jig-commands`, `jig-editor`, `jig-ai`, `jig-process` below.
 
