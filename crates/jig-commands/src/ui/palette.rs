@@ -4,8 +4,7 @@
 //! clicking away, dismisses it.
 
 use gpui_kit::component::input::{
-    Backspace, Enter, Escape, InputEvent, MoveDown, MoveEnd, MoveRight, MoveUp,
-    TextareaState,
+    Backspace, Enter, Escape, InputEvent, MoveDown, MoveEnd, MoveRight, MoveUp, TextareaState,
 };
 use gpui_kit::*;
 
@@ -206,8 +205,6 @@ impl CommandPalette {
         }
     }
 
-
-
     /// The earlier conversations and the agent's commands, listed once
     /// they've been fetched.
     pub fn set_agent_catalog(
@@ -243,8 +240,6 @@ impl CommandPalette {
         self.filtered_query = query;
         cx.notify();
     }
-
-
 
     /// The rest of the highlighted command's name when the text typed so
     /// far is how it starts and the cursor is at its end: "iew" after "/rev".
@@ -369,10 +364,7 @@ impl CommandPalette {
             cx.notify();
         }
     }
-
-
 }
-
 
 /// Replace the text with the cursor after it, where typing goes on. A
 /// textarea's own `set_value` puts it at the start.

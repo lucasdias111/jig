@@ -19,7 +19,9 @@ mod ui;
 // as before it was layered.
 pub use domain::fuzzy;
 pub use domain::palette::{AgentCommandInfo, ModelChoice, ModelMenu, PastConversation};
-pub use domain::transcript::{ChatEntry, ChatModels, ChatStatus, DiffLine, DrawingAction, LiveStep};
+pub use domain::transcript::{
+    ChatEntry, ChatModels, ChatStatus, DiffLine, DrawingAction, LiveStep,
+};
 pub use ui::bubble::Bubble;
 pub use ui::chat::{ChatDrag, ChatFrame, ChatResize, Conversation, LinkHandler};
 pub use ui::palette::{CommandPalette, PaletteEvent};

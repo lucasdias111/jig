@@ -280,4 +280,3 @@ impl RenderOnce for Conversation {
             .when(!pinned, |this| this.child(grip))
     }
 }
-

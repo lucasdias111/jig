@@ -10,10 +10,10 @@
 
 use std::ops::Range;
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{
     EditorState, Enter, Escape, IndentInline, InputEvent, InputState, OutdentInline,
 };
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 

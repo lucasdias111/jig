@@ -10,7 +10,6 @@ use super::details::{edit_with_diff, subagent};
 use super::{CHEVRON, CHEVRON_DOWN, ChatEntry, DrawingAction, DrawingHandler, LinkHandler};
 use crate::domain::transcript::{self, Row};
 
-
 /// The transcript's rows, as [`transcript::rows`] groups them, drawn.
 pub(super) fn transcript_rows(
     entries: Vec<ChatEntry>,
@@ -214,7 +213,6 @@ fn tool_calls(index: usize, calls: Vec<String>, window: &mut Window, cx: &mut Ap
         })
         .into_any_element()
 }
-
 
 fn render_entry(index: usize, entry: ChatEntry, cx: &App) -> AnyElement {
     let theme = cx.theme();
