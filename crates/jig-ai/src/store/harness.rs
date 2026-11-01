@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{AgentCommand, AgentEvent, AgentRequest, Conversation, Permissions, Turn};
 use super::{acp, opencode};
+use crate::domain::agent::{
+    AgentCommand, AgentEvent, AgentRequest, Conversation, Permissions, Turn,
+};
 
 /// A running agent, shared by every conversation with it.
 #[derive(Clone)]

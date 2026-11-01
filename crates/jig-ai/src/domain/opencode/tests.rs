@@ -1,4 +1,8 @@
+use super::events::*;
+use super::transcript::*;
 use super::*;
+use crate::domain::agent::*;
+use crate::domain::config::AgentModel;
 
 #[test]
 fn subagents_are_followed_by_their_sessions() {

@@ -9,6 +9,8 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context as _, Result};
 
+use crate::domain::config::ProviderConfig;
+
 /// Where a saved key lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyStore {
@@ -52,7 +54,7 @@ impl KeyStore {
     /// The keychain where the system has one, otherwise `keys.toml` in
     /// Jig's config folder.
     pub fn system() -> Option<Self> {
-        let file = crate::config::config_dir()?.join("keys.toml");
+        let file = super::config::config_dir()?.join("keys.toml");
         if cfg!(any(target_os = "macos", target_os = "windows")) {
             Some(KeyStore::Keychain(file))
         } else {
@@ -211,6 +213,31 @@ mod keychain {
     }
 }
 
+impl ProviderConfig {
+    /// The key to send and where it came from: the one saved in Settings,
+    /// otherwise the `api_key_env` variable.
+    pub fn api_key(
+        &self,
+        store: Option<&KeyStore>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Option<(String, KeySource)> {
+        store.and_then(|store| store.get(&self.name)).or_else(|| {
+            let var = self.api_key_env.as_deref()?;
+            let key = env(var).filter(|key| !key.trim().is_empty())?;
+            Some((key, KeySource::Env(var.to_string())))
+        })
+    }
+
+    /// The key from the system's store or the environment.
+    pub fn system_api_key(&self) -> Option<(String, KeySource)> {
+        self.api_key(KeyStore::system().as_ref(), env_var)
+    }
+}
+
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +265,27 @@ mod tests {
         store.delete("claude").unwrap();
         assert_eq!(store.get("claude"), None);
         assert_eq!(read_file(store.file()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_saved_key_wins_over_the_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::File(dir.path().join("keys.toml"));
+        let config = crate::domain::config::Config::parse(
+            "[[provider]]\nname = \"anthropic\"\nkind = \"anthropic\"\nbase_url = \"https://api.anthropic.com/v1\"\napi_key_env = \"ANTHROPIC_API_KEY\"\n",
+        )
+        .unwrap();
+        let anthropic = config.provider("anthropic").unwrap();
+        let env = |_: &str| Some("from-env".to_string());
+
+        let (key, source) = anthropic.api_key(Some(&store), env).unwrap();
+        assert_eq!(key, "from-env");
+        assert_eq!(source, KeySource::Env("ANTHROPIC_API_KEY".into()));
+
+        store.set("anthropic", "saved").unwrap();
+        assert_eq!(
+            anthropic.api_key(Some(&store), env),
+            Some(("saved".into(), KeySource::File))
+        );
     }
 }

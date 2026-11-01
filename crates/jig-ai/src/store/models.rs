@@ -3,8 +3,9 @@
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 
-use crate::config::{AuthStyle, ProviderConfig, ProviderKind, session_id};
-use crate::http;
+use super::http;
+use super::session::session_id;
+use crate::domain::config::{AuthStyle, ProviderConfig, ProviderKind};
 
 impl ProviderConfig {
     /// The model IDs the provider offers, from `GET {base_url}/models`,

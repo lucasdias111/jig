@@ -2,18 +2,14 @@
 //! the agent uses. API keys are never in this file: they're saved from
 //! Settings in the keychain (`keys.rs`) or read from environment variables.
 
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
-
-use crate::keys::{KeySource, KeyStore};
 
 /// No provider to begin with: Jig favours none. Connecting the first one
 /// in Settings picks a model for the agent.
 /// `agent` is there, empty, so the header stays above what Settings
 /// writes later.
-const DEFAULT_CONFIG: &str = "\
+pub(crate) const DEFAULT_CONFIG: &str = "\
 # No provider yet: connect one in Settings > Providers.
 agent = \"\"
 ";
@@ -21,7 +17,7 @@ agent = \"\"
 /// What to say while nothing is connected.
 const CONNECT_FIRST: &str = "Connect a provider in Settings > Providers first.";
 
-const CONFIG_HEADER: &str = "\
+pub(crate) const CONFIG_HEADER: &str = "\
 # Jig's AI providers, and the model the agent uses as provider/model in
 # `agent`. Settings > Providers and Agent edit this file too. API keys
 # are never stored here: paste them in Settings (they go in the system
@@ -131,23 +127,6 @@ impl Config {
         Self::parse(DEFAULT_CONFIG).expect("built-in config is valid")
     }
 
-    /// `~/.config/jig/config.toml`, honouring `XDG_CONFIG_HOME`.
-    pub fn user_path() -> Option<PathBuf> {
-        Some(config_dir()?.join("config.toml"))
-    }
-
-    /// The user's config if it exists, otherwise the built-in one.
-    pub fn load(path: Option<&Path>) -> Result<Self> {
-        match path.filter(|path| path.exists()) {
-            Some(path) => {
-                let source = std::fs::read_to_string(path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                Self::parse(&source).with_context(|| format!("parsing {}", path.display()))
-            }
-            None => Ok(Self::built_in()),
-        }
-    }
-
     pub fn provider(&self, name: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| p.name == name)
     }
@@ -187,68 +166,14 @@ impl Config {
         })
     }
 
-    /// Write the built-in config to `path` if there is nothing there yet,
-    /// so it can be edited.
-    pub fn ensure_user_file(path: &Path) -> Result<()> {
-        if path.exists() {
-            return Ok(());
-        }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        let source = format!("{CONFIG_HEADER}{}", DEFAULT_CONFIG.trim_start());
-        std::fs::write(path, source).with_context(|| format!("writing {}", path.display()))
-    }
-}
-
-/// Jig's config folder, `~/.config/jig`, honouring `XDG_CONFIG_HOME`.
-pub(crate) fn config_dir() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("jig"))
-}
-
-fn env_var(name: &str) -> Option<String> {
-    std::env::var(name).ok()
 }
 
 impl ProviderConfig {
-    /// The key to send and where it came from: the one saved in Settings,
-    /// otherwise the `api_key_env` variable.
-    pub fn api_key(
-        &self,
-        store: Option<&KeyStore>,
-        env: impl Fn(&str) -> Option<String>,
-    ) -> Option<(String, KeySource)> {
-        store.and_then(|store| store.get(&self.name)).or_else(|| {
-            let var = self.api_key_env.as_deref()?;
-            let key = env(var).filter(|key| !key.trim().is_empty())?;
-            Some((key, KeySource::Env(var.to_string())))
-        })
-    }
-
-    /// The key from the system's store or the environment.
-    pub fn system_api_key(&self) -> Option<(String, KeySource)> {
-        self.api_key(KeyStore::system().as_ref(), env_var)
-    }
-
     /// Whether the provider can't work without a key. Local
     /// OpenAI-compatible servers need none.
     pub fn needs_key(&self) -> bool {
         self.kind == ProviderKind::Anthropic || self.api_key_env.is_some()
     }
-}
-
-/// One ID per Jig launch, stable across that run's requests.
-pub fn session_id() -> &'static str {
-    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    ID.get_or_init(|| {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos());
-        format!("jig-{:x}-{nanos:x}", std::process::id())
-    })
 }
 
 #[cfg(test)]
@@ -311,7 +236,8 @@ session_header = \"x-opencode-session\"
             provider.session_header.as_deref(),
             Some("x-opencode-session")
         );
-        assert_eq!(session_id(), session_id());
+        let id = crate::store::session::session_id;
+        assert_eq!(id(), id());
     }
 
     #[test]
@@ -374,47 +300,9 @@ session_header = \"x-opencode-session\"
     }
 
     #[test]
-    fn user_file_starts_as_the_built_in_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("jig").join("config.toml");
-        Config::ensure_user_file(&path).unwrap();
-        let config = Config::load(Some(&path)).unwrap();
-        assert_eq!(config.providers.len(), Config::built_in().providers.len());
-        assert!(
-            std::fs::read_to_string(&path)
-                .unwrap()
-                .starts_with("# Jig's AI")
-        );
-
-        // An existing file is left alone.
-        std::fs::write(&path, "mine").unwrap();
-        Config::ensure_user_file(&path).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
-    }
-
-    #[test]
     fn local_provider_needs_no_key() {
         let config = parse(&TWO.replace("openrouter.ai/api", "localhost:11434"));
         assert!(config.provider("anthropic").unwrap().needs_key());
         assert!(!config.provider("openrouter").unwrap().needs_key());
-    }
-
-    #[test]
-    fn a_saved_key_wins_over_the_environment() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = KeyStore::File(dir.path().join("keys.toml"));
-        let config = parse(TWO);
-        let anthropic = config.provider("anthropic").unwrap();
-        let env = |_: &str| Some("from-env".to_string());
-
-        let (key, source) = anthropic.api_key(Some(&store), env).unwrap();
-        assert_eq!(key, "from-env");
-        assert_eq!(source, KeySource::Env("ANTHROPIC_API_KEY".into()));
-
-        store.set("anthropic", "saved").unwrap();
-        assert_eq!(
-            anthropic.api_key(Some(&store), env),
-            Some(("saved".into(), KeySource::File))
-        );
     }
 }

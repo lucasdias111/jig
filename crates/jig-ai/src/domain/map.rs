@@ -7,9 +7,11 @@
 //! and an agent run without a prompt refuses a tool it must ask about),
 //! and how a call to one is told apart in what an agent reports.
 
+use std::path::Path;
+
 use serde_json::{Value, json};
 
-use crate::tasks;
+use super::tasks;
 
 /// Run Jig as the Map's tools: `Jig --map-mcp [--project <folder>]`.
 pub const FLAG: &str = "--map-mcp";
@@ -38,33 +40,27 @@ pub const TOOLS: [&str; 10] = [
     PROPOSE_DOMAINS,
 ];
 
-/// The tool as OpenCode's config takes it, under `mcp`.
-pub fn opencode_server() -> Option<Value> {
-    let command = tasks::mcp::command()?;
-    Some(json!({
+/// The tool as OpenCode's config takes it, under `mcp`, started with
+/// `command`.
+pub fn opencode_server(command: &Path) -> Value {
+    json!({
         "type": "local",
         "command": [command, FLAG],
         "enabled": true,
-    }))
+    })
 }
 
-/// The server as an ACP conversation in `directory` takes it.
-pub fn acp_server(directory: &str) -> Option<Value> {
-    let command = tasks::mcp::command()?;
-    Some(json!({
-        "name": NAME,
-        "command": command,
-        "args": [FLAG, "--project", directory],
-        "env": [],
-    }))
-}
-
-/// Every server Jig hands an ACP conversation in `directory`: the tasks
-/// and the Map.
-pub fn acp_servers(directory: &str) -> Value {
-    let mut servers = tasks::mcp::acp_servers(directory);
-    if let (Some(list), Some(map)) = (servers.as_array_mut(), acp_server(directory)) {
-        list.push(map);
+/// Every server Jig hands an ACP conversation in `directory`, each
+/// started with `command`: the tasks and the Map. None without one.
+pub fn acp_servers(command: Option<&Path>, directory: &str) -> Value {
+    let mut servers = tasks::mcp::acp_servers(command, directory);
+    if let (Some(list), Some(command)) = (servers.as_array_mut(), command) {
+        list.push(json!({
+            "name": NAME,
+            "command": command,
+            "args": [FLAG, "--project", directory],
+            "env": [],
+        }));
     }
     servers
 }

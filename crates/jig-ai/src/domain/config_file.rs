@@ -2,12 +2,12 @@
 //! the user's comments and layout survive, and a file that doesn't parse is
 //! never written over.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use toml_edit::{ArrayOfTables, DocumentMut, Table, value};
 
-use crate::config::{Config, ProviderKind, split_model};
+use super::config::{ProviderKind, split_model};
 
 /// A major provider Settings offers to connect.
 #[derive(Clone, Copy, Debug)]
@@ -174,37 +174,11 @@ pub fn template_named(name: &str) -> Option<&'static ProviderTemplate> {
 
 /// The user's `config.toml`, open for editing.
 pub struct ConfigFile {
-    path: PathBuf,
-    doc: DocumentMut,
+    pub(crate) path: PathBuf,
+    pub(crate) doc: DocumentMut,
 }
 
 impl ConfigFile {
-    /// Open the file, writing the built-in providers there first if it
-    /// doesn't exist yet.
-    pub fn open(path: &Path) -> Result<Self> {
-        Config::ensure_user_file(path)?;
-        let source =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Config::parse(&source).with_context(|| format!("parsing {}", path.display()))?;
-        let doc = source
-            .parse::<DocumentMut>()
-            .with_context(|| format!("parsing {}", path.display()))?;
-        Ok(Self {
-            path: path.to_path_buf(),
-            doc,
-        })
-    }
-
-    /// Write the file and return what it now says. Refuses to write
-    /// anything Jig couldn't read back.
-    pub fn save(&self) -> Result<Config> {
-        let source = self.doc.to_string();
-        let config = Config::parse(&source)?;
-        std::fs::write(&self.path, source)
-            .with_context(|| format!("writing {}", self.path.display()))?;
-        Ok(config)
-    }
-
     /// The `[[provider]]` tables, started when there are none yet, as in
     /// a file before the first provider is connected.
     fn providers(&mut self) -> Result<&mut ArrayOfTables> {
@@ -298,7 +272,7 @@ impl ConfigFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AgentModel;
+    use crate::domain::config::AgentModel;
 
     fn open_temp() -> (tempfile::TempDir, PathBuf, ConfigFile) {
         let dir = tempfile::tempdir().unwrap();

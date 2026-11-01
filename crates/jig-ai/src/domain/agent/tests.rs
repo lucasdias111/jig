@@ -1,3 +1,4 @@
+use super::prompt::LINK_THE_CODE;
 use super::*;
 
 #[test]

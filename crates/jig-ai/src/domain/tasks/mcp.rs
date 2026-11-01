@@ -7,12 +7,11 @@
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
-use super::Todo;
+use super::{TaskStore, Todo};
 
 /// Run Jig as the task tool: `Jig --tasks-mcp [--project <folder>]`.
 pub const FLAG: &str = "--tasks-mcp";
@@ -35,33 +34,21 @@ const SHAPE: &str = "Keep a task short and concise. Its description is a one or 
 /// How to refer to code in a task.
 const LINKS: &str = "Write every reference to code (functions, types, variables, files) as a Markdown link with the name as its text and the path relative to the project, with the line, as its target: [`parse_reply`](crates/jig-ai/src/response.rs#L42), so the user can click through to it.";
 
-static COMMAND: OnceLock<PathBuf> = OnceLock::new();
-
-/// The executable agents start the tool with, normally Jig itself. Until
-/// it's set, as in tests, agents get no task tool.
-pub fn set_command(executable: PathBuf) {
-    let _ = COMMAND.set(executable);
-}
-
-/// The executable agents start Jig's tools with, once it's set.
-pub fn command() -> Option<&'static PathBuf> {
-    COMMAND.get()
-}
-
-/// The tool as OpenCode's config takes it, under `mcp`.
-pub fn opencode_server() -> Option<Value> {
-    let command = COMMAND.get()?;
-    Some(json!({
+/// The tool as OpenCode's config takes it, under `mcp`, started with
+/// `command`.
+pub fn opencode_server(command: &Path) -> Value {
+    json!({
         "type": "local",
         "command": [command, FLAG],
         "enabled": true,
-    }))
+    })
 }
 
-/// The `mcpServers` of an ACP conversation in `directory`. ACP has no
-/// working folder for a server, so it's told the project.
-pub fn acp_servers(directory: &str) -> Value {
-    match COMMAND.get() {
+/// The `mcpServers` of an ACP conversation in `directory`, the tool
+/// started with `command`; none without one. ACP has no working folder
+/// for a server, so it's told the project.
+pub fn acp_servers(command: Option<&Path>, directory: &str) -> Value {
+    match command {
         Some(command) => json!([{
             "name": NAME,
             "command": command,
@@ -85,7 +72,7 @@ pub fn project_from_args(args: &[String]) -> Result<PathBuf> {
 }
 
 /// Answer requests from `input` on `output` until the agent hangs up.
-pub fn serve(project: &Path, input: impl BufRead, mut output: impl Write) -> Result<()> {
+pub fn serve(store: &impl TaskStore, input: impl BufRead, mut output: impl Write) -> Result<()> {
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -102,7 +89,7 @@ pub fn serve(project: &Path, input: impl BufRead, mut output: impl Write) -> Res
             continue;
         };
         let method = message["method"].as_str().unwrap_or_default();
-        let answer = match handle(project, method, &message["params"]) {
+        let answer = match handle(store, method, &message["params"]) {
             Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
             Err(code) => {
                 json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": format!("Unknown method {method}")}})
@@ -114,7 +101,7 @@ pub fn serve(project: &Path, input: impl BufRead, mut output: impl Write) -> Res
     Ok(())
 }
 
-fn handle(project: &Path, method: &str, params: &Value) -> Result<Value, i64> {
+fn handle(store: &impl TaskStore, method: &str, params: &Value) -> Result<Value, i64> {
     Ok(match method {
         "initialize" => json!({
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
@@ -127,7 +114,7 @@ fn handle(project: &Path, method: &str, params: &Value) -> Result<Value, i64> {
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
             let arguments = &params["arguments"];
-            match call(project, name, arguments) {
+            match call(store, name, arguments) {
                 Ok(text) => json!({"content": [{"type": "text", "text": text}]}),
                 Err(error) => json!({
                     "content": [{"type": "text", "text": format!("{error:#}")}],
@@ -183,7 +170,7 @@ fn tools() -> Value {
     ])
 }
 
-fn call(project: &Path, name: &str, arguments: &Value) -> Result<String> {
+fn call(store: &impl TaskStore, name: &str, arguments: &Value) -> Result<String> {
     let text = |name: &str| arguments[name].as_str().map(str::to_string);
     let strings = |name: &str| -> Vec<String> {
         arguments[name]
@@ -210,7 +197,7 @@ fn call(project: &Path, name: &str, arguments: &Value) -> Result<String> {
                 .map(|todo| Todo::new(todo))
                 .collect();
             let task = super::create(
-                project,
+                store,
                 &text("title").unwrap_or_default(),
                 &text("description").unwrap_or_default(),
                 todos,
@@ -223,7 +210,7 @@ fn call(project: &Path, name: &str, arguments: &Value) -> Result<String> {
             ))
         }
         "list_tasks" => {
-            let tasks = super::list(project)?;
+            let tasks = store.list()?;
             if tasks.is_empty() {
                 return Ok("There are no tasks yet.".into());
             }
@@ -246,7 +233,7 @@ fn call(project: &Path, name: &str, arguments: &Value) -> Result<String> {
         }
         "update_task" => {
             let id = text("id").unwrap_or_default();
-            let mut task = super::load(project, &id)?;
+            let mut task = store.load(&id)?;
             for (field, done) in [("check", true), ("uncheck", false)] {
                 for n in numbers(field) {
                     let todo = n
@@ -264,7 +251,7 @@ fn call(project: &Path, name: &str, arguments: &Value) -> Result<String> {
             if let Some(description) = text("description") {
                 task.description = description;
             }
-            super::save(project, &task)?;
+            store.save(&task)?;
             Ok(format!(
                 "Updated \"{}\": {} of {} todos done.",
                 task.title,
@@ -284,7 +271,7 @@ mod tests {
     fn exchange(project: &Path, requests: &[Value]) -> Vec<Value> {
         let input: String = requests.iter().map(|r| format!("{r}\n")).collect();
         let mut output = Vec::new();
-        serve(project, input.as_bytes(), &mut output).unwrap();
+        crate::store::persist::tasks::serve(project, input.as_bytes(), &mut output).unwrap();
         String::from_utf8(output)
             .unwrap()
             .lines()
@@ -368,7 +355,7 @@ mod tests {
         assert!(text(2).contains("3. [ ] Link"), "{}", text(2));
         assert_eq!(answers[3]["result"]["isError"], true);
         assert_eq!(answers[4]["result"]["isError"], true);
-        let task = super::super::load(project.path(), "add-a-planner").unwrap();
+        let task = crate::store::persist::tasks::load(project.path(), "add-a-planner").unwrap();
         assert_eq!(task.description, "See [`list`](src/tasks.rs#L80).");
         assert_eq!(task.done(), 1);
     }

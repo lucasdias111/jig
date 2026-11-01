@@ -6,7 +6,7 @@
 //! ```markdown
 //! # Add a task planner
 //!
-//! Tasks live in [`tasks::list`](crates/jig-ai/src/tasks.rs#L80).
+//! Tasks live in [`tasks::list`](crates/jig-ai/src/store/persist/tasks.rs#L40).
 //!
 //! ## Todo
 //!
@@ -16,10 +16,7 @@
 
 pub mod mcp;
 
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 
 /// Where a project keeps its tasks, beside `.jig/run.toml`.
 pub const FOLDER: &str = ".jig/tasks";
@@ -174,13 +171,20 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub fn folder(project: &Path) -> PathBuf {
-    project.join(FOLDER)
+/// Where tasks are kept: the project's folder, or memory in tests.
+pub trait TaskStore {
+    /// Every task, newest first.
+    fn list(&self) -> Result<Vec<Task>>;
+    fn load(&self, id: &str) -> Result<Task>;
+    /// Write `task` over what's kept under its id.
+    fn save(&self, task: &Task) -> Result<()>;
+    /// Whether a task is kept under `id`.
+    fn taken(&self, id: &str) -> bool;
 }
 
-/// The file of the task `id`. Ids come from agents too, so one that could
-/// reach outside the folder is refused.
-pub fn path(project: &Path, id: &str) -> Result<PathBuf> {
+/// Refuses an id that could reach outside the tasks folder: ids come from
+/// agents too.
+pub fn check_id(id: &str) -> Result<()> {
     let fine = !id.is_empty()
         && id
             .chars()
@@ -188,71 +192,33 @@ pub fn path(project: &Path, id: &str) -> Result<PathBuf> {
     if !fine {
         bail!("There's no task {id:?}.");
     }
-    Ok(folder(project).join(format!("{id}.md")))
-}
-
-/// The project's tasks, newest first.
-pub fn list(project: &Path) -> Result<Vec<Task>> {
-    let entries = match std::fs::read_dir(folder(project)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error).context("Couldn't read the tasks folder"),
-    };
-    let mut tasks: Vec<(SystemTime, Task)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension()? != "md" {
-                return None;
-            }
-            let id = path.file_stem()?.to_str()?.to_string();
-            let text = std::fs::read_to_string(&path).ok()?;
-            let metadata = entry.metadata().ok();
-            // Not every file system knows when a file was made.
-            let made = metadata
-                .as_ref()
-                .and_then(|m| m.created().or_else(|_| m.modified()).ok())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some((made, Task::parse(&id, &text)))
-        })
-        .collect();
-    tasks.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.id.cmp(&y.id)));
-    Ok(tasks.into_iter().map(|(_, task)| task).collect())
-}
-
-pub fn load(project: &Path, id: &str) -> Result<Task> {
-    let text = std::fs::read_to_string(path(project, id)?)
-        .with_context(|| format!("There's no task {id:?}."))?;
-    Ok(Task::parse(id, &text))
-}
-
-/// Write `task` over its file.
-pub fn save(project: &Path, task: &Task) -> Result<()> {
-    let path = path(project, &task.id)?;
-    std::fs::create_dir_all(folder(project)).context("Couldn't make the tasks folder")?;
-    std::fs::write(&path, task.to_markdown())
-        .with_context(|| format!("Couldn't save {}", path.display()))
+    Ok(())
 }
 
 /// A new task, saved under an id made from its title.
-pub fn create(project: &Path, title: &str, description: &str, todos: Vec<Todo>) -> Result<Task> {
+pub fn create(
+    store: &impl TaskStore,
+    title: &str,
+    description: &str,
+    todos: Vec<Todo>,
+) -> Result<Task> {
     let title = one_line(title);
     if title.is_empty() {
         bail!("A task needs a title.");
     }
     let task = Task {
-        id: fresh_id(project, &title),
+        id: fresh_id(store, &title),
         title,
         description: description.trim().to_string(),
         todos,
     };
-    save(project, &task)?;
+    store.save(&task)?;
     Ok(task)
 }
 
 /// `Add a task planner` → `add-a-task-planner`, with `-2` and so on when
 /// that's taken.
-fn fresh_id(project: &Path, title: &str) -> String {
+fn fresh_id(store: &impl TaskStore, title: &str) -> String {
     let mut base = String::new();
     for c in title.chars().flat_map(char::to_lowercase) {
         if c.is_alphanumeric() {
@@ -268,13 +234,12 @@ fn fresh_id(project: &Path, title: &str) -> String {
         "" => "task".to_string(),
         base => base.to_string(),
     };
-    let taken = |id: &str| path(project, id).is_ok_and(|path| path.exists());
-    if !taken(&base) {
+    if !store.taken(&base) {
         return base;
     }
     (2..)
         .map(|n| format!("{base}-{n}"))
-        .find(|id| !taken(id))
+        .find(|id| !store.taken(id))
         .unwrap_or(base)
 }
 
@@ -315,44 +280,6 @@ mod tests {
         );
         assert!(task.todos.is_empty());
         assert_eq!(Task::parse("x", "").title, "x");
-    }
-
-    #[test]
-    fn creates_lists_and_saves_tasks() {
-        let project = tempfile::tempdir().unwrap();
-        assert!(list(project.path()).unwrap().is_empty(), "no folder yet");
-        let first = create(
-            project.path(),
-            "Add a planner!",
-            "Why",
-            vec![Todo::new("one\ntwo")],
-        )
-        .unwrap();
-        assert_eq!(first.id, "add-a-planner");
-        assert_eq!(first.todos[0].text, "one two");
-        let second = create(project.path(), "Add a planner", "", vec![]).unwrap();
-        assert_eq!(second.id, "add-a-planner-2");
-        let mut loaded = load(project.path(), "add-a-planner").unwrap();
-        assert_eq!(loaded, first);
-        loaded.todos[0].done = true;
-        save(project.path(), &loaded).unwrap();
-        let ids: Vec<String> = list(project.path())
-            .unwrap()
-            .into_iter()
-            .map(|task| task.id)
-            .collect();
-        assert_eq!(ids.len(), 2);
-        assert!(load(project.path(), "add-a-planner").unwrap().todos[0].done);
-    }
-
-    #[test]
-    fn refuses_ids_that_leave_the_folder() {
-        let project = Path::new("/p");
-        assert!(path(project, "../secrets").is_err());
-        assert!(path(project, "a/b").is_err());
-        assert!(path(project, "").is_err());
-        assert!(path(project, "fine-id_2").is_ok());
-        assert!(create(project, "  ", "", vec![]).is_err());
     }
 
     #[test]
