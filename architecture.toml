@@ -179,9 +179,17 @@ uses = [
     "run",
 ]
 
+# The AI layer without GPUI: the agents' types and protocol clients, the
+# providers' config and keys, the tasks and the Map's tools, in its own crate.
+[capability.ai]
+crate = "jig-ai"
+layered = true
+uses = []
+
 # The coding agent: agents as data, providers and the shared OpenCode server, in its own crate.
 [capability.agent]
 crate = "jig-agent"
+layered = true
 uses = ["settings", "kit", "tools"]
 
 # The task planner, in its own crate.
@@ -221,6 +229,7 @@ uses = [
 modules = ["main", "workspace", "menus", "shortcuts"]
 contract = ["main", "workspace", "menus", "shortcuts"]
 uses = [
+    "ai",
     "settings",
     "kit",
     "tools",

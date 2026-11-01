@@ -1,9 +1,6 @@
 # Source files over 500 lines, kept until they're split. Each line is `path lines`,
 # and a file's length may only come down.
 # Written by JIG_LENGTH_BLESS=1 cargo test -p jig-app --test file_length.
-crates/jig-ai/src/agent.rs 578
-crates/jig-ai/src/agent/acp.rs 1526
-crates/jig-ai/src/agent/opencode.rs 1078
 crates/jig-app/src/shortcuts.rs 649
 crates/jig-app/src/workspace.rs 964
 crates/jig-app/src/workspace/commands.rs 600
