@@ -105,6 +105,20 @@ jig-app = [
     "jig-updates",
 ]
 
+# The ⌘K input, the agent's conversation, notes and the shared panel
+# styling, in its own crate.
+[capability.commands]
+crate = "jig-commands"
+layered = true
+uses = []
+
+# `EditorHandle`, the only way the AI layer touches the editor, in its own
+# crate.
+[capability.editor_handle]
+crate = "jig-editor"
+layered = true
+uses = []
+
 # Settings files and what's remembered between launches, in their own crate.
 [capability.settings]
 crate = "jig-settings"
@@ -146,6 +160,7 @@ uses = ["kit", "languages", "debuggers", "tools"]
 # find in the file, in its own crate.
 [capability.editor]
 crate = "jig-editing"
+layered = true
 uses = ["settings", "kit", "language_servers", "languages"]
 
 # Go to File and Find in Files, in its own crate.
@@ -220,6 +235,8 @@ uses = [
 modules = ["main", "workspace", "menus", "shortcuts"]
 contract = ["main", "workspace", "menus", "shortcuts"]
 uses = [
+    "commands",
+    "editor_handle",
     "settings",
     "kit",
     "tools",
