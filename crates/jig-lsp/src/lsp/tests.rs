@@ -1,6 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use serde_json::json;
 
 use super::*;
+use crate::store::servers::command_for;
 
 #[test]
 fn positions_round_trip_in_both_encodings() {
