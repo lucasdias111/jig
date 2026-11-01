@@ -8,16 +8,16 @@ use jig_kit::theme;
 use jig_languages as languages;
 use jig_settings::LanguageSettings;
 
-const RUST: &[u8] = include_bytes!("../../../assets/icons/rust.svg");
-const TYPESCRIPT: &[u8] = include_bytes!("../../../assets/icons/typescript.svg");
-const JAVASCRIPT: &[u8] = include_bytes!("../../../assets/icons/javascript.svg");
-const JAVA: &[u8] = include_bytes!("../../../assets/icons/java.svg");
-const PYTHON: &[u8] = include_bytes!("../../../assets/icons/python.svg");
-const GO: &[u8] = include_bytes!("../../../assets/icons/go.svg");
-const TOML: &[u8] = include_bytes!("../../../assets/icons/toml.svg");
-const JSON: &[u8] = include_bytes!("../../../assets/icons/json.svg");
-const MARKDOWN: &[u8] = include_bytes!("../../../assets/icons/markdown.svg");
-const GDSCRIPT: &[u8] = include_bytes!("../../../assets/icons/gdscript.svg");
+const RUST: &[u8] = include_bytes!("../../../../assets/icons/rust.svg");
+const TYPESCRIPT: &[u8] = include_bytes!("../../../../assets/icons/typescript.svg");
+const JAVASCRIPT: &[u8] = include_bytes!("../../../../assets/icons/javascript.svg");
+const JAVA: &[u8] = include_bytes!("../../../../assets/icons/java.svg");
+const PYTHON: &[u8] = include_bytes!("../../../../assets/icons/python.svg");
+const GO: &[u8] = include_bytes!("../../../../assets/icons/go.svg");
+const TOML: &[u8] = include_bytes!("../../../../assets/icons/toml.svg");
+const JSON: &[u8] = include_bytes!("../../../../assets/icons/json.svg");
+const MARKDOWN: &[u8] = include_bytes!("../../../../assets/icons/markdown.svg");
+const GDSCRIPT: &[u8] = include_bytes!("../../../../assets/icons/gdscript.svg");
 
 /// A language's logo and its color, in Ember's light and dark variants.
 struct Logo {

@@ -1,10 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use super::{
-    Moved, NewEntry, TreeModel, create_entry, move_entries, moved_path, outermost, rename_entry,
-    stem_range,
-};
+use crate::domain::paths::{Moved, NewEntry, moved_path, outermost, stem_range};
+use crate::store::cache::TreeModel;
+use crate::store::persist::{create_entry, move_entries, rename_entry};
 
 fn names(model: &TreeModel) -> Vec<String> {
     model
