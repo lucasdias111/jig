@@ -21,15 +21,15 @@ use std::collections::{HashMap, HashSet};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
+use super::zoom::{Camera, Transition};
+use super::{Level, MapEvent, MapView};
 use crate::domain::layout::Rect;
-use crate::store::cache::Folder;
 use crate::domain::lens::{Drawing, Kind as LensKind, Place, resolve, slashed};
 use crate::domain::plan::{Focus, Item};
 use crate::domain::sketch::{
     self, Frame, Match, Note, ShapeKind, ShapeRef, Sketch, SketchArrow, SketchBox,
 };
-use super::zoom::{Camera, Transition};
-use super::{Level, MapEvent, MapView};
+use crate::store::cache::Folder;
 
 mod adopting;
 mod history;
@@ -37,8 +37,10 @@ mod hits;
 mod labels;
 mod layout;
 mod mouse;
+mod picking;
 mod shapes;
 mod telling;
+pub(super) use picking::*;
 
 /// Shapes' sizes on screen when drawn with a click, before the zoom.
 pub(super) const BOX: (f32, f32) = (180., 64.);
@@ -259,7 +261,9 @@ impl MapView {
             _ => {
                 let place = key.strip_prefix("plan:")?;
                 let function = self.project.as_ref().and_then(|project| {
-                    let id = resolve(project, None, &Folder(&self.root), place).ok()?.function_in(project)?;
+                    let id = resolve(project, None, &Folder(&self.root), place)
+                        .ok()?
+                        .function_in(project)?;
                     Some(project.symbol(id))
                 });
                 Some(Level::Plan(match function {
@@ -276,48 +280,11 @@ fn worth_keeping(sketch: &Sketch) -> bool {
     !sketch.is_empty() || sketch.task.is_some()
 }
 
-/// Every shape of `sketch`, as selections name them.
-pub(super) fn shapes_of(sketch: &Sketch) -> Vec<ShapeRef> {
-    let shape = |kind: ShapeKind, id: String| ShapeRef {
-        sketch: sketch.name.clone(),
-        kind,
-        id,
-    };
-    sketch
-        .boxes
-        .iter()
-        .map(|b| shape(ShapeKind::Box, b.id.clone()))
-        .chain((0..sketch.arrows.len()).map(|ix| shape(ShapeKind::Arrow, ix.to_string())))
-        .chain(
-            sketch
-                .notes
-                .iter()
-                .map(|n| shape(ShapeKind::Note, n.id.clone())),
-        )
-        .chain(
-            sketch
-                .frames
-                .iter()
-                .map(|f| shape(ShapeKind::Frame, f.id.clone())),
-        )
-        .collect()
-}
-
 /// How far drawing point `at` is from `rect` (0 inside it).
 fn distance(rect: Rect, (x, y): (f32, f32)) -> f32 {
     let dx = (rect.x - x).max(0.).max(x - rect.right());
     let dy = (rect.y - y).max(0.).max(y - rect.bottom());
     dx.hypot(dy)
-}
-
-/// `rect` grown by `by` on every side (shrunk, for less than 0).
-fn grow(rect: Rect, by: f32) -> Rect {
-    Rect {
-        x: rect.x - by,
-        y: rect.y - by,
-        width: (rect.width + 2. * by).max(0.),
-        height: (rect.height + 2. * by).max(0.),
-    }
 }
 
 /// Positions are kept to whole points, so the files read well.

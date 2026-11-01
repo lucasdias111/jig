@@ -8,10 +8,10 @@
 
 use gpui_kit::*;
 
-use crate::domain::domains::level::RegionKind;
-use crate::store::cache::Folder;
-use crate::domain::plan::{Focus, Item};
 use super::{Level, MapEvent, MapView};
+use crate::domain::domains::level::RegionKind;
+use crate::domain::plan::{Focus, Item};
+use crate::store::cache::Folder;
 
 /// Most boxes and arrows an outline lists.
 const MOST_BOXES: usize = 60;
@@ -87,8 +87,10 @@ impl MapView {
                         (Item::Function(id), Some(project)) => {
                             let function = &project.functions[*id];
                             let path = project.files[function.file].path.clone();
-                            let at =
-                                line_of(Folder(&self.root).text(&path), function.outline.function.name_at);
+                            let at = line_of(
+                                Folder(&self.root).text(&path),
+                                function.outline.function.name_at,
+                            );
                             format!(
                                 "- {}#{} {} ({}:{at})",
                                 crate::domain::lens::slashed(&path),

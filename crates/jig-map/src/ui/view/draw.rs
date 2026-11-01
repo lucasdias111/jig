@@ -13,13 +13,13 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::domain::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT, Rect};
-use crate::domain::plan::Focus;
-use crate::domain::site::Show;
 use super::input::Hover;
 use super::scene::{Arrow, Card, FrameBox, Look, Scene};
 use super::zoom::Camera;
 use super::{Expand, Level, MapView, domain};
+use crate::domain::layout::{HEADER_HEIGHT, PADDING, ROW_HEIGHT, Rect};
+use crate::domain::plan::Focus;
+use crate::domain::site::Show;
 
 mod canvas;
 mod cards;

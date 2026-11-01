@@ -1,5 +1,5 @@
-use crate::domain::layout::Rect;
 use super::{Landing, fold};
+use crate::domain::layout::Rect;
 
 fn landing(key: &str) -> Option<Landing> {
     Some(Landing {

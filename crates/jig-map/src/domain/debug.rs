@@ -123,8 +123,8 @@ fn strength(at: Option<&Instant>, now: Instant) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::index::tests::{fixture, id};
     use super::*;
+    use crate::domain::index::tests::{fixture, id};
 
     #[test]
     fn a_stack_is_its_functions_innermost_first() {

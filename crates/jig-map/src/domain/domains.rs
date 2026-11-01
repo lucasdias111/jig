@@ -17,10 +17,10 @@
 pub mod actions;
 pub mod grouping;
 pub mod level;
+mod text;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
-
 
 /// Where the domains are kept, in the project.
 pub const FILE: &str = ".jig/map/domains.toml";
@@ -74,29 +74,6 @@ pub enum Home {
 }
 
 impl Domains {
-    /// As `domains.toml` says it: one table per domain with its members
-    /// one to a line, then the flows, then Shared.
-    pub fn to_toml(&self) -> String {
-        let mut out = String::new();
-        for domain in &self.domains {
-            out.push_str("[[domain]]\n");
-            out.push_str(&format!("name = {}\n", quoted(&domain.name)));
-            out.push_str(&format!("purpose = {}\n", quoted(&domain.purpose)));
-            out.push_str(&format!("offers = {}\n", inline_list(&domain.offers)));
-            out.push_str(&format!("why = {}\n", quoted(&domain.why)));
-            out.push_str(&format!("members = {}\n\n", long_list(&domain.members)));
-        }
-        for flow in &self.flows {
-            out.push_str("[[flow]]\n");
-            out.push_str(&format!("from = {}\n", quoted(&flow.from)));
-            out.push_str(&format!("to = {}\n", quoted(&flow.to)));
-            out.push_str(&format!("label = {}\n\n", quoted(&flow.label)));
-        }
-        out.push_str("[shared]\n");
-        out.push_str(&format!("members = {}\n", long_list(&self.shared.members)));
-        out
-    }
-
     pub fn index_of(&self, name: &str) -> Option<usize> {
         self.domains.iter().position(|domain| domain.name == name)
     }
@@ -224,36 +201,6 @@ impl Domains {
             keep
         });
     }
-
-    /// Each domain's name, purpose and what it offers, then the flows, as
-    /// Markdown to paste into any doc.
-    pub fn markdown(&self, project: &str) -> String {
-        let mut out = format!("# {project}: domains\n");
-        for domain in &self.domains {
-            out.push_str(&format!("\n## {}\n\n", domain.name));
-            if !domain.purpose.is_empty() {
-                out.push_str(&format!("{}\n", domain.purpose));
-            }
-            if !domain.offers.is_empty() {
-                out.push_str("\nOffers:\n");
-                for offer in &domain.offers {
-                    out.push_str(&format!("- {offer}\n"));
-                }
-            }
-        }
-        if !self.flows.is_empty() {
-            out.push_str("\n## How they work together\n\n");
-            for flow in &self.flows {
-                let label = if flow.label.is_empty() {
-                    "works with"
-                } else {
-                    &flow.label
-                };
-                out.push_str(&format!("- {} {label} {}\n", flow.from, flow.to));
-            }
-        }
-        out
-    }
 }
 
 /// How closely a member names a place, closest highest: a type of its
@@ -327,106 +274,4 @@ pub fn all_files(project: &super::index::Project) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample() -> Domains {
-        toml::from_str(
-            r#"
-[[domain]]
-name = "Bugs"
-purpose = "Report bugs."
-offers = ["Bug form"]
-why = "They handle bugs."
-members = ["server/src/org/demo/bugs/", "server/src/org/demo/users/UserService.java#UserService"]
-
-[[domain]]
-name = "Rooms"
-purpose = "Join rooms."
-members = ["client/"]
-
-[[flow]]
-from = "Rooms"
-to = "Bugs"
-label = "reports problems to"
-
-[shared]
-members = ["client/src/net/", "server/src/org/demo/bugs/Notifier.java"]
-"#,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn the_closest_member_is_a_files_home() {
-        let domains = sample();
-        assert_eq!(
-            domains.home_of("server/src/org/demo/bugs/BugService.java"),
-            Home::Domain(0)
-        );
-        // A file over its folder, a deeper folder over one further out.
-        assert_eq!(
-            domains.home_of("server/src/org/demo/bugs/Notifier.java"),
-            Home::Shared
-        );
-        assert_eq!(domains.home_of("client/src/net/socket.ts"), Home::Shared);
-        assert_eq!(domains.home_of("client/src/rooms.ts"), Home::Domain(1));
-        // A type of its own, apart from its file.
-        assert_eq!(
-            domains.home_of("server/src/org/demo/users/UserService.java#UserService"),
-            Home::Domain(0)
-        );
-        assert_eq!(
-            domains.home_of("server/src/org/demo/users/UserService.java"),
-            Home::Unsorted
-        );
-        // A type nothing names follows its file.
-        assert_eq!(domains.home_of("client/src/rooms.ts#Room"), Home::Domain(1));
-    }
-
-    #[test]
-    fn written_as_it_was_read() {
-        let domains = sample();
-        let text = domains.to_toml();
-        assert!(text.contains("members = [\n  \"server/src/org/demo/bugs/\",\n"));
-        assert!(text.contains("offers = [\"Bug form\"]"));
-        let again: Domains = toml::from_str(&text).unwrap();
-        assert_eq!(again, domains);
-    }
-
-    #[test]
-    fn edits_keep_names_and_flows_together() {
-        let mut domains = sample();
-        domains.rename(0, "Bug Reports");
-        assert_eq!(domains.flows[0].to, "Bug Reports");
-        // A name another domain has is refused.
-        domains.rename(0, "Rooms");
-        assert_eq!(domains.domains[0].name, "Bug Reports");
-
-        domains.move_member("client/src/rooms.ts", Home::Domain(0));
-        assert_eq!(domains.home_of("client/src/rooms.ts"), Home::Domain(0));
-        domains.move_member("client/src/rooms.ts", Home::Domain(1));
-        // Back where its folder puts it, and not named twice.
-        assert!(
-            !domains.domains[1]
-                .members
-                .contains(&"client/src/rooms.ts".into())
-        );
-        assert_eq!(domains.home_of("client/src/rooms.ts"), Home::Domain(1));
-
-        domains.merge(1, 0);
-        assert_eq!(domains.domains.len(), 1);
-        assert_eq!(domains.home_of("client/src/rooms.ts"), Home::Domain(0));
-        // The flow between them is now within one domain: gone.
-        assert!(domains.flows.is_empty());
-    }
-
-    #[test]
-    fn markdown_lists_names_purposes_offers_and_flows() {
-        let text = sample().markdown("demo");
-        assert!(
-            text.starts_with("# demo: domains\n\n## Bugs\n\nReport bugs.\n\nOffers:\n- Bug form\n")
-        );
-        assert!(text.contains("- Rooms reports problems to Bugs\n"));
-    }
-}
+mod tests;

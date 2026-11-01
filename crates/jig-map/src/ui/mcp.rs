@@ -73,7 +73,13 @@ pub fn serve(root: &Path, input: impl BufRead, mut output: impl Write) -> Result
                 }
                 let domains = Domains::read(root);
                 let answer = match &project {
-                    Some(project) => answer(project, domains.as_ref(), &Folder(root), name, &params["arguments"]),
+                    Some(project) => answer(
+                        project,
+                        domains.as_ref(),
+                        &Folder(root),
+                        name,
+                        &params["arguments"],
+                    ),
                     None => Err("The project couldn't be read.".into()),
                 };
                 Ok(match answer {

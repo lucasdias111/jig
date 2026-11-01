@@ -75,7 +75,10 @@ pub fn links_of(project: &Project, sources: &dyn Sources, place: &str) -> (Vec<L
         }
     }
     for from in project.others.iter().take(MAX_SCANNED) {
-        let Some(text) = sources.read(from).and_then(|bytes| String::from_utf8(bytes).ok()) else {
+        let Some(text) = sources
+            .read(from)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
             continue;
         };
         for spec in import_lines(&text) {

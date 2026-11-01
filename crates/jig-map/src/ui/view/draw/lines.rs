@@ -254,7 +254,11 @@ fn overlap(a: &Rect, b: &Rect) -> f32 {
 
 /// The point `t` along a bowed arrow from `from` to `to`: the control
 /// point sits off the middle, to the arrow's left.
-pub(in crate::ui::view) fn bow_point(from: Point<Pixels>, to: Point<Pixels>, t: f32) -> Point<Pixels> {
+pub(in crate::ui::view) fn bow_point(
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    t: f32,
+) -> Point<Pixels> {
     let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
     let bend = 0.12;
     let control = point(

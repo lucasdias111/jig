@@ -282,10 +282,10 @@ enum Slot {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::domain::index::Project;
     use crate::domain::index::tests::{fixture, id};
     use crate::domain::plan::{Opened, neighbourhood};
-    use super::*;
 
     #[test]
     fn callers_go_left_and_callees_right_without_overlapping() {

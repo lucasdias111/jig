@@ -39,7 +39,9 @@ impl MapView {
 
     /// The sketches to mark at the level showing: drawn elsewhere, on the
     /// boxes here that carry them. Each mark: the box, and the sketches.
-    pub(in crate::ui::view) fn sketch_marks(&self) -> Vec<(super::super::lens::Landing, Vec<String>)> {
+    pub(in crate::ui::view) fn sketch_marks(
+        &self,
+    ) -> Vec<(super::super::lens::Landing, Vec<String>)> {
         let here = self.view_key();
         let mut marks: Vec<(super::super::lens::Landing, Vec<String>)> = Vec::new();
         for sketch in &self.sketches.sketches {

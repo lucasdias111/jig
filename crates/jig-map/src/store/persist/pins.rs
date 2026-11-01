@@ -91,8 +91,8 @@ fn slug(title: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::lens::{Kind, Step};
     use super::*;
+    use crate::domain::lens::{Kind, Step};
 
     #[test]
     fn pins_are_saved_by_title_and_read_back() {
