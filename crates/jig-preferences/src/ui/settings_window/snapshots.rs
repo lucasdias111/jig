@@ -1,0 +1,154 @@
+//! Pictures of every Settings page and of About Jig, light and dark, for looking at the
+//! design without a screen: `JIG_SNAPSHOTS=<folder> cargo run -p jig-app
+//! --features snapshots`. macOS only, since it needs GPUI's Metal renderer,
+//! and run from `main` because the Mac platform must be made on the main
+//! thread.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use gpui_kit::assets::Assets;
+use gpui_kit::{
+    AppContext as _, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, px, size,
+};
+
+use super::{Detail, Nav, Page, START, SettingsWindow};
+use crate::store::scratch;
+use jig_settings::{self as settings, ThemeChoice};
+
+pub fn run(dir: &Path) {
+    scratch::make_folder(dir);
+    // Taller pictures show more of a long page.
+    let height: f32 = std::env::var("JIG_SNAPSHOT_HEIGHT")
+        .ok()
+        .and_then(|height| height.parse().ok())
+        .unwrap_or(600.);
+    let config = scratch::scratch_config();
+    // Each page, then a search.
+    let shown = Page::ALL
+        .into_iter()
+        .map(|page| (Nav::page(page), None))
+        .chain([
+            (Nav::detail(Page::Appearance, Detail::Colors), None),
+            (Nav::detail(Page::Languages, Detail::Language(0)), None),
+            (Nav::detail(Page::Languages, Detail::Library), None),
+            (Nav::page(Page::Appearance), Some("format")),
+        ]);
+    for dark in [false, true] {
+        for (ix, (nav, query)) in shown.clone().enumerate() {
+            START.set(nav);
+            let mut cx = HeadlessAppContext::with_platform(
+                gpui_kit::platform::current_platform(true).text_system(),
+                Arc::new(Assets),
+                gpui_kit::platform::current_headless_renderer,
+            );
+            cx.update(|cx| {
+                gpui_kit::init(cx);
+                jig_agent::providers::init_at(&config, cx);
+                settings::update(cx, |s| {
+                    s.appearance.theme = if dark {
+                        ThemeChoice::Dark
+                    } else {
+                        ThemeChoice::Light
+                    }
+                });
+                jig_kit::theme::init(cx);
+                jig_kit::theme::apply(None, cx);
+            });
+            let (handle, _) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                                origin: Default::default(),
+                                size: size(px(820.), px(height)),
+                            })),
+                            focus: false,
+                            show: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |window, cx| cx.new(|cx| SettingsWindow::new(window, cx)),
+                    )
+                })
+                .expect("opening Settings");
+            if let Some(query) = query {
+                cx.update_window(handle, |root, window, cx| {
+                    let root = root.downcast::<gpui_kit::component::Root>().unwrap();
+                    let view = root.read(cx).view().clone().downcast::<SettingsWindow>();
+                    view.unwrap().update(cx, |this, cx| {
+                        this.search
+                            .update(cx, |search, cx| search.set_value(query, window, cx))
+                    });
+                })
+                .expect("searching Settings");
+            }
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+                    .expect("drawing Settings");
+            }
+            let image = cx.capture_screenshot(handle).expect("rendering with Metal");
+            let name = format!(
+                "{ix}-{}-{}.png",
+                query.map_or_else(
+                    || nav.title().to_lowercase().replace(' ', "-"),
+                    |query| format!("search-{query}")
+                ),
+                if dark { "dark" } else { "light" }
+            );
+            image.save(dir.join(name)).expect("saving a snapshot");
+        }
+    }
+    for dark in [false, true] {
+        about(dir, dark);
+    }
+    scratch::remove_folder(&config);
+    START.set(Nav::page(Page::Appearance));
+}
+
+/// About Jig, at the size it opens.
+fn about(dir: &Path, dark: bool) {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        settings::update(cx, |s| {
+            s.appearance.theme = if dark {
+                ThemeChoice::Dark
+            } else {
+                ThemeChoice::Light
+            }
+        });
+        jig_kit::theme::init(cx);
+        jig_kit::theme::apply(None, cx);
+    });
+    let (handle, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(280.), px(300.)),
+                    })),
+                    focus: false,
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| crate::ui::about_window::AboutWindow::new(window, cx)),
+            )
+        })
+        .expect("opening About Jig");
+    for _ in 0..3 {
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+            .expect("drawing About Jig");
+    }
+    let image = cx.capture_screenshot(handle).expect("rendering with Metal");
+    let name = format!("about-{}.png", if dark { "dark" } else { "light" });
+    image.save(dir.join(name)).expect("saving a snapshot");
+}
