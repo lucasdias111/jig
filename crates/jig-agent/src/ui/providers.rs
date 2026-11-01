@@ -13,6 +13,8 @@ use jig_ai::{
     AgentModel, Config, ConfigFile, KeySource, KeyStore, ProviderConfig, ProviderTemplate,
 };
 
+use crate::store::persist::providers as persist;
+
 /// How long typing in a key field waits before asking for models, so a
 /// key typed by hand isn't tried at every keystroke.
 const TYPING_PAUSE: Duration = Duration::from_millis(600);
@@ -43,7 +45,7 @@ impl Global for Providers {}
 impl Providers {
     fn new(path: Option<PathBuf>, store: Option<KeyStore>) -> Self {
         Self {
-            config: read(path.as_ref()),
+            config: persist::read(path.as_deref()),
             path,
             store,
             models: HashMap::new(),
@@ -52,12 +54,9 @@ impl Providers {
     }
 }
 
-fn read(path: Option<&PathBuf>) -> Result<Config, String> {
-    Config::load(path.map(PathBuf::as_path)).map_err(|error| format!("{error:#}"))
-}
-
 pub fn init(cx: &mut App) {
-    cx.set_global(Providers::new(Config::user_path(), KeyStore::system()));
+    let (path, store) = persist::user_files();
+    cx.set_global(Providers::new(path, store));
     // So ⌘K and the agent's header can list them before Settings opens.
     load_all_models(true, cx);
 }
@@ -66,7 +65,7 @@ pub fn init(cx: &mut App) {
 pub fn reload(cx: &mut App) {
     if cx.has_global::<Providers>() {
         cx.update_global::<Providers, _>(|providers, _| {
-            providers.config = read(providers.path.as_ref());
+            providers.config = persist::read(providers.path.as_deref());
         });
     }
 }
@@ -170,12 +169,7 @@ pub fn edit(
     let Some(path) = providers.path.clone() else {
         return Err("Couldn't find your home folder.".into());
     };
-    let config = ConfigFile::open(&path)
-        .and_then(|mut file| {
-            change(&mut file)?;
-            file.save()
-        })
-        .map_err(|error| format!("{error:#}"))?;
+    let config = persist::edit(&path, change)?;
     cx.update_global::<Providers, _>(|providers, _| providers.config = Ok(config));
     Ok(())
 }
@@ -216,12 +210,7 @@ fn save_key(provider: &str, key: &str, cx: &mut App) -> Result<(), String> {
     let Some(store) = store(cx) else {
         return Ok(());
     };
-    let result = if key.trim().is_empty() {
-        store.delete(provider)
-    } else {
-        store.set(provider, key).map(drop)
-    };
-    result.map_err(|error| format!("{error:#}"))?;
+    persist::save_key(&store, provider, key)?;
     // Nothing in the file changed, but the agent must be set up again.
     cx.update_global::<Providers, _>(|_, _| {});
     Ok(())
@@ -284,7 +273,7 @@ fn load_models(name: &str, pause: Duration, cx: &mut App) {
             }
             let result = cx
                 .background_executor()
-                .spawn(async move { provider.list_models(key.as_deref()) })
+                .spawn(async move { persist::list_models(&provider, key.as_deref()) })
                 .await;
             let list = match result {
                 Ok(models) if models.is_empty() => ModelList::Failed("It listed no models.".into()),
@@ -308,119 +297,18 @@ fn load_models(name: &str, pause: Duration, cx: &mut App) {
 /// Settings.
 #[cfg(feature = "snapshots")]
 pub fn init_at(dir: &std::path::Path, cx: &mut App) {
-    let store = KeyStore::File(dir.join("keys.toml"));
-    cx.set_global(Providers::new(Some(dir.join("config.toml")), Some(store)));
+    let (path, store) = persist::files_in(dir);
+    cx.set_global(Providers::new(path, store));
 }
 
 /// Providers in a temporary folder, with keys in a file there.
 #[cfg(any(test, feature = "testing"))]
 pub fn init_temp(cx: &mut gpui_kit::TestAppContext) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let store = KeyStore::File(dir.path().join("keys.toml"));
-    cx.update(|cx| cx.set_global(Providers::new(Some(path), Some(store))));
+    let (path, store) = persist::files_in(dir.path());
+    cx.update(|cx| cx.set_global(Providers::new(path, store)));
     dir
 }
 
 #[cfg(test)]
-mod tests {
-    use gpui_kit::TestAppContext;
-    use jig_ai::template_named;
-
-    use super::*;
-
-    #[gpui_kit::test]
-    fn connecting_with_a_key_makes_the_provider_usable(cx: &mut TestAppContext) {
-        let dir = init_temp(cx);
-        let openai = template_named("openai").unwrap();
-        cx.update(|cx| {
-            if std::env::var("OPENAI_API_KEY").is_err() {
-                connect(openai, None, cx).unwrap();
-                let provider = config(cx).unwrap().provider("openai").cloned().unwrap();
-                assert!(!is_ready(&provider, cx), "no key yet");
-            }
-            connect(openai, Some("sk-test"), cx).unwrap();
-            let provider = config(cx).unwrap().provider("openai").cloned().unwrap();
-            assert_eq!(
-                api_key(&provider, cx),
-                Some(("sk-test".into(), KeySource::File))
-            );
-            assert_eq!(models("openai", cx), Some(ModelList::Loading));
-
-            set_agent("openai/gpt-test", cx).unwrap();
-            assert_eq!(
-                agent_target_for(None, cx).unwrap().model,
-                "jig-openai/gpt-test"
-            );
-        });
-        let file = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-        assert!(file.contains("agent = \"openai/gpt-test\""));
-
-        cx.update(|cx| {
-            disconnect("openai", cx).unwrap();
-            assert!(
-                agent_target_for(None, cx).is_err(),
-                "the agent needs a new model"
-            );
-            assert_eq!(models("openai", cx), None);
-        });
-        let keys = std::fs::read_to_string(dir.path().join("keys.toml")).unwrap();
-        assert!(!keys.contains("sk-test"), "disconnecting forgets the key");
-    }
-
-    #[gpui_kit::test]
-    fn the_first_provider_starts_the_agent_on_a_fast_model(cx: &mut TestAppContext) {
-        let _dir = init_temp(cx);
-        cx.update(|cx| {
-            assert!(
-                config(cx).unwrap().providers.is_empty(),
-                "none to begin with"
-            );
-            connect(template_named("anthropic").unwrap(), None, cx).unwrap();
-            let listed = |names: &[&str]| {
-                ModelList::Loaded(names.iter().map(|name| name.to_string()).collect())
-            };
-            cx.update_global::<Providers, _>(|providers, _| {
-                providers.loads.clear();
-                providers.models.insert(
-                    "anthropic".into(),
-                    listed(&["claude-opus-5-5", "claude-haiku-5-5"]),
-                );
-            });
-            start_on_a_model("anthropic", cx);
-            assert_eq!(
-                config(cx).unwrap().agent.as_deref(),
-                Some("anthropic/claude-haiku-5-5")
-            );
-            // A model already picked stays.
-            set_agent("anthropic/claude-opus-5-5", cx).unwrap();
-            start_on_a_model("anthropic", cx);
-            assert_eq!(
-                config(cx).unwrap().agent.as_deref(),
-                Some("anthropic/claude-opus-5-5")
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn the_agent_gets_its_provider_handed_to_opencode(cx: &mut TestAppContext) {
-        let _dir = init_temp(cx);
-        cx.update(|cx| {
-            connect(template_named("ollama").unwrap(), None, cx).unwrap();
-            set_agent("ollama/qwen3:8b", cx).unwrap();
-            let target = agent_target_for(None, cx).unwrap();
-            assert_eq!(target.model, "jig-ollama/qwen3:8b");
-            assert!(target.config.unwrap()["provider"]["jig-ollama"].is_object());
-
-            connect(template_named("opencode-go").unwrap(), None, cx).unwrap();
-            set_agent("opencode-go/glm-5.3", cx).unwrap();
-            if std::env::var("OPENCODE_API_KEY").is_err() {
-                assert!(
-                    agent_target_for(None, cx)
-                        .unwrap_err()
-                        .contains("has no API key")
-                );
-            }
-        });
-    }
-}
+mod tests;

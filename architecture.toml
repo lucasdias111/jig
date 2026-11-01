@@ -189,6 +189,7 @@ uses = []
 # The coding agent: agents as data, providers and the shared OpenCode server, in its own crate.
 [capability.agent]
 crate = "jig-agent"
+layered = true
 uses = ["settings", "kit", "tools"]
 
 # The task planner, in its own crate.
